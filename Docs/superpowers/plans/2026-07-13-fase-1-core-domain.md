@@ -402,6 +402,20 @@ mod tests {
         // unknown classes fall back to uppercased normalized input, not dropped
         assert_eq!(canonical_rule_vehicle_label("reefer"), "REEFER");
     }
+
+    // Added during Task 3's review: not from the TS reference test file (which doesn't
+    // exercise malformed input), but required to lock in the paren-stripping fix — see
+    // strip_paren_spans's doc comment in Step 4 for the incident this prevents.
+    #[test]
+    fn norm_vehicle_unmatched_open_paren_preserves_trailing_content() {
+        assert_eq!(norm_vehicle("ENGKEL BAK (STD"), "engkel bak std");
+        assert_eq!(norm_vehicle("TRONTON (10WH"), "tronton 10wh");
+    }
+
+    #[test]
+    fn norm_vehicle_nested_parens_are_not_depth_tracked_matches_js_regex() {
+        assert_eq!(norm_vehicle("a (b (c) d) e"), "a d e");
+    }
 }
 ```
 
@@ -432,22 +446,46 @@ fn vehicle_rule_label(normalized: &str) -> Option<&'static str> {
     }
 }
 
-/// Lowercase, strip any "(...)" span (capacity suffix), keep only `[a-z0-9 ]`, collapse
-/// whitespace runs, trim. Mirrors TS
+/// Mirrors JS regex `/\([^)]*\)/g`: for each '(' scanned left-to-right, find the NEXT ')'
+/// after it (no nested-depth tracking — `[^)]*` just means "any non-')' char", so
+/// `(b (c)` is ONE match ending at the first ')'). Replace each matched span with a single
+/// space. An unmatched trailing '(' (no ')' anywhere after it) is left as literal text — the
+/// caller's subsequent `[^a-z0-9 ]` stripping pass turns the lone '(' into a space, same as
+/// the TS second regex pass does, but never drops the real content after it.
+///
+/// (Corrected during Task 3's review: an earlier depth-tracking version blanked everything
+/// from an unmatched '(' to end-of-string, e.g. turning "TRONTON (10WH" into "tronton"
+/// instead of the reference's "tronton 10wh" — an over-blanked rule string matches a
+/// STRICTLY LARGER set of tickets under the whole-word-prefix check, an over-accept risk on
+/// malformed operator input. Fixed to match JS's actual first-match, non-nesting semantics.)
+fn strip_paren_spans(s: &str) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '(' {
+            if let Some(rel_close) = chars[i + 1..].iter().position(|&c| c == ')') {
+                let close_idx = i + 1 + rel_close;
+                out.push(' ');
+                i = close_idx + 1;
+                continue;
+            } else {
+                out.extend(&chars[i..]);
+                break;
+            }
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
+}
+
+/// Lowercase, strip any "(...)" span (capacity suffix) via `strip_paren_spans`, keep only
+/// `[a-z0-9 ]`, collapse whitespace runs, trim. Mirrors TS
 /// `(s||'').toLowerCase().replace(/\([^)]*\)/g,' ').replace(/[^a-z0-9 ]+/g,' ').replace(/\s+/g,' ').trim()`.
 pub fn norm_vehicle(s: &str) -> String {
     let lower = s.to_lowercase();
-
-    let mut depth = 0u32;
-    let mut no_parens = String::with_capacity(lower.len());
-    for ch in lower.chars() {
-        match ch {
-            '(' => { depth += 1; no_parens.push(' '); }
-            ')' => { depth = depth.saturating_sub(1); no_parens.push(' '); }
-            _ if depth > 0 => no_parens.push(' '),
-            _ => no_parens.push(ch),
-        }
-    }
+    let no_parens = strip_paren_spans(&lower);
 
     let mut out = String::with_capacity(no_parens.len());
     let mut last_was_space = true;
@@ -504,7 +542,7 @@ pub fn canonical_rule_vehicle_label(s: &str) -> String {
 - [ ] **Step 5: Run to verify it passes**
 
 Run: `cargo test -p core-domain vehicle`
-Expected: `test result: ok. 11 passed; 0 failed`.
+Expected: `test result: ok. 13 passed; 0 failed`. (11 from the reference port + 2 regression tests added during Task 3's review for a paren-stripping edge case not covered by the reference test file — see the `strip_paren_spans` doc comment in Step 4.)
 
 - [ ] **Step 6: Wire into `lib.rs`**
 
@@ -2613,7 +2651,7 @@ Replace the `fn matches_filter(&self, _booking: &Booking) -> bool { unimplemente
 - [ ] **Step 5: Run the FULL crate test suite for the first time**
 
 Run: `cargo test -p core-domain`
-Expected: every test across every module now passes — `7 (coc) + 7 (location) + 11 (vehicle) + 12 (route_parse) + 3 (sanitize) + 9 (dedupe) + 3+6+1+2 (Task 7: cap/booking_id/guards/cp6) + 40 (Task 8: route mode) + 3+2 (this task: filter mode/CP-4) = 106` tests, `test result: ok. 106 passed; 0 failed`. If the count differs, do not adjust the count to match — investigate which test is missing or duplicated and report it in your self-review.
+Expected: every test across every module now passes — `7 (coc) + 7 (location) + 13 (vehicle, incl. 2 paren-stripping regression tests added during review) + 12 (route_parse) + 3 (sanitize) + 9 (dedupe) + 3+6+1+2 (Task 7: cap/booking_id/guards/cp6) + 40 (Task 8: route mode) + 3+2 (this task: filter mode/CP-4) = 108` tests, `test result: ok. 108 passed; 0 failed`. If the count differs, do not adjust the count to match — investigate which test is missing or duplicated and report it in your self-review.
 
 - [ ] **Step 6: Clippy**
 
@@ -2806,7 +2844,7 @@ Add `matched_booking_id_for` to the existing `pub use matching::{...}` line in `
 - [ ] **Step 7: Run the full crate suite once**
 
 Run: `cargo test -p core-domain`
-Expected: 106 (from Task 9) + 8 = 114 passing, 0 failed.
+Expected: 108 (from Task 9) + 8 = 116 passing, 0 failed.
 
 - [ ] **Step 8: Clippy**
 
@@ -2872,7 +2910,7 @@ Expected: 1 test passes. (This accesses `compiled.origin_norm`/`compiled.destina
 - [ ] **Step 3: Full crate test suite**
 
 Run: `cargo test -p core-domain`
-Expected: 114 (Task 10) + 1 = **115 tests pass, 0 failed**. This is the money-critical GATE from the master spec — do not proceed to Step 4 if anything fails.
+Expected: 116 (Task 10) + 1 = **117 tests pass, 0 failed**. This is the money-critical GATE from the master spec — do not proceed to Step 4 if anything fails.
 
 - [ ] **Step 4: Full workspace build/test/clippy (confirm nothing else broke)**
 
