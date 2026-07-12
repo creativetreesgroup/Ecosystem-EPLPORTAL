@@ -31,25 +31,25 @@ Full context: [`docs/tower-master-spec.md`](../../tower-master-spec.md) and [`do
 - Consumes: nothing.
 - Produces: `cargo`, `rustc`, `rustup`, `cargo-audit`, `cargo-deny`, `sqlx` (cli), `gitleaks` on `PATH` — every later task assumes these exist.
 
-- [ ] **Step 1: Install rustup non-interactively (stable toolchain)**
+- [x] **Step 1: Install rustup non-interactively (stable toolchain)**
 
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile default
 source "$HOME/.cargo/env"
 ```
 
-- [ ] **Step 2: Verify rustc/cargo are on PATH**
+- [x] **Step 2: Verify rustc/cargo are on PATH**
 
 Run: `rustc --version && cargo --version`
 Expected: two version lines, e.g. `rustc 1.8x.x (...)` and `cargo 1.8x.x (...)`. No "command not found".
 
-- [ ] **Step 3: Add clippy and rustfmt components**
+- [x] **Step 3: Add clippy and rustfmt components**
 
 ```bash
 rustup component add clippy rustfmt
 ```
 
-- [ ] **Step 4: Install cargo-audit and cargo-deny**
+- [x] **Step 4: Install cargo-audit and cargo-deny**
 
 ```bash
 cargo install --locked cargo-audit cargo-deny
@@ -57,19 +57,19 @@ cargo install --locked cargo-audit cargo-deny
 
 Expected: both binaries build and end with `Installed package ... (executable "cargo-audit")` / `"cargo-deny"`. This step is network- and CPU-bound; it can take several minutes.
 
-- [ ] **Step 5: Install sqlx-cli (Postgres + rustls only, to keep build time down)**
+- [x] **Step 5: Install sqlx-cli (Postgres + rustls only, to keep build time down)**
 
 ```bash
 cargo install --locked sqlx-cli --no-default-features --features rustls,postgres
 ```
 
-- [ ] **Step 6: Install gitleaks via Homebrew**
+- [x] **Step 6: Install gitleaks via Homebrew**
 
 ```bash
 brew install gitleaks
 ```
 
-- [ ] **Step 7: Verify every tool is callable**
+- [x] **Step 7: Verify every tool is callable**
 
 Run: `cargo audit --version && cargo deny --version && sqlx --version && gitleaks version`
 Expected: four version lines, no errors.
@@ -95,7 +95,7 @@ No commit for this task — it only installs local tooling, no repository files 
 - Consumes: `cargo` from Task 1.
 - Produces: workspace root `Cargo.toml` with a `members` list and a `[workspace.package]` block (`version.workspace = true`, `edition.workspace = true`, `publish.workspace = true`) that Task 3 and Task 4 will append `bin/reactor-core` and `bin/auth-sidecar` to.
 
-- [ ] **Step 1: Write the workspace root `Cargo.toml`**
+- [x] **Step 1: Write the workspace root `Cargo.toml`**
 
 ```toml
 [workspace]
@@ -121,7 +121,7 @@ lto = true
 codegen-units = 1
 ```
 
-- [ ] **Step 2: Scaffold all 8 lib crates in one pass**
+- [x] **Step 2: Scaffold all 8 lib crates in one pass**
 
 ```bash
 mkdir -p crates/{core-domain,spx-client,poller,executor,store,ws-hub,notifier,api-gateway}/src
@@ -138,22 +138,22 @@ EOF
 done
 ```
 
-- [ ] **Step 3: Build the workspace**
+- [x] **Step 3: Build the workspace**
 
 Run: `cargo build --workspace`
 Expected: `Compiling core-domain v0.1.0 (...)` through all 8 crates, ending `Finished \`dev\` profile [...] target(s) in ...s`. No errors.
 
-- [ ] **Step 4: Run the (empty) test suite**
+- [x] **Step 4: Run the (empty) test suite**
 
 Run: `cargo test --workspace`
 Expected: `running 0 tests ... test result: ok. 0 passed; 0 failed` repeated once per crate. No failures.
 
-- [ ] **Step 5: Run clippy**
+- [x] **Step 5: Run clippy**
 
 Run: `cargo clippy --workspace -- -D warnings`
 Expected: `Finished` with no warnings/errors.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add Cargo.toml Cargo.lock crates/
@@ -174,7 +174,7 @@ git commit -m "feat: scaffold Cargo workspace with 8 empty lib crates"
 - Consumes: workspace root `Cargo.toml` from Task 2.
 - Produces: `fn app() -> axum::Router` in `bin/reactor-core/src/main.rs` (private to that binary, but Task 6/8 rely on the resulting service listening on `0.0.0.0:8081` and answering `GET /healthz` with `{"status":"ok","service":"reactor-core"}`). Docker image buildable from repo root via `bin/reactor-core/Dockerfile`.
 
-- [ ] **Step 1: Register the binary in the workspace**
+- [x] **Step 1: Register the binary in the workspace**
 
 Edit `Cargo.toml`, change the `members` array to:
 
@@ -192,7 +192,7 @@ members = [
 ]
 ```
 
-- [ ] **Step 2: Create the package and add dependencies**
+- [x] **Step 2: Create the package and add dependencies**
 
 ```bash
 mkdir -p bin/reactor-core/src
@@ -218,7 +218,7 @@ cargo add --package reactor-core --dev tower --features util
 cargo add --package reactor-core --dev http-body-util
 ```
 
-- [ ] **Step 3: Write the failing test first**
+- [x] **Step 3: Write the failing test first**
 
 Create `bin/reactor-core/src/main.rs` with only the test module (the `app`/`healthz` symbols it references do not exist yet — this must fail to compile):
 
@@ -251,12 +251,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 4: Run the test to verify it fails**
+- [x] **Step 4: Run the test to verify it fails**
 
 Run: `cargo test -p reactor-core`
 Expected: FAIL — compile error, `cannot find function \`app\` in this scope` (and no `main` function either, since the crate has no binary entry point yet).
 
-- [ ] **Step 5: Write the full implementation**
+- [x] **Step 5: Write the full implementation**
 
 Replace `bin/reactor-core/src/main.rs` entirely with:
 
@@ -325,17 +325,17 @@ mod tests {
 }
 ```
 
-- [ ] **Step 6: Run the test to verify it passes**
+- [x] **Step 6: Run the test to verify it passes**
 
 Run: `cargo test -p reactor-core`
 Expected: `test tests::healthz_returns_ok_status ... ok`, `test result: ok. 1 passed; 0 failed`.
 
-- [ ] **Step 7: Clippy check**
+- [x] **Step 7: Clippy check**
 
 Run: `cargo clippy -p reactor-core -- -D warnings`
 Expected: clean, no warnings.
 
-- [ ] **Step 8: Write the Dockerfile (build context = repo root, not `bin/reactor-core/`)**
+- [x] **Step 8: Write the Dockerfile (build context = repo root, not `bin/reactor-core/`)**
 
 ```dockerfile
 FROM rust:1-slim-bookworm AS builder
@@ -357,7 +357,7 @@ ENTRYPOINT ["/usr/local/bin/reactor-core"]
 
 Save as `bin/reactor-core/Dockerfile`.
 
-- [ ] **Step 9: Build and smoke-test the image standalone**
+- [x] **Step 9: Build and smoke-test the image standalone**
 
 ```bash
 docker build -f bin/reactor-core/Dockerfile -t tower-reactor-core:dev .
@@ -369,7 +369,7 @@ docker stop reactor-core-smoke
 
 Expected: `curl` prints `{"service":"reactor-core","status":"ok"}` (key order may vary), then the container stops cleanly.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add Cargo.toml Cargo.lock bin/reactor-core/
@@ -390,7 +390,7 @@ git commit -m "feat: add reactor-core binary with /healthz endpoint"
 - Consumes: workspace root `Cargo.toml` from Task 3.
 - Produces: same pattern as Task 3, but service name `"auth-sidecar"`, port `8082`.
 
-- [ ] **Step 1: Register the binary in the workspace**
+- [x] **Step 1: Register the binary in the workspace**
 
 Edit `Cargo.toml`, change `members` to append `"bin/auth-sidecar"` after `"bin/reactor-core"`:
 
@@ -409,7 +409,7 @@ members = [
 ]
 ```
 
-- [ ] **Step 2: Create the package and add dependencies**
+- [x] **Step 2: Create the package and add dependencies**
 
 ```bash
 mkdir -p bin/auth-sidecar/src
@@ -435,7 +435,7 @@ cargo add --package auth-sidecar --dev tower --features util
 cargo add --package auth-sidecar --dev http-body-util
 ```
 
-- [ ] **Step 3: Write the failing test first**
+- [x] **Step 3: Write the failing test first**
 
 Create `bin/auth-sidecar/src/main.rs` with only the test module:
 
@@ -468,12 +468,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 4: Run the test to verify it fails**
+- [x] **Step 4: Run the test to verify it fails**
 
 Run: `cargo test -p auth-sidecar`
 Expected: FAIL — compile error, `cannot find function \`app\` in this scope`.
 
-- [ ] **Step 5: Write the full implementation**
+- [x] **Step 5: Write the full implementation**
 
 Replace `bin/auth-sidecar/src/main.rs` entirely with:
 
@@ -542,17 +542,17 @@ mod tests {
 }
 ```
 
-- [ ] **Step 6: Run the test to verify it passes**
+- [x] **Step 6: Run the test to verify it passes**
 
 Run: `cargo test -p auth-sidecar`
 Expected: `test tests::healthz_returns_ok_status ... ok`, `test result: ok. 1 passed; 0 failed`.
 
-- [ ] **Step 7: Clippy check**
+- [x] **Step 7: Clippy check**
 
 Run: `cargo clippy -p auth-sidecar -- -D warnings`
 Expected: clean, no warnings.
 
-- [ ] **Step 8: Write the Dockerfile**
+- [x] **Step 8: Write the Dockerfile**
 
 ```dockerfile
 FROM rust:1-slim-bookworm AS builder
@@ -574,7 +574,7 @@ ENTRYPOINT ["/usr/local/bin/auth-sidecar"]
 
 Save as `bin/auth-sidecar/Dockerfile`.
 
-- [ ] **Step 9: Build and smoke-test the image standalone**
+- [x] **Step 9: Build and smoke-test the image standalone**
 
 ```bash
 docker build -f bin/auth-sidecar/Dockerfile -t tower-auth-sidecar:dev .
@@ -586,7 +586,7 @@ docker stop auth-sidecar-smoke
 
 Expected: `curl` prints `{"service":"auth-sidecar","status":"ok"}`, container stops cleanly.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add Cargo.toml Cargo.lock bin/auth-sidecar/
@@ -610,7 +610,7 @@ git commit -m "feat: add auth-sidecar binary with /healthz endpoint"
 - Consumes: nothing from earlier tasks (independent stack).
 - Produces: a Node server started by `node build` listening on `$PORT` (default `3000`), serving `GET /` and depending on a same-origin `/api/healthz` (proxied by Caddy in Task 6) to display `reactor-core`'s status.
 
-- [ ] **Step 1: Scaffold the SvelteKit project**
+- [x] **Step 1: Scaffold the SvelteKit project**
 
 ```bash
 pnpm dlx sv create web
@@ -618,7 +618,7 @@ pnpm dlx sv create web
 
 When prompted interactively, choose: **SvelteKit minimal template**, **TypeScript**, and skip add-ons (Tailwind is added manually in Step 3 so we control the v4 `@theme` setup ourselves; skip ESLint/Prettier/Vitest/Playwright for Fase 0 — they can be added in a later phase if the team wants them). If the installed `sv` CLI version exposes non-interactive flags, they may be used instead of the prompts — the goal is the same resulting project shape (TypeScript, minimal template, `web/` directory), not a specific flag spelling.
 
-- [ ] **Step 2: Install dependencies and adapter-node**
+- [x] **Step 2: Install dependencies and adapter-node**
 
 ```bash
 pnpm --dir web install
@@ -642,7 +642,7 @@ const config = {
 export default config;
 ```
 
-- [ ] **Step 3: Install and wire up Tailwind v4**
+- [x] **Step 3: Install and wire up Tailwind v4**
 
 ```bash
 pnpm --dir web add -D tailwindcss @tailwindcss/vite
@@ -670,7 +670,7 @@ Create `web/src/app.css`:
 }
 ```
 
-- [ ] **Step 4: Import the stylesheet in the root layout**
+- [x] **Step 4: Import the stylesheet in the root layout**
 
 Create or edit `web/src/routes/+layout.svelte`:
 
@@ -683,7 +683,7 @@ Create or edit `web/src/routes/+layout.svelte`:
 {@render children()}
 ```
 
-- [ ] **Step 5: Write the placeholder page**
+- [x] **Step 5: Write the placeholder page**
 
 Replace `web/src/routes/+page.svelte` with:
 
@@ -712,12 +712,12 @@ Replace `web/src/routes/+page.svelte` with:
 </main>
 ```
 
-- [ ] **Step 6: Build to verify everything compiles**
+- [x] **Step 6: Build to verify everything compiles**
 
 Run: `pnpm --dir web build`
 Expected: build succeeds, ends with SvelteKit's `adapter-node` output summary (a `web/build/` directory is created, no TypeScript or Svelte errors).
 
-- [ ] **Step 7: Write the Dockerfile**
+- [x] **Step 7: Write the Dockerfile**
 
 ```dockerfile
 FROM node:lts-slim AS builder
@@ -743,7 +743,7 @@ CMD ["node", "build"]
 
 Save as `web/Dockerfile`.
 
-- [ ] **Step 8: Build and smoke-test the image standalone**
+- [x] **Step 8: Build and smoke-test the image standalone**
 
 ```bash
 docker build -f web/Dockerfile -t tower-web:dev web
@@ -755,7 +755,7 @@ docker stop web-smoke
 
 Expected: prints something containing `TOWER` inside an `<h1>` tag, container stops cleanly. (The health status will read "unreachable" here since `/api/healthz` isn't proxied yet outside Compose — that's expected and fixed in Task 6/8.)
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add web/
@@ -776,7 +776,7 @@ git commit -m "feat: scaffold SvelteKit 5 + Tailwind v4 placeholder app"
 - Consumes: `bin/reactor-core/Dockerfile`, `bin/auth-sidecar/Dockerfile`, `web/Dockerfile` from Tasks 3-5.
 - Produces: a runnable `tower-net` Compose stack — `tower-caddy` (only published port, `127.0.0.1:8080`), `tower-reactor-core`, `tower-auth-sidecar`, `tower-web`, `tower-postgres`, `tower-redis`, `tower-retention` (no-op placeholder). Task 7/8 depend on this file's exact service and container names.
 
-- [ ] **Step 1: Write `docker-compose.yml`**
+- [x] **Step 1: Write `docker-compose.yml`**
 
 ```yaml
 name: tower
@@ -894,7 +894,7 @@ services:
       - tower-net
 ```
 
-- [ ] **Step 2: Write the Caddyfile**
+- [x] **Step 2: Write the Caddyfile**
 
 ```
 :80 {
@@ -910,7 +910,7 @@ services:
 
 `handle_path` strips the matched `/api` prefix before proxying, so an external request to `/api/healthz` reaches `reactor-core` as `/healthz`.
 
-- [ ] **Step 3: Write `.env.example`**
+- [x] **Step 3: Write `.env.example`**
 
 ```
 # Postgres (Fase 0 placeholder — real secrets management arrives Fase 3)
@@ -924,18 +924,18 @@ RUST_LOG=info
 # plaintext in .env for anything beyond local Postgres dev password).
 ```
 
-- [ ] **Step 4: Create the local `.env` (gitignored, not committed)**
+- [x] **Step 4: Create the local `.env` (gitignored, not committed)**
 
 ```bash
 cp .env.example .env
 ```
 
-- [ ] **Step 5: Validate the Compose file**
+- [x] **Step 5: Validate the Compose file**
 
 Run: `docker compose config --quiet`
 Expected: no output, exit code 0 (means the YAML parses and interpolates cleanly).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add docker-compose.yml Caddyfile .env.example
@@ -957,7 +957,7 @@ git commit -m "feat: add docker-compose topology, Caddy edge, env template"
 - Consumes: nothing new (mirrors the local commands already verified in Tasks 1-6).
 - Produces: a GitHub Actions workflow that CI/branch-protection can reference by job name (`rust`, `gitleaks`).
 
-- [ ] **Step 1: Write `deny.toml`**
+- [x] **Step 1: Write `deny.toml`**
 
 ```toml
 [graph]
@@ -990,12 +990,12 @@ unknown-registry = "deny"
 unknown-git = "deny"
 ```
 
-- [ ] **Step 2: Run cargo-deny locally to catch any license/advisory issues early**
+- [x] **Step 2: Run cargo-deny locally to catch any license/advisory issues early**
 
 Run: `cargo deny check`
 Expected: exits 0. If a dependency's license isn't in the `allow` list, add it to `deny.toml` here (only if it's genuinely a permissive license) rather than deferring the failure to CI.
 
-- [ ] **Step 3: Write `.gitleaks.toml`**
+- [x] **Step 3: Write `.gitleaks.toml`**
 
 ```toml
 title = "tower gitleaks config"
@@ -1009,12 +1009,12 @@ paths = [
 ]
 ```
 
-- [ ] **Step 4: Run gitleaks locally**
+- [x] **Step 4: Run gitleaks locally**
 
 Run: `gitleaks detect --source . --config .gitleaks.toml`
 Expected: `no leaks found`.
 
-- [ ] **Step 5: Write `.github/workflows/ci.yml`**
+- [x] **Step 5: Write `.github/workflows/ci.yml`**
 
 ```yaml
 name: CI
@@ -1081,7 +1081,7 @@ jobs:
 
 The `sqlx prepare --check` step is intentionally `continue-on-error` in Fase 0 only, since there isn't a single `sqlx::query!` macro anywhere in the workspace yet to check against — remove `continue-on-error` in the Fase 2 plan once `store` has real queries and an `.sqlx/` cache is committed.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add .github/workflows/ci.yml deny.toml .gitleaks.toml
@@ -1098,7 +1098,7 @@ git commit -m "ci: add GitHub Actions workflow, cargo-deny and gitleaks config"
 - Consumes: the full stack from Tasks 1-7.
 - Produces: recorded command output proving the Fase 0 Definition of Done (see [`docs/superpowers/specs/2026-07-13-fase-0-scaffold-design.md`](../specs/2026-07-13-fase-0-scaffold-design.md)) is met.
 
-- [ ] **Step 1: Full workspace build/test/lint from a clean state**
+- [x] **Step 1: Full workspace build/test/lint from a clean state**
 
 ```bash
 cargo build --workspace
@@ -1108,7 +1108,7 @@ cargo clippy --workspace -- -D warnings
 
 Expected: all three succeed with no errors or warnings.
 
-- [ ] **Step 2: Bring up the full stack**
+- [x] **Step 2: Bring up the full stack**
 
 ```bash
 docker compose up -d --build
@@ -1116,7 +1116,7 @@ docker compose up -d --build
 
 Expected: all 7 services report `Created`/`Started`; no build errors.
 
-- [ ] **Step 3: Wait for health and inspect status**
+- [x] **Step 3: Wait for health and inspect status**
 
 ```bash
 sleep 15
@@ -1125,7 +1125,7 @@ docker compose ps
 
 Expected: `tower-caddy`, `tower-web`, `tower-postgres`, `tower-redis` show `running` (or `healthy` where a healthcheck applies); `tower-reactor-core` and `tower-auth-sidecar` show `running (healthy)`; `tower-retention` shows `Exited (0)` (it's a one-shot no-op by design).
 
-- [ ] **Step 4: Verify the edge → reactor-core path**
+- [x] **Step 4: Verify the edge → reactor-core path**
 
 ```bash
 curl -sf http://127.0.0.1:8080/api/healthz
@@ -1133,7 +1133,7 @@ curl -sf http://127.0.0.1:8080/api/healthz
 
 Expected: `{"service":"reactor-core","status":"ok"}` (key order may vary).
 
-- [ ] **Step 5: Verify the edge → web path**
+- [x] **Step 5: Verify the edge → web path**
 
 ```bash
 curl -sf http://127.0.0.1:8080/ | grep -o '<h1[^<]*</h1>'
@@ -1141,7 +1141,7 @@ curl -sf http://127.0.0.1:8080/ | grep -o '<h1[^<]*</h1>'
 
 Expected: output contains `TOWER`.
 
-- [ ] **Step 6: Verify startup logs**
+- [x] **Step 6: Verify startup logs**
 
 ```bash
 docker compose logs tower-reactor-core --tail 20 | grep "reactor-core starting"
@@ -1150,7 +1150,7 @@ docker compose logs tower-auth-sidecar --tail 20 | grep "auth-sidecar starting"
 
 Expected: both greps find a match.
 
-- [ ] **Step 7: Verify no unintended published ports**
+- [x] **Step 7: Verify no unintended published ports**
 
 ```bash
 docker compose config | grep -B5 "published:" 
@@ -1159,7 +1159,7 @@ docker ps --format '{{.Names}}: {{.Ports}}'
 
 Expected: only `tower-caddy` shows a host port binding (`127.0.0.1:8080->80/tcp`); every other `tower-*` container shows no `0.0.0.0`/`127.0.0.1` port mapping.
 
-- [ ] **Step 8: Verify container naming**
+- [x] **Step 8: Verify container naming**
 
 ```bash
 docker compose config --services
@@ -1167,7 +1167,7 @@ docker compose config --services
 
 Expected: exactly `tower-caddy`, `tower-reactor-core`, `tower-auth-sidecar`, `tower-web`, `tower-postgres`, `tower-redis`, `tower-retention` — no service named `api` or anything generic.
 
-- [ ] **Step 9: Clean teardown**
+- [x] **Step 9: Clean teardown**
 
 ```bash
 docker compose down
@@ -1175,9 +1175,9 @@ docker compose down
 
 Expected: all containers and the `tower-net` network are removed; named volumes persist (expected — they're for Postgres/Redis data, not ephemeral).
 
-- [ ] **Step 10: Mark the Fase 0 plan and design doc complete, commit**
+- [x] **Step 10: Mark the Fase 0 plan and design doc complete, commit**
 
-In `docs/superpowers/plans/2026-07-13-fase-0-scaffold.md`, check every remaining `- [ ]` box to `- [x]`.
+In `docs/superpowers/plans/2026-07-13-fase-0-scaffold.md`, check every remaining `- [x]` box to `- [x]`.
 
 ```bash
 git add docs/superpowers/plans/2026-07-13-fase-0-scaffold.md
