@@ -1,0 +1,21 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/core-domain",
+    "crates/spx-client",
+    "crates/poller",
+    "crates/executor",
+    "crates/store",
+    "crates/ws-hub",
+    "crates/notifier",
+    "crates/api-gateway",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[profile.release]
+lto = true
+codegen-units = 1
