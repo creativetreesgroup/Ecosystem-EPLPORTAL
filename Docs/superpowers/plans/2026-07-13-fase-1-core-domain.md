@@ -1638,7 +1638,7 @@ git commit -m "feat(core-domain): port dedupeRules anti-duplication pass"
 
 **Interfaces:**
 - Consumes: `Booking`/`BookingType` (Task 1), `loc_match_normalized` (Task 2), `vehicle_match_normalized`/`norm_vehicle` (Task 3), `AcceptRule`/`RuleMode`/`RouteMatchMode`/`RuleBookingType`/`RuleConditions`/`MatchState`/`norm_id` (Task 5/6), `mk_rule`/`mk_state` test helpers (Task 5).
-- Produces: `RuleRank([i32; 6])` (derives `Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord` — array-tuple lexicographic comparison IS the ranking algorithm, see note below), `pub struct CompiledRule { pub id: String, pub name: String, pub enabled: bool, pub priority: i32, pub mode: RuleMode, pub conditions: RuleConditions, /* private precomputed fields */ }`, `impl CompiledRule { pub fn compile(rule: &AcceptRule) -> Self; pub fn matches(&self, booking: &Booking, state: &MatchState) -> bool; pub fn rank(&self) -> RuleRank }`, plus the private `matches_booking_id` method this task implements (route/filter mode methods are stubbed to `unimplemented!()` here and filled in by Task 8/9 — this task's own tests only exercise booking_id mode, the cap guard, and the disabled-rule guard, so the stub is never hit by this task's own test run). `mk_booking` test helper (added to `lib.rs`'s `test_support` this task, since Task 1-6 didn't need it).
+- Produces: `RuleRank([i32; 6])` (derives `Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord` — array-tuple lexicographic comparison IS the ranking algorithm, see note below), `pub struct CompiledRule { pub id: String, pub name: String, pub enabled: bool, pub priority: i32, pub mode: RuleMode, pub conditions: RuleConditions, /* private precomputed fields */ }`, `impl CompiledRule { pub fn compile(rule: &AcceptRule) -> Self; pub fn matches(&self, booking: &Booking, state: &MatchState) -> bool; pub fn rank(&self) -> RuleRank }`, plus the private `matches_booking_id` method this task implements (route/filter mode methods are stubbed to `unimplemented!()` here and filled in by Task 8/9). **Correction from an earlier draft of this plan:** 3 of this task's own tests (`under_cap_still_matches` and both `cp6_ranking` end-to-end tests) construct a Route-mode rule and DO reach the `matches_route` stub through `.matches()`/`find_best_matching_rule` — they must be `#[ignore]`d rather than assumed to pass, per Step 2/Step 6's notes; two supplementary direct-`rule_rank()` tests cover the same CP-6 property in the meantime. `mk_booking` test helper (added to `lib.rs`'s `test_support` this task, since Task 1-6 didn't need it).
 
 **Why ranking is a derived `Ord` on a `[i32; 6]`, not a custom comparator:** the reference `compareRuleRank` does index-by-index tuple comparison, first difference wins — this is *exactly* what `#[derive(PartialOrd, Ord)]` on a fixed-size array produces for free. `mode dominance > priority > specificity` (CP-6) falls out automatically from array index order: `[mode_score, priority, dest_count, has_origin, is_strict, service_type_count]` — a booking_id rule's `mode_score=3` always outranks a route rule's `mode_score=2` regardless of what follows, because the first array element is compared first.
 
@@ -1682,6 +1682,11 @@ mod tests {
             assert!(!CompiledRule::compile(&r).matches(&b, &state));
         }
 
+        // NOTE (caught in Task 7's review): this test constructs a Route-mode rule and expects
+        // a real match, but `matches_route` is deliberately `unimplemented!()` until Task 8 —
+        // it will panic, not just fail, if run now. Mark it `#[ignore = "requires matches_route
+        // (Task 8)"]` in Task 7 (assertion body untouched), then Task 8 removes the `#[ignore]`
+        // once `matches_route` lands.
         #[test]
         fn under_cap_still_matches() {
             let mut conditions = RuleConditions { origin: "Padang DC".into(), destinations: vec!["Cileungsi DC".into()], ..Default::default() };
@@ -1761,6 +1766,12 @@ mod tests {
     mod cp6_ranking {
         use super::*;
 
+        // Both tests below hit the same Task-8-dependency issue as `under_cap_still_matches`
+        // (they call `find_best_matching_rule`, which calls `.matches()` on a Route-mode
+        // candidate) — mark BOTH `#[ignore = "requires matches_route (Task 8)"]`, bodies
+        // untouched, and add the two direct `rule_rank()` tests below them so CP-6 dominance
+        // is still concretely proven in THIS task, independent of the unimplemented stub.
+
         #[test]
         fn exact_booking_id_rule_beats_higher_priority_route_rule_on_same_ticket() {
             let mut b = mk_booking(&["Padang DC", "Cileungsi DC"]);
@@ -1791,9 +1802,38 @@ mod tests {
             let best = find_best_matching_rule(&b, &[lo, hi], &mk_state()).expect("expected a match");
             assert_eq!(best.id, "hi");
         }
+
+        // Supplementary (not from the TS reference): proves CP-6 dominance via `rule_rank()`
+        // directly, bypassing `matches()`/`matches_route` entirely, so the ranking algorithm
+        // itself is verified correct in this task even though the two end-to-end tests above
+        // must wait for Task 8.
+        #[test]
+        fn rule_rank_booking_id_dominates_higher_priority_route_directly() {
+            let bkid = AcceptRule {
+                id: "bk".into(),
+                priority: 0,
+                ..mk_rule(RuleMode::BookingId, RuleConditions { booking_ids: vec!["BKID12345678".into()], ..Default::default() })
+            };
+            let route = AcceptRule {
+                id: "rt".into(),
+                priority: 9,
+                ..mk_rule(RuleMode::Route, RuleConditions { origin: "Padang DC".into(), destinations: vec!["Cileungsi DC".into()], ..Default::default() })
+            };
+            assert!(rule_rank(&bkid) > rule_rank(&route));
+        }
+
+        #[test]
+        fn rule_rank_among_two_route_rules_higher_priority_ranks_higher_directly() {
+            let conditions = || RuleConditions { origin: "Padang DC".into(), destinations: vec!["Cileungsi DC".into()], ..Default::default() };
+            let lo = AcceptRule { id: "lo".into(), priority: 1, ..mk_rule(RuleMode::Route, conditions()) };
+            let hi = AcceptRule { id: "hi".into(), priority: 5, ..mk_rule(RuleMode::Route, conditions()) };
+            assert!(rule_rank(&hi) > rule_rank(&lo));
+        }
     }
 }
 ```
+
+Add `#[ignore = "requires matches_route (Task 8)"]` directly above `under_cap_still_matches`, `exact_booking_id_rule_beats_higher_priority_route_rule_on_same_ticket`, and `among_two_route_rules_higher_priority_still_wins` — these 3 tests only, bodies otherwise untouched.
 
 - [ ] **Step 3: Run to verify it fails**
 
@@ -1982,8 +2022,8 @@ Add to the existing `#[cfg(test)] pub(crate) mod test_support` block in `lib.rs`
 
 - [ ] **Step 6: Run to verify the tests this task owns pass**
 
-Run: `cargo test -p core-domain matching::tests::max_accept_cap matching::tests::booking_id_mode matching::tests::guards matching::tests::cp6_ranking`
-Expected: `3 + 6 + 1 + 2 = 12` tests pass. (The crate will not fully build-and-test as a whole yet — `matches_route`/`matches_filter` are `unimplemented!()` stubs, which is fine: they compile, and nothing in THIS task's test set calls a route/filter-mode rule, so no test panics. `cargo test -p core-domain` as a full run is deferred to Task 9's end, once both stubs are filled in.)
+Run (note: multiple test-name filters go after `--`, not as separate positional args): `cargo test -p core-domain -- matching::tests::max_accept_cap matching::tests::booking_id_mode matching::tests::guards matching::tests::cp6_ranking`
+Expected: 14 test fns match this filter (3 `max_accept_cap` + 6 `booking_id_mode` + 1 `guards` + 2 `cp6_ranking` end-to-end + 2 `cp6_ranking` direct-`rule_rank` supplementary), of which **11 pass and 3 are `ignored`** (`under_cap_still_matches` and both end-to-end CP-6 tests — these construct a Route-mode rule and call `.matches()`, which requires `matches_route`, still `unimplemented!()` until Task 8; mark them `#[ignore = "requires matches_route (Task 8)"]`, bodies otherwise untouched, per Step 2's note). 0 failed. The crate will not fully build-and-test as a whole yet in the sense that `matches_route`/`matches_filter` are stubs — but note this is a genuine gap in earlier drafts of this plan, which assumed (incorrectly) that no Task-7 test would reach those stubs; 3 of them do, hence the `#[ignore]`s. `cargo test -p core-domain` as a full *passing* run is deferred to Task 9's end, once both stubs are filled in — Task 8 removes 2 of these 3 `#[ignore]`s (the ones it's directly responsible for, both `cp6_ranking` end-to-end tests and `under_cap_still_matches`, all requiring `matches_route`), leaving 0 ignored after Task 8.
 
 - [ ] **Step 7: Wire into `lib.rs`**
 
@@ -2009,8 +2049,9 @@ git commit -m "feat(core-domain): CompiledRule scaffold, ranking (CP-6), booking
 - Modify: `Backend/crates/core-domain/src/matching.rs` (fill in `matches_route`, add a new `mod route_mode_tests` inside the existing `#[cfg(test)] mod tests` block — do not touch `matches_filter`, still a Task-9 stub)
 
 **Interfaces:**
-- Consumes: everything from Task 7 (`CompiledRule`, its precomputed `origin_norm`/`destinations_norm`, `loc_match_normalized`, `vehicle_match_normalized`).
+- Consumes: everything from Task 7 (`CompiledRule`, its precomputed `origin_norm`/`destinations_norm`, `loc_match_normalized`, `vehicle_match_normalized`). Also re-add `use crate::location::loc_match_normalized;` to `matching.rs`'s imports — Task 7 dropped it (nothing used it yet, kept clippy clean); this task is what actually needs it.
 - Produces: a working `CompiledRule::matches_route`. Nothing new is exposed publicly — `matches`/`matches_rule`/`find_best_matching_rule` already route to this internally once it's filled in.
+- **Also un-ignores 3 tests Task 7 had to defer**: `matching::tests::max_accept_cap::under_cap_still_matches`, `matching::tests::cp6_ranking::exact_booking_id_rule_beats_higher_priority_route_rule_on_same_ticket`, and `matching::tests::cp6_ranking::among_two_route_rules_higher_priority_still_wins` all construct a Route-mode rule and call `.matches()`/`find_best_matching_rule` — Task 7 marked them `#[ignore = "requires matches_route (Task 8)"]` since `matches_route` didn't exist yet. Once this task's `matches_route` is implemented, remove all 3 `#[ignore]` attributes (bodies stay exactly as Task 7 left them) and confirm they now pass for real — see the dedicated step below.
 
 This is the single largest and most failure-prone piece of the whole port — an ordered, whole-word, optionally-flexible multi-stop walk. Read the "route mode" section of this plan's design doc before starting if anything below is unclear; the algorithm has been hand-traced against 6 of the reference tests during planning (documented in the design doc) and is correct as specified — implement it as written, do not "simplify."
 
@@ -2579,9 +2620,19 @@ Replace the `fn matches_route(&self, _booking: &Booking) -> bool { unimplemented
 
 - [ ] **Step 5: Run to verify it passes**
 
-Run: `cargo test -p core-domain matching::tests::route_mode_tests matching::tests::shift_trip_targeting matching::tests::real_lane_aceh_to_cileungsi matching::tests::real_lane_kosambi_to_mataram matching::tests::flexible_superset_strict_f2 matching::tests::vehicle_empty_means_all matching::tests::flexible_multi_destination`
+Run: `cargo test -p core-domain -- matching::tests::route_mode_tests matching::tests::shift_trip_targeting matching::tests::real_lane_aceh_to_cileungsi matching::tests::real_lane_kosambi_to_mataram matching::tests::flexible_superset_strict_f2 matching::tests::vehicle_empty_means_all matching::tests::flexible_multi_destination`
 
 Expected: `9 + 5 + 5 + 9 + 6 + 2 + 4 = 40` tests pass, 0 failed.
+
+- [ ] **Step 5b: Un-ignore the 3 tests Task 7 deferred**
+
+Now that `matches_route` is implemented, remove `#[ignore = "requires matches_route (Task 8)"]` from these 3 tests (bodies stay exactly as Task 7 left them — no other change):
+- `matching::tests::max_accept_cap::under_cap_still_matches`
+- `matching::tests::cp6_ranking::exact_booking_id_rule_beats_higher_priority_route_rule_on_same_ticket`
+- `matching::tests::cp6_ranking::among_two_route_rules_higher_priority_still_wins`
+
+Run: `cargo test -p core-domain -- matching::tests::max_accept_cap matching::tests::cp6_ranking`
+Expected: all tests in both modules pass now (including the 3 just un-ignored), `0 ignored`.
 
 - [ ] **Step 6: Clippy**
 
@@ -2719,7 +2770,7 @@ Replace the `fn matches_filter(&self, _booking: &Booking) -> bool { unimplemente
 - [ ] **Step 5: Run the FULL crate test suite for the first time**
 
 Run: `cargo test -p core-domain`
-Expected: every test across every module now passes — `7 (coc) + 7 (location) + 13 (vehicle, incl. 2 paren-stripping regression tests added during review) + 14 (route_parse, incl. 2 regression tests added during review) + 3 (sanitize) + 9 (dedupe) + 3+6+1+2 (Task 7: cap/booking_id/guards/cp6) + 40 (Task 8: route mode) + 3+2 (this task: filter mode/CP-4) = 110` tests, `test result: ok. 110 passed; 0 failed`. If the count differs, do not adjust the count to match — investigate which test is missing or duplicated and report it in your self-review.
+Expected: every test across every module now passes — `7 (coc) + 7 (location) + 13 (vehicle, incl. 2 paren-stripping regression tests added during review) + 14 (route_parse, incl. 2 regression tests added during review) + 3 (sanitize) + 9 (dedupe) + 14 (Task 7: cap/booking_id/guards/cp6, incl. 2 direct-rule_rank supplementary tests added during review — all 3 tests Task 7 had to `#[ignore]` are un-ignored as of Task 8's Step 5b) + 40 (Task 8: route mode) + 3+2 (this task: filter mode/CP-4) = 112` tests, `test result: ok. 112 passed; 0 failed; 0 ignored`. If the count differs, do not adjust the count to match — investigate which test is missing or duplicated and report it in your self-review.
 
 - [ ] **Step 6: Clippy**
 
@@ -2912,7 +2963,7 @@ Add `matched_booking_id_for` to the existing `pub use matching::{...}` line in `
 - [ ] **Step 7: Run the full crate suite once**
 
 Run: `cargo test -p core-domain`
-Expected: 110 (from Task 9) + 8 = 118 passing, 0 failed.
+Expected: 112 (from Task 9) + 8 = 120 passing, 0 failed.
 
 - [ ] **Step 8: Clippy**
 
@@ -2978,7 +3029,7 @@ Expected: 1 test passes. (This accesses `compiled.origin_norm`/`compiled.destina
 - [ ] **Step 3: Full crate test suite**
 
 Run: `cargo test -p core-domain`
-Expected: 118 (Task 10) + 1 = **119 tests pass, 0 failed**. This is the money-critical GATE from the master spec — do not proceed to Step 4 if anything fails.
+Expected: 120 (Task 10) + 1 = **121 tests pass, 0 failed, 0 ignored**. This is the money-critical GATE from the master spec — do not proceed to Step 4 if anything fails.
 
 - [ ] **Step 4: Full workspace build/test/clippy (confirm nothing else broke)**
 
