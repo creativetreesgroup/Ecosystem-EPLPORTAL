@@ -1,8 +1,10 @@
-# OS
+# macOS
 .DS_Store
 
-# Claude Code local (personal, machine-specific)
+# Claude Code local (personal, machine-specific + ephemeral worktrees)
 .claude/settings.local.json
+.claude/worktrees/
+.superpowers/
 
 # Rust
 Backend/target/
