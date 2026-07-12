@@ -1177,7 +1177,7 @@ Expected: all containers and the `tower-net` network are removed; named volumes 
 
 - [x] **Step 10: Mark the Fase 0 plan and design doc complete, commit**
 
-In `docs/superpowers/plans/2026-07-13-fase-0-scaffold.md`, check every remaining `- [x]` box to `- [x]`.
+In `docs/superpowers/plans/2026-07-13-fase-0-scaffold.md`, check every remaining `- [ ]` box to `- [x]`.
 
 ```bash
 git add docs/superpowers/plans/2026-07-13-fase-0-scaffold.md
