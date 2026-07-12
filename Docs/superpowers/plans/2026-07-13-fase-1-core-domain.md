@@ -1884,6 +1884,14 @@ pub struct CompiledRule {
     pub conditions: RuleConditions,
     rank: RuleRank,
     // Precomputed once at compile() time, not re-derived per booking:
+    /// Whether the RAW TRIMMED origin is non-empty — used to GATE whether the origin
+    /// requirement applies at all. Deliberately separate from `origin_norm.is_empty()`: a
+    /// punctuation-only origin (e.g. `"---"`) normalizes to `""` but is still a real,
+    /// non-empty raw origin in TS's `if (origin)` check — the rule must be treated as HAVING
+    /// an (unsatisfiable) origin requirement, not as having none. Gating on `origin_norm`
+    /// instead would silently drop the origin requirement and over-accept (caught in Task 8's
+    /// review — see `matches_route`'s use of this field for the concrete repro).
+    has_origin: bool,
     origin_norm: String,
     destinations_norm: Vec<String>,
     service_types_norm: Vec<String>,
@@ -1895,6 +1903,7 @@ impl CompiledRule {
         use crate::location::norm_loc;
 
         let origin_trimmed = rule.conditions.origin.trim();
+        let has_origin = !origin_trimmed.is_empty();
         let destinations_norm: Vec<String> = rule
             .conditions
             .destinations
@@ -1915,6 +1924,7 @@ impl CompiledRule {
             mode: rule.mode,
             conditions: rule.conditions.clone(),
             rank: rule_rank(rule),
+            has_origin,
             origin_norm: norm_loc(origin_trimmed),
             destinations_norm,
             service_types_norm,
@@ -2138,6 +2148,16 @@ Add a new `mod route_mode_tests { ... }` inside the existing `#[cfg(test)] mod t
         fn final_destination_must_be_an_actual_route_stop_not_only_dest_region() {
             let r = mk_rule(RuleMode::Route, route("Padang DC", &["Cileungsi DC"]));
             let b = mk_booking(&["Padang DC", "Bekasi DC"]);
+            assert!(!CompiledRule::compile(&r).matches(&b, &mk_state()));
+        }
+
+        // Added during Task 8's review: not from matching.test.ts (an untested input shape),
+        // but required to lock in the has_origin fix — see CompiledRule's has_origin doc
+        // comment for the incident this prevents.
+        #[test]
+        fn punctuation_only_origin_is_unsatisfiable_not_skipped() {
+            let r = mk_rule(RuleMode::Route, route("---", &["Cileungsi DC"]));
+            let b = mk_booking(&["Padang DC", "Cileungsi DC"]);
             assert!(!CompiledRule::compile(&r).matches(&b, &mk_state()));
         }
     }
@@ -2523,14 +2543,24 @@ Replace the `fn matches_route(&self, _booking: &Booking) -> bool { unimplemented
             || c.coc_only
             || c.non_coc_only
             || c.booking_type != RuleBookingType::All;
-        if self.origin_norm.is_empty() && self.destinations_norm.is_empty() && !has_other_filter {
+        // Gate on `has_origin` (the RAW TRIMMED origin's non-emptiness), NOT
+        // `origin_norm.is_empty()` — a punctuation-only origin (e.g. "---") normalizes to ""
+        // but is still a real, non-empty raw origin in the reference's `if (origin)` check, so
+        // the rule must be treated as HAVING an (unsatisfiable) origin requirement, not as
+        // having none. Gating on `origin_norm` instead would silently drop the origin
+        // requirement here and let the rule over-accept on destinations/filters alone (caught
+        // in Task 8's review — see the `punctuation_only_origin_is_unsatisfiable_not_skipped`
+        // regression test).
+        if !self.has_origin && self.destinations_norm.is_empty() && !has_other_filter {
             return false;
         }
 
-        if !self.origin_norm.is_empty() {
+        if self.has_origin {
             // Origin must be the REAL start point: report_station_name first, then the first
             // stop. Region/province labels never satisfy a route rule (Booking doesn't even
-            // carry those fields — see Task 1).
+            // carry those fields — see Task 1). `loc_match_normalized` correctly returns false
+            // against an empty `origin_norm` (punctuation-only origin), so this branch still
+            // does the right thing (reject) even when the origin has nothing left to match.
             let by_report_station = loc_match_normalized(&booking.report_station, &self.origin_norm);
             let by_first_stop = stops.first().map(|s| loc_match_normalized(s, &self.origin_norm)).unwrap_or(false);
             if !by_report_station && !by_first_stop {
@@ -2542,7 +2572,7 @@ Replace the `fn matches_route(&self, _booking: &Booking) -> bool { unimplemented
             if stops.is_empty() {
                 return false;
             }
-            let origin_consumes_first_stop = if !self.origin_norm.is_empty() {
+            let origin_consumes_first_stop = if self.has_origin {
                 stops.first().map(|s| loc_match_normalized(s, &self.origin_norm)).unwrap_or(false)
             } else {
                 false
@@ -2622,7 +2652,7 @@ Replace the `fn matches_route(&self, _booking: &Booking) -> bool { unimplemented
 
 Run: `cargo test -p core-domain -- matching::tests::route_mode_tests matching::tests::shift_trip_targeting matching::tests::real_lane_aceh_to_cileungsi matching::tests::real_lane_kosambi_to_mataram matching::tests::flexible_superset_strict_f2 matching::tests::vehicle_empty_means_all matching::tests::flexible_multi_destination`
 
-Expected: `9 + 5 + 5 + 9 + 6 + 2 + 4 = 40` tests pass, 0 failed.
+Expected: `10 (route_mode_tests, incl. 1 regression test added during review) + 5 (shift_trip_targeting) + 5 (real_lane_aceh_to_cileungsi) + 11 (real_lane_kosambi_to_mataram) + 6 (flexible_superset_strict_f2) + 2 (vehicle_empty_means_all) + 4 (flexible_multi_destination) = 43` tests pass, 0 failed. (Corrected during Task 8's execution: an earlier draft of this plan undercounted the Kosambi-lane module as 9 tests — it's actually 11. Also +1 for a regression test added during review — see the `has_origin` fix note on `CompiledRule` above.)
 
 - [ ] **Step 5b: Un-ignore the 3 tests Task 7 deferred**
 
@@ -2770,7 +2800,7 @@ Replace the `fn matches_filter(&self, _booking: &Booking) -> bool { unimplemente
 - [ ] **Step 5: Run the FULL crate test suite for the first time**
 
 Run: `cargo test -p core-domain`
-Expected: every test across every module now passes — `7 (coc) + 7 (location) + 13 (vehicle, incl. 2 paren-stripping regression tests added during review) + 14 (route_parse, incl. 2 regression tests added during review) + 3 (sanitize) + 9 (dedupe) + 14 (Task 7: cap/booking_id/guards/cp6, incl. 2 direct-rule_rank supplementary tests added during review — all 3 tests Task 7 had to `#[ignore]` are un-ignored as of Task 8's Step 5b) + 40 (Task 8: route mode) + 3+2 (this task: filter mode/CP-4) = 112` tests, `test result: ok. 112 passed; 0 failed; 0 ignored`. If the count differs, do not adjust the count to match — investigate which test is missing or duplicated and report it in your self-review.
+Expected: every test across every module now passes — `7 (coc) + 7 (location) + 13 (vehicle, incl. 2 paren-stripping regression tests added during review) + 14 (route_parse, incl. 2 regression tests added during review) + 3 (sanitize) + 9 (dedupe) + 14 (Task 7: cap/booking_id/guards/cp6, incl. 2 direct-rule_rank supplementary tests added during review — all 3 tests Task 7 had to `#[ignore]` are un-ignored as of Task 8's Step 5b) + 43 (Task 8: route mode, corrected count + 1 has_origin regression test — see Task 8 Step 5) + 3+2 (this task: filter mode/CP-4) = 115` tests, `test result: ok. 115 passed; 0 failed; 0 ignored`. If the count differs, do not adjust the count to match — investigate which test is missing or duplicated and report it in your self-review.
 
 - [ ] **Step 6: Clippy**
 
@@ -2963,7 +2993,7 @@ Add `matched_booking_id_for` to the existing `pub use matching::{...}` line in `
 - [ ] **Step 7: Run the full crate suite once**
 
 Run: `cargo test -p core-domain`
-Expected: 112 (from Task 9) + 8 = 120 passing, 0 failed.
+Expected: 115 (from Task 9) + 8 = 123 passing, 0 failed.
 
 - [ ] **Step 8: Clippy**
 
@@ -3029,7 +3059,7 @@ Expected: 1 test passes. (This accesses `compiled.origin_norm`/`compiled.destina
 - [ ] **Step 3: Full crate test suite**
 
 Run: `cargo test -p core-domain`
-Expected: 120 (Task 10) + 1 = **121 tests pass, 0 failed, 0 ignored**. This is the money-critical GATE from the master spec — do not proceed to Step 4 if anything fails.
+Expected: 123 (Task 10) + 1 = **124 tests pass, 0 failed, 0 ignored**. This is the money-critical GATE from the master spec — do not proceed to Step 4 if anything fails.
 
 - [ ] **Step 4: Full workspace build/test/clippy (confirm nothing else broke)**
 
