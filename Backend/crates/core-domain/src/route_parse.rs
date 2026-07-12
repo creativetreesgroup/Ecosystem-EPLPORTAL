@@ -7,15 +7,30 @@ pub struct RouteNode {
     pub city: String,
 }
 
-/// `String(x ?? '')` — null/missing become "", everything else stringifies. Never treats a
-/// present empty string as "missing" (see the module doc for why that distinction matters).
+/// Bare JS `String(x)` coercion — unlike `field_string` (`x ?? ''` then stringify), this does
+/// NOT treat null as `""`: JS `String(null)` is the literal string `"null"`, a non-empty,
+/// truthy value. Array/Object inputs are approximated as their compact JSON representation
+/// rather than JS's exact `Array.prototype.toString()`/`"[object Object]"` — this file's
+/// fields (route/DC names) never realistically hold non-primitive values, and no reference
+/// test exercises this shape, so exact fidelity here isn't worth the complexity (documented
+/// simplification, not a silent gap — see Task 4's review for the finding this addresses).
+fn bare_string(v: &Value) -> String {
+    match v {
+        Value::Null => "null".to_string(),
+        Value::String(s) => s.clone(),
+        Value::Number(n) => n.to_string(),
+        Value::Bool(b) => b.to_string(),
+        Value::Array(_) | Value::Object(_) => v.to_string(),
+    }
+}
+
+/// `String(x ?? '')` — null/missing become "", everything else stringifies via `bare_string`.
+/// Never treats a present empty string as "missing" (see the module doc for why that
+/// distinction matters).
 fn field_string(v: Option<&Value>) -> String {
     match v {
         None | Some(Value::Null) => String::new(),
-        Some(Value::String(s)) => s.clone(),
-        Some(Value::Number(n)) => n.to_string(),
-        Some(Value::Bool(b)) => b.to_string(),
-        Some(_) => String::new(),
+        Some(other) => bare_string(other),
     }
 }
 
@@ -24,7 +39,7 @@ fn field_string(v: Option<&Value>) -> String {
 fn field_nullish(v: Option<&Value>) -> Option<String> {
     match v {
         None | Some(Value::Null) => None,
-        Some(other) => Some(field_string(Some(other))),
+        Some(other) => Some(bare_string(other)),
     }
 }
 
@@ -48,6 +63,22 @@ fn pick_field(raw: &Value, keys: &[&str]) -> String {
         }
     }
     String::new()
+}
+
+/// `x ?? y ?? z` resolved as a raw `Value` reference (not yet type-checked) — the first key
+/// that is present and non-null wins, REGARDLESS OF TYPE. The caller then type-checks only
+/// that one resolved value; it must never fall through to the next key just because the
+/// first-resolved value was the wrong type (that would silently read a different source than
+/// the reference implementation — see this finding's write-up for the production-incident
+/// class of bug this exact mistake caused once already).
+fn pick_nullish_value<'a>(raw: &'a Value, keys: &[&str]) -> Option<&'a Value> {
+    for &k in keys {
+        match raw.get(k) {
+            None | Some(Value::Null) => continue,
+            Some(v) => return Some(v),
+        }
+    }
+    None
 }
 
 pub fn parse_route_detail_list(raw: &Value) -> Vec<RouteNode> {
@@ -84,7 +115,7 @@ pub fn parse_route_stops(raw: &Value) -> Vec<String> {
         if !arr.is_empty() {
             return arr
                 .iter()
-                .map(|v| field_string(Some(v)))
+                .map(bare_string)
                 .filter(|s| !s.is_empty())
                 .collect();
         }
@@ -98,12 +129,13 @@ pub fn parse_route_stops(raw: &Value) -> Vec<String> {
 
     // 3. route_list / routes / route array — `dc_name ?? hub_name ?? name ?? location ?? ''`
     // per entry (nullish-coalescing chain, NOT "first non-empty").
-    let route_list = raw
-        .get("route_list")
-        .and_then(Value::as_array)
-        .or_else(|| raw.get("routes").and_then(Value::as_array))
-        .or_else(|| raw.get("route").and_then(Value::as_array));
-    if let Some(list) = route_list {
+    //
+    // Source selection mirrors `raw.route_list ?? raw.routes ?? raw.route`: the FIRST
+    // present-and-non-null value wins regardless of type, and only THAT value is then
+    // type-checked as an array. If it resolves but isn't an array, we do NOT fall through to
+    // the next key name — we fall through to step 4, exactly like the TS reference.
+    let route_list_value = pick_nullish_value(raw, &["route_list", "routes", "route"]);
+    if let Some(list) = route_list_value.and_then(Value::as_array) {
         if !list.is_empty() {
             let stops: Vec<String> = list
                 .iter()
@@ -232,6 +264,18 @@ mod tests {
         fn three_stop_route_preserved_in_order() {
             let stops = parse_route_stops(&rdl(&["Yogyakarta DC", "Purbalingga DC", "Banyumas DC"]));
             assert_eq!(stops, vec!["Yogyakarta DC", "Purbalingga DC", "Banyumas DC"]);
+        }
+
+        #[test]
+        fn route_list_wrong_type_does_not_fall_through_to_routes() {
+            let raw = json!({ "route_list": "invalid", "routes": [{ "dc_name": "A DC" }] });
+            assert_eq!(parse_route_stops(&raw), Vec::<String>::new());
+        }
+
+        #[test]
+        fn route_stops_null_entry_bare_stringifies_to_literal_null_not_empty() {
+            let raw = json!({ "route_stops": [serde_json::Value::Null, "Aceh DC"] });
+            assert_eq!(parse_route_stops(&raw), vec!["null".to_string(), "Aceh DC".to_string()]);
         }
     }
 }
