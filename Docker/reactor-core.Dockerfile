@@ -1,8 +1,8 @@
 FROM rust:1-slim-bookworm AS builder
 WORKDIR /build
-COPY Cargo.toml Cargo.lock ./
-COPY crates ./crates
-COPY bin ./bin
+COPY Backend/Cargo.toml Backend/Cargo.lock ./
+COPY Backend/crates ./crates
+COPY Backend/bin ./bin
 RUN cargo build --release --package reactor-core
 
 FROM debian:bookworm-slim AS runtime
