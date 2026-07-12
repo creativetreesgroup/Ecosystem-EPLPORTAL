@@ -1,0 +1,26 @@
+# OS
+.DS_Store
+
+# Claude Code local (personal, machine-specific)
+.claude/settings.local.json
+
+# Rust
+/target/
+**/target/
+# Cargo.lock is committed intentionally (workspace ships binaries)
+
+# Node / SvelteKit
+web/node_modules/
+web/.svelte-kit/
+web/build/
+web/.env
+web/.env.*
+!web/.env.example
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+secrets/
+
+# sqlx offline cache is committed intentionally (Fase 2+): .sqlx/
