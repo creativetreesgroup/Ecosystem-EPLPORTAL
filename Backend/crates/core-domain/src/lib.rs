@@ -9,7 +9,7 @@ pub mod vehicle;
 pub use booking::{Booking, BookingType};
 pub use coc::{booking_type_of, is_coc, is_coc_name};
 pub use location::{loc_match, loc_match_normalized, norm_loc};
-pub use matching::{find_best_matching_rule, matches_rule, CompiledRule, RuleRank};
+pub use matching::{find_best_matching_rule, matched_booking_id_for, matches_rule, CompiledRule, RuleRank};
 pub use route_parse::{parse_route_detail_list, parse_route_stops, RouteNode};
 pub use rule::{
     dedupe_rules, sanitize_accept_rules, AcceptRule, MatchState, RawAcceptRule, RawRuleConditions,

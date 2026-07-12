@@ -305,6 +305,29 @@ pub fn find_best_matching_rule(booking: &Booking, rules: &[AcceptRule], state: &
     best
 }
 
+/// Returns the registered booking-ID string (original case/spacing) this booking matches, or
+/// `None`. MUST use the same normalization (`norm_id`) as `CompiledRule::matches_booking_id` —
+/// see this task's brief header for the production incident this invariant prevents: an earlier
+/// version normalized differently between the two, so a rule could WIN a match via
+/// `matches_rule`/`matches_booking_id` but this function would return `None` for it — the
+/// booking-id was never consumed, and the rule stayed armed forever, re-matching an
+/// already-won ticket repeatedly.
+pub fn matched_booking_id_for(booking: &Booking, rule: &AcceptRule) -> Option<String> {
+    let tx = norm_id(&booking.spx_tx_id);
+    let bk = norm_id(&booking.booking_id);
+    let rq = norm_id(&booking.request_id);
+    for raw in &rule.conditions.booking_ids {
+        let id = norm_id(raw);
+        if id.is_empty() {
+            continue;
+        }
+        if tx == id || bk == id || rq == id || (id.len() >= 9 && tx.contains(id.as_str())) {
+            return Some(raw.clone());
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -985,6 +1008,119 @@ mod tests {
         fn endpoint_absen_sama_sekali_ditolak_walau_dest_perantara_hadir() {
             let b = mk_booking(&["Jakarta Hub", "Bandung DC", "Semarang DC"]);
             assert!(!CompiledRule::compile(&rule()).matches(&b, &mk_state()));
+        }
+    }
+
+    mod overlapping_rules_tests {
+        use super::*;
+
+        #[test]
+        fn prefers_more_specific_multi_destination_route_over_generic_endpoint_rule() {
+            let mut b = mk_booking(&["Pekanbaru DC", "Palembang DC", "Cileungsi DC"]);
+            b.booking_type = BookingType::Spxid;
+            b.vehicle_type = "TRONTON (10WH)".into();
+
+            let base = || RuleConditions {
+                origin: "Pekanbaru DC".into(),
+                booking_type: RuleBookingType::Spxid,
+                service_types: vec!["TRONTON".into()],
+                coc_only: true,
+                match_mode: RouteMatchMode::Strict,
+                ..Default::default()
+            };
+            let generic = AcceptRule { id: "generic".into(), name: "generic".into(), ..mk_rule(RuleMode::Route, RuleConditions { destinations: vec!["Cileungsi DC".into()], ..base() }) };
+            let specific = AcceptRule { id: "specific".into(), name: "specific".into(), ..mk_rule(RuleMode::Route, RuleConditions { destinations: vec!["Palembang DC".into(), "Cileungsi DC".into()], ..base() }) };
+
+            let best = find_best_matching_rule(&b, &[generic, specific], &mk_state()).expect("expected a match");
+            assert_eq!(best.id, "specific");
+        }
+
+        #[test]
+        fn booking_id_target_beats_a_broad_route_rule_for_the_same_ticket() {
+            let mut b = mk_booking(&["Aceh DC", "Cileungsi DC"]);
+            b.spx_tx_id = "SPXID_VM_001397649".into();
+            b.booking_id = "5996405".into();
+            b.booking_type = BookingType::Spxid;
+            b.vehicle_type = "TRONTON (10WH)".into();
+
+            let route = AcceptRule {
+                id: "route".into(),
+                ..mk_rule(RuleMode::Route, RuleConditions {
+                    origin: "Aceh DC".into(),
+                    destinations: vec!["Cileungsi DC".into()],
+                    booking_type: RuleBookingType::Spxid,
+                    service_types: vec!["TRONTON".into()],
+                    coc_only: true,
+                    ..Default::default()
+                })
+            };
+            let target = AcceptRule { id: "target".into(), ..mk_rule(RuleMode::BookingId, RuleConditions { booking_ids: vec!["SPXID_VM_001397649".into()], ..Default::default() }) };
+
+            let best = find_best_matching_rule(&b, &[route, target], &mk_state()).expect("expected a match");
+            assert_eq!(best.id, "target");
+        }
+    }
+
+    mod matched_booking_id_for_tests {
+        use super::*;
+
+        #[test]
+        fn separator_beda_spasi_vs_underscore_tetap_mengembalikan_raw_id() {
+            let r = mk_rule(RuleMode::BookingId, RuleConditions { booking_ids: vec!["SPXID VM 001402220".into()], ..Default::default() });
+            let mut b = mk_booking(&[]);
+            b.spx_tx_id = "SPXID_VM_001402220".into();
+            assert_eq!(matched_booking_id_for(&b, &r), Some("SPXID VM 001402220".to_string()));
+        }
+
+        #[test]
+        fn match_via_booking_id_bukan_spx_tx_id() {
+            let r = mk_rule(RuleMode::BookingId, RuleConditions { booking_ids: vec!["6254861".into()], ..Default::default() });
+            let mut b = mk_booking(&[]);
+            b.booking_id = "6254861".into();
+            assert_eq!(matched_booking_id_for(&b, &r), Some("6254861".to_string()));
+        }
+
+        #[test]
+        fn match_via_request_id() {
+            let r = mk_rule(RuleMode::BookingId, RuleConditions { booking_ids: vec!["REQ-000123".into()], ..Default::default() });
+            let mut b = mk_booking(&[]);
+            b.request_id = "REQ_000123".into();
+            assert_eq!(matched_booking_id_for(&b, &r), Some("REQ-000123".to_string()));
+        }
+
+        #[test]
+        fn substring_hanya_untuk_id_panjang_9_plus() {
+            let short = mk_rule(RuleMode::BookingId, RuleConditions { booking_ids: vec!["12345".into()], ..Default::default() });
+            let mut b_short = mk_booking(&[]);
+            b_short.spx_tx_id = "SPXID_12345_VM".into();
+            assert_eq!(matched_booking_id_for(&b_short, &short), None);
+
+            let long = mk_rule(RuleMode::BookingId, RuleConditions { booking_ids: vec!["001402220".into()], ..Default::default() });
+            let mut b_long = mk_booking(&[]);
+            b_long.spx_tx_id = "SPXID_VM_001402220".into();
+            assert_eq!(matched_booking_id_for(&b_long, &long), Some("001402220".to_string()));
+        }
+
+        #[test]
+        fn tidak_cocok_null_daftar_kosong_null() {
+            let r = mk_rule(RuleMode::BookingId, RuleConditions { booking_ids: vec!["SPXID_VM_001402220".into()], ..Default::default() });
+            let mut b = mk_booking(&[]);
+            b.spx_tx_id = "SPXID_VM_9".into();
+            assert_eq!(matched_booking_id_for(&b, &r), None);
+
+            let empty_rule = mk_rule(RuleMode::BookingId, RuleConditions::default());
+            let mut b2 = mk_booking(&[]);
+            b2.spx_tx_id = "X".into();
+            assert_eq!(matched_booking_id_for(&b2, &empty_rule), None);
+        }
+
+        #[test]
+        fn paritas_dengan_matches_rule_pada_kasus_separator_kontrak_anti_drift() {
+            let r = mk_rule(RuleMode::BookingId, RuleConditions { booking_ids: vec!["SPXID_ VM_001397492C".into()], ..Default::default() });
+            let mut b = mk_booking(&[]);
+            b.spx_tx_id = "SPXID_VM_001397492C".into();
+            assert!(matches_rule(&b, &r, &mk_state()));
+            assert_eq!(matched_booking_id_for(&b, &r), Some("SPXID_ VM_001397492C".to_string()));
         }
     }
 }
