@@ -1123,4 +1123,31 @@ mod tests {
             assert_eq!(matched_booking_id_for(&b, &r), Some("SPXID_ VM_001397492C".to_string()));
         }
     }
+
+    mod precompute_at_save_tests {
+        use super::*;
+
+        #[test]
+        fn compile_once_then_matches_many_times_against_different_bookings() {
+            // Demonstrates the master spec's "compile at save, not per ticket" requirement:
+            // origin/destinations are normalized exactly once here, then `matches` is called
+            // against several distinct bookings without re-deriving `origin_norm`/
+            // `destinations_norm` — inspect `CompiledRule::compile` (Task 7) to confirm the
+            // normalization happens inside `compile`, not inside `matches`/`matches_route`.
+            let rule = mk_rule(
+                RuleMode::Route,
+                RuleConditions { origin: "Padang DC".into(), destinations: vec!["Cileungsi DC".into()], ..Default::default() },
+            );
+            let compiled = CompiledRule::compile(&rule);
+
+            assert!(compiled.matches(&mk_booking(&["Padang DC", "Cileungsi DC"]), &mk_state()));
+            assert!(!compiled.matches(&mk_booking(&["Padang DC", "Surabaya DC"]), &mk_state()));
+            assert!(compiled.matches(&mk_booking(&["Padang DC", "Jakarta Hub", "Cileungsi DC"]), &mk_state()));
+            assert!(!compiled.matches(&mk_booking(&["Bandung DC", "Cileungsi DC"]), &mk_state()));
+
+            // Precomputed fields are stable across all four calls above — confirm directly.
+            assert_eq!(compiled.origin_norm, "padang dc");
+            assert_eq!(compiled.destinations_norm, vec!["cileungsi dc".to_string()]);
+        }
+    }
 }

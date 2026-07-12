@@ -35,11 +35,11 @@ Full context: [`Docs/tower-master-spec.md`](../../tower-master-spec.md) and [`Do
 - Consumes: nothing (first task).
 - Produces: `pub struct Booking { route_stops: Vec<String>, report_station: String, spx_tx_id: String, booking_id: String, request_id: String, booking_type: BookingType, vehicle_type: String, weight: f64, cod_amount: f64, shift_type: i32, trip_type: i32 }` (derives `Debug, Clone, Default`), `pub enum BookingType { Spxid, Reguler }` (derives `Debug, Clone, Copy, PartialEq, Eq, Default` with `#[default]` on `Reguler`), `pub fn is_coc_name(name: &str) -> bool`, `pub fn is_coc(spx_id: &str, booking_name: &str) -> bool`, `pub fn booking_type_of(name: &str) -> BookingType`. All later tasks depend on `Booking`/`BookingType`.
 
-- [ ] **Step 1: Read the reference source first**
+- [x] **Step 1: Read the reference source first**
 
 Read `/tmp/spx-portal-ref/apps/api/src/lib/coc.ts` (39 lines) and `/tmp/spx-portal-ref/apps/api/src/lib/coc.test.ts` (45 lines) in full before writing any code — this task's code below is the intended translation, but confirm it against the actual file.
 
-- [ ] **Step 2: Write `booking.rs`**
+- [x] **Step 2: Write `booking.rs`**
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -70,7 +70,7 @@ pub struct Booking {
 }
 ```
 
-- [ ] **Step 3: Write `coc.rs`**
+- [x] **Step 3: Write `coc.rs`**
 
 ```rust
 use crate::booking::BookingType;
@@ -157,7 +157,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 4: Wire up `lib.rs`**
+- [x] **Step 4: Wire up `lib.rs`**
 
 ```rust
 pub mod booking;
@@ -167,17 +167,17 @@ pub use booking::{Booking, BookingType};
 pub use coc::{booking_type_of, is_coc, is_coc_name};
 ```
 
-- [ ] **Step 5: Run the tests**
+- [x] **Step 5: Run the tests**
 
 Run: `cargo test -p core-domain`
 Expected: 7 tests pass (3 + 3 + 1 across the three `mod` blocks), `test result: ok. 7 passed; 0 failed`.
 
-- [ ] **Step 6: Clippy**
+- [x] **Step 6: Clippy**
 
 Run: `cargo clippy -p core-domain -- -D warnings`
 Expected: clean.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add Backend/crates/core-domain/src/booking.rs Backend/crates/core-domain/src/coc.rs Backend/crates/core-domain/src/lib.rs
@@ -196,11 +196,11 @@ git commit -m "feat(core-domain): port coc.ts + foundational Booking/BookingType
 - Consumes: nothing new.
 - Produces: `pub fn norm_loc(s: &str) -> String`, `pub fn loc_match(hay: &str, needle: &str) -> bool`, `pub fn loc_match_normalized(hay: &str, normalized_needle: &str) -> bool` (needle already run through `norm_loc` — this is what `CompiledRule` uses in Task 8/9 to avoid re-normalizing a rule's fixed origin/destination strings on every booking). Task 7-9 (matching.rs) depend on all three.
 
-- [ ] **Step 1: Read the reference source first**
+- [x] **Step 1: Read the reference source first**
 
 Read `normLoc`/`locMatch` in `/tmp/spx-portal-ref/apps/api/src/services/matching.ts` (lines 90-103) and the `locMatch / normLoc` describe block in `matching.test.ts` (lines 17-27).
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 Create `Backend/crates/core-domain/src/location.rs` with only this test module (references `norm_loc`/`loc_match`, which don't exist yet — must fail to compile):
 
@@ -246,12 +246,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Run to verify it fails**
+- [x] **Step 3: Run to verify it fails**
 
 Run: `cargo test -p core-domain location`
 Expected: FAIL — compile error, `cannot find function \`norm_loc\`` (and `loc_match`).
 
-- [ ] **Step 4: Implement**
+- [x] **Step 4: Implement**
 
 Prepend this above the test module in `location.rs`:
 
@@ -298,20 +298,20 @@ pub fn loc_match_normalized(hay: &str, normalized_needle: &str) -> bool {
 }
 ```
 
-- [ ] **Step 5: Run to verify it passes**
+- [x] **Step 5: Run to verify it passes**
 
 Run: `cargo test -p core-domain location`
 Expected: `test result: ok. 7 passed; 0 failed`.
 
-- [ ] **Step 6: Wire into `lib.rs`**
+- [x] **Step 6: Wire into `lib.rs`**
 
 Add `pub mod location;` and `pub use location::{loc_match, loc_match_normalized, norm_loc};` to `Backend/crates/core-domain/src/lib.rs`.
 
-- [ ] **Step 7: Clippy**
+- [x] **Step 7: Clippy**
 
 Run: `cargo clippy -p core-domain -- -D warnings` — expected clean.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add Backend/crates/core-domain/src/location.rs Backend/crates/core-domain/src/lib.rs
@@ -330,11 +330,11 @@ git commit -m "feat(core-domain): port normLoc/locMatch whole-word location matc
 - Consumes: nothing new.
 - Produces: `pub fn norm_vehicle(s: &str) -> String`, `pub fn vehicle_match(ticket_vehicle: &str, rule_type: &str) -> bool`, `pub fn vehicle_match_normalized(ticket_norm: &str, rule_norm: &str) -> bool`, `pub fn canonical_rule_vehicle_label(s: &str) -> String`. Task 5 (`sanitize_accept_rules`) uses `canonical_rule_vehicle_label` + `norm_vehicle`; Task 7-9 (`matching.rs`) use `vehicle_match_normalized`.
 
-- [ ] **Step 1: Read the reference source first**
+- [x] **Step 1: Read the reference source first**
 
 Read `matching.ts` lines 51-61 (`VEHICLE_RULE_LABELS`) and 105-125 (`normVehicle`/`vehicleMatch`/`canonicalRuleVehicleLabel`), plus the `vehicleMatch — canonical SPX vehicle names` describe block in `matching.test.ts` (lines 98-109).
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 Create `Backend/crates/core-domain/src/vehicle.rs` with only this test module:
 
@@ -419,12 +419,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Run to verify it fails**
+- [x] **Step 3: Run to verify it fails**
 
 Run: `cargo test -p core-domain vehicle`
 Expected: FAIL — compile error, missing functions.
 
-- [ ] **Step 4: Implement**
+- [x] **Step 4: Implement**
 
 Prepend above the test module:
 
@@ -539,20 +539,20 @@ pub fn canonical_rule_vehicle_label(s: &str) -> String {
 }
 ```
 
-- [ ] **Step 5: Run to verify it passes**
+- [x] **Step 5: Run to verify it passes**
 
 Run: `cargo test -p core-domain vehicle`
 Expected: `test result: ok. 13 passed; 0 failed`. (11 from the reference port + 2 regression tests added during Task 3's review for a paren-stripping edge case not covered by the reference test file — see the `strip_paren_spans` doc comment in Step 4.)
 
-- [ ] **Step 6: Wire into `lib.rs`**
+- [x] **Step 6: Wire into `lib.rs`**
 
 Add `pub mod vehicle;` and `pub use vehicle::{canonical_rule_vehicle_label, norm_vehicle, vehicle_match, vehicle_match_normalized};`.
 
-- [ ] **Step 7: Clippy**
+- [x] **Step 7: Clippy**
 
 Run: `cargo clippy -p core-domain -- -D warnings` — expected clean.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add Backend/crates/core-domain/src/vehicle.rs Backend/crates/core-domain/src/lib.rs
@@ -579,17 +579,17 @@ git commit -m "feat(core-domain): port normVehicle/vehicleMatch canonical vehicl
 
 Conflating these (e.g. implementing all three as "skip if empty string") silently changes which field wins when an earlier key resolves to an explicit empty string — get this right per the code below, which keeps three distinct helpers for exactly this reason.
 
-- [ ] **Step 1: Read the reference source first**
+- [x] **Step 1: Read the reference source first**
 
 Read `matching.ts` lines 462-515 (`pick`, `RouteNode`, `parseRouteDetailList`, `parseRouteStops`) and all of `route.test.ts` (53 lines).
 
-- [ ] **Step 2: Add the `serde_json` dependency**
+- [x] **Step 2: Add the `serde_json` dependency**
 
 ```bash
 cd Backend && cargo add --package core-domain serde_json && cd ..
 ```
 
-- [ ] **Step 3: Write the failing tests**
+- [x] **Step 3: Write the failing tests**
 
 Create `Backend/crates/core-domain/src/route_parse.rs` with only this test module (uses `serde_json::json!` to build fixtures matching `route.test.ts`'s `rdl(...)` helper):
 
@@ -706,12 +706,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 4: Run to verify it fails**
+- [x] **Step 4: Run to verify it fails**
 
 Run: `cargo test -p core-domain route_parse`
 Expected: FAIL — compile error, missing functions/types.
 
-- [ ] **Step 5: Implement**
+- [x] **Step 5: Implement**
 
 Prepend above the test module:
 
@@ -899,20 +899,20 @@ pub fn parse_route_stops(raw: &Value) -> Vec<String> {
 }
 ```
 
-- [ ] **Step 6: Run to verify it passes**
+- [x] **Step 6: Run to verify it passes**
 
 Run: `cargo test -p core-domain route_parse`
 Expected: `test result: ok. 14 passed; 0 failed`. (12 from the reference port + 2 regression tests added during Task 4's review for the route_list-fallback and bare-stringify fixes — see the `parse_route_stops_tests` module's trailing tests in Step 5.)
 
-- [ ] **Step 7: Wire into `lib.rs`**
+- [x] **Step 7: Wire into `lib.rs`**
 
 Add `pub mod route_parse;` and `pub use route_parse::{parse_route_detail_list, parse_route_stops, RouteNode};`.
 
-- [ ] **Step 8: Clippy**
+- [x] **Step 8: Clippy**
 
 Run: `cargo clippy -p core-domain -- -D warnings` — expected clean.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add Backend/crates/core-domain/src/route_parse.rs Backend/crates/core-domain/src/lib.rs Backend/Cargo.toml Backend/Cargo.lock
@@ -933,11 +933,11 @@ git commit -m "feat(core-domain): port parseRouteStops/parseRouteDetailList SPX 
 
 **Key type-design decision — `max_accept_count` is `u32`, not `Option<u32>`:** the reference `maxAcceptCount?: number` is read in two places (`matchesRule`'s cap check, `dedupeRules`' merge), and BOTH treat `undefined` and the literal number `0` identically as "unlimited" (`dedupeRules`' own comment: *"keep the most permissive cap (0 = unlimited wins)"*). Modeling this as `Option<u32>` would create a distinction (`None` vs `Some(0)`) the reference code never makes — use plain `u32` with `0` meaning unlimited, collapsing both TS states into one Rust state. This is **different** from `max_weight`/`max_cod_amount`, where `undefined` (no filter) and `Some(0.0)` (filter requires exactly 0) are semantically different in `matchesRule` (`c.maxWeight !== undefined && booking.weight > c.maxWeight`) — those stay `Option<f64>`.
 
-- [ ] **Step 1: Read the reference source first**
+- [x] **Step 1: Read the reference source first**
 
 Read `matching.ts` lines 7-44 (`AcceptRule` interface), 127-223 (`toInt`/`toOptionalNonNeg`/`uniqKeepOrder`/`sanitizeAcceptRules`), and the `sanitizeAcceptRules — professional save hygiene` describe block in `matching.test.ts` (lines 280-324).
 
-- [ ] **Step 2: Write `rule.rs` types (no tests yet — pure data, nothing to assert beyond compiling)**
+- [x] **Step 2: Write `rule.rs` types (no tests yet — pure data, nothing to assert beyond compiling)**
 
 ```rust
 use std::collections::HashMap;
@@ -1042,7 +1042,7 @@ pub struct RuleSanitizeResult {
 }
 ```
 
-- [ ] **Step 3: Add `norm_id` + the sanitize helpers**
+- [x] **Step 3: Add `norm_id` + the sanitize helpers**
 
 ```rust
 /// Separator-insensitive identity key: lowercase, strip everything but `[a-z0-9]`. Used to
@@ -1095,7 +1095,7 @@ fn to_optional_non_neg_f64(v: Option<f64>) -> Option<f64> {
 }
 ```
 
-- [ ] **Step 4: Write `sanitize_accept_rules`**
+- [x] **Step 4: Write `sanitize_accept_rules`**
 
 ```rust
 pub fn sanitize_accept_rules(rules: &[RawAcceptRule]) -> RuleSanitizeResult {
@@ -1218,7 +1218,7 @@ fn dedup_nonneg_ints(values: &[i64]) -> Vec<i32> {
 }
 ```
 
-- [ ] **Step 5: Add the tests**
+- [x] **Step 5: Add the tests**
 
 Append to `rule.rs`:
 
@@ -1289,7 +1289,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 6: Add the `test_support` module to `lib.rs`**
+- [x] **Step 6: Add the `test_support` module to `lib.rs`**
 
 Append to `Backend/crates/core-domain/src/lib.rs`:
 
@@ -1312,7 +1312,7 @@ pub(crate) mod test_support {
 }
 ```
 
-- [ ] **Step 7: Wire into `lib.rs`**
+- [x] **Step 7: Wire into `lib.rs`**
 
 Add `pub mod rule;` and:
 
@@ -1323,21 +1323,21 @@ pub use rule::{
 };
 ```
 
-- [ ] **Step 8: Run to verify tests pass**
+- [x] **Step 8: Run to verify tests pass**
 
 Run: `cargo test -p core-domain rule::`
 Expected: `test result: ok. 3 passed; 0 failed`.
 
-- [ ] **Step 9: Run the full workspace test suite once**
+- [x] **Step 9: Run the full workspace test suite once**
 
 Run: `cargo test -p core-domain`
 Expected: all prior tasks' tests still pass (7 + 7 + 11 + 12 + 3 = 40 passing so far), 0 failed.
 
-- [ ] **Step 10: Clippy**
+- [x] **Step 10: Clippy**
 
 Run: `cargo clippy -p core-domain -- -D warnings` — expected clean.
 
-- [ ] **Step 11: Commit**
+- [x] **Step 11: Commit**
 
 ```bash
 git add Backend/crates/core-domain/src/rule.rs Backend/crates/core-domain/src/lib.rs
@@ -1357,11 +1357,11 @@ git commit -m "feat(core-domain): port AcceptRule types + sanitizeAcceptRules"
 
 **Key translation note:** the reference `idKeep` is a `Map<AcceptRule, string[]>` keyed by **object identity** — TS can do this because objects are reference types. Rust has no equivalent for a plain struct; key by the rule's **index in the input slice** instead (`HashMap<usize, Vec<String>>`) — behaviorally identical since each input rule is visited exactly once by index either way.
 
-- [ ] **Step 1: Read the reference source first**
+- [x] **Step 1: Read the reference source first**
 
 Read `matching.ts` lines 388-460 (`normId`... wait, `norm_id` and `dedupKeepOrder` through `dedupeRules`) and both `dedupeRules` describe blocks in `matching.test.ts`: "anti-duplikasi" (lines 248-278) and "klaim booking_id memprioritaskan rule ENABLED (C1)" (lines 463-492).
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 Append to the `#[cfg(test)] mod tests` block in `rule.rs` (inside the existing `mod tests { ... }`, alongside `sanitize_accept_rules_tests`) — reference `dedupe_rules`, which doesn't exist yet:
 
@@ -1492,12 +1492,12 @@ Append to the `#[cfg(test)] mod tests` block in `rule.rs` (inside the existing `
     }
 ```
 
-- [ ] **Step 3: Run to verify it fails**
+- [x] **Step 3: Run to verify it fails**
 
 Run: `cargo test -p core-domain rule::tests::dedupe_rules_tests`
 Expected: FAIL — compile error, `cannot find function \`dedupe_rules\``.
 
-- [ ] **Step 4: Implement**
+- [x] **Step 4: Implement**
 
 Add above the `#[cfg(test)]` block in `rule.rs` (after `sanitize_accept_rules` and its helpers):
 
@@ -1603,25 +1603,25 @@ pub fn dedupe_rules(rules: &[AcceptRule]) -> Vec<AcceptRule> {
 
 Add `use std::collections::HashMap;` at the top of `rule.rs` if not already present from Task 5.
 
-- [ ] **Step 5: Run to verify it passes**
+- [x] **Step 5: Run to verify it passes**
 
 Run: `cargo test -p core-domain rule::tests::dedupe_rules_tests`
 Expected: `test result: ok. 9 passed; 0 failed`.
 
-- [ ] **Step 6: Run the full crate suite once**
+- [x] **Step 6: Run the full crate suite once**
 
 Run: `cargo test -p core-domain`
 Expected: 40 (prior) + 9 = 49 passing, 0 failed.
 
-- [ ] **Step 7: Wire into `lib.rs`**
+- [x] **Step 7: Wire into `lib.rs`**
 
 Add `dedupe_rules` to the existing `pub use rule::{...}` line in `lib.rs`.
 
-- [ ] **Step 8: Clippy**
+- [x] **Step 8: Clippy**
 
 Run: `cargo clippy -p core-domain -- -D warnings` — expected clean.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add Backend/crates/core-domain/src/rule.rs Backend/crates/core-domain/src/lib.rs
@@ -1642,11 +1642,11 @@ git commit -m "feat(core-domain): port dedupeRules anti-duplication pass"
 
 **Why ranking is a derived `Ord` on a `[i32; 6]`, not a custom comparator:** the reference `compareRuleRank` does index-by-index tuple comparison, first difference wins — this is *exactly* what `#[derive(PartialOrd, Ord)]` on a fixed-size array produces for free. `mode dominance > priority > specificity` (CP-6) falls out automatically from array index order: `[mode_score, priority, dest_count, has_origin, is_strict, service_type_count]` — a booking_id rule's `mode_score=3` always outranks a route rule's `mode_score=2` regardless of what follows, because the first array element is compared first.
 
-- [ ] **Step 1: Read the reference source first**
+- [x] **Step 1: Read the reference source first**
 
 Read `matching.ts` lines 63-88 (`ruleRank`/`compareRuleRank`), 225-252 (`matchesRule` header through the booking_id branch), and these `matching.test.ts` blocks: "matchesRule — maxAccept cap" (76-89), "matchesRule — booking_id mode" (140-164), "matchesRule — guards" (326-331), plus the CP-6 tests in "Phase-1: booking_id dominance + empty-filter safety" (334-345, 347-351).
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 Create `Backend/crates/core-domain/src/matching.rs` with only this test module:
 
@@ -1835,12 +1835,12 @@ mod tests {
 
 Add `#[ignore = "requires matches_route (Task 8)"]` directly above `under_cap_still_matches`, `exact_booking_id_rule_beats_higher_priority_route_rule_on_same_ticket`, and `among_two_route_rules_higher_priority_still_wins` — these 3 tests only, bodies otherwise untouched.
 
-- [ ] **Step 3: Run to verify it fails**
+- [x] **Step 3: Run to verify it fails**
 
 Run: `cargo test -p core-domain matching`
 Expected: FAIL — compile error, `CompiledRule`/`find_best_matching_rule`/`mk_booking` don't exist yet.
 
-- [ ] **Step 4: Implement — `RuleRank` and `CompiledRule` skeleton**
+- [x] **Step 4: Implement — `RuleRank` and `CompiledRule` skeleton**
 
 Prepend above the test module in `matching.rs`:
 
@@ -2015,7 +2015,7 @@ pub fn find_best_matching_rule(booking: &Booking, rules: &[AcceptRule], state: &
 }
 ```
 
-- [ ] **Step 5: Add the `mk_booking` test helper to `lib.rs`**
+- [x] **Step 5: Add the `mk_booking` test helper to `lib.rs`**
 
 Add to the existing `#[cfg(test)] pub(crate) mod test_support` block in `lib.rs`:
 
@@ -2030,21 +2030,21 @@ Add to the existing `#[cfg(test)] pub(crate) mod test_support` block in `lib.rs`
     }
 ```
 
-- [ ] **Step 6: Run to verify the tests this task owns pass**
+- [x] **Step 6: Run to verify the tests this task owns pass**
 
 Run (note: multiple test-name filters go after `--`, not as separate positional args): `cargo test -p core-domain -- matching::tests::max_accept_cap matching::tests::booking_id_mode matching::tests::guards matching::tests::cp6_ranking`
 Expected: 14 test fns match this filter (3 `max_accept_cap` + 6 `booking_id_mode` + 1 `guards` + 2 `cp6_ranking` end-to-end + 2 `cp6_ranking` direct-`rule_rank` supplementary), of which **11 pass and 3 are `ignored`** (`under_cap_still_matches` and both end-to-end CP-6 tests — these construct a Route-mode rule and call `.matches()`, which requires `matches_route`, still `unimplemented!()` until Task 8; mark them `#[ignore = "requires matches_route (Task 8)"]`, bodies otherwise untouched, per Step 2's note). 0 failed. The crate will not fully build-and-test as a whole yet in the sense that `matches_route`/`matches_filter` are stubs — but note this is a genuine gap in earlier drafts of this plan, which assumed (incorrectly) that no Task-7 test would reach those stubs; 3 of them do, hence the `#[ignore]`s. `cargo test -p core-domain` as a full *passing* run is deferred to Task 9's end, once both stubs are filled in — Task 8 removes 2 of these 3 `#[ignore]`s (the ones it's directly responsible for, both `cp6_ranking` end-to-end tests and `under_cap_still_matches`, all requiring `matches_route`), leaving 0 ignored after Task 8.
 
-- [ ] **Step 7: Wire into `lib.rs`**
+- [x] **Step 7: Wire into `lib.rs`**
 
 Add `pub mod matching;` and `pub use matching::{find_best_matching_rule, matches_rule, CompiledRule, RuleRank};`.
 
-- [ ] **Step 8: Clippy**
+- [x] **Step 8: Clippy**
 
 Run: `cargo clippy -p core-domain -- -D warnings`
 Expected: clean — the two `unimplemented!()` stubs do not trigger clippy warnings (unreachable in this task's own tests, and `unimplemented!` is an accepted marker for "next task fills this in," not dead code).
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add Backend/crates/core-domain/src/matching.rs Backend/crates/core-domain/src/lib.rs
@@ -2065,11 +2065,11 @@ git commit -m "feat(core-domain): CompiledRule scaffold, ranking (CP-6), booking
 
 This is the single largest and most failure-prone piece of the whole port — an ordered, whole-word, optionally-flexible multi-stop walk. Read the "route mode" section of this plan's design doc before starting if anything below is unclear; the algorithm has been hand-traced against 6 of the reference tests during planning (documented in the design doc) and is correct as specified — implement it as written, do not "simplify."
 
-- [ ] **Step 1: Read the reference source first**
+- [x] **Step 1: Read the reference source first**
 
 Read `matching.ts` lines 259-341 (the full route-mode branch of `matchesRule`) and these `matching.test.ts` blocks in full: "matchesRule — route mode" (29-74), "matchesRule — REAL lane: Aceh DC → Cileungsi DC" (111-138), "matchesRule — shift/trip targeting" (166-188), "matchesRule — flexible superset strict (F2)" (495-520), "Tipe Kendaraan kosong berarti semua jenis" (522-532), "flexible multi-destinasi" (534-549), "REAL lane: Kosambi DC → Mataram DC → Mataram 2 DC" (371-427).
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 Add a new `mod route_mode_tests { ... }` inside the existing `#[cfg(test)] mod tests { ... }` block in `matching.rs` (alongside `max_accept_cap`, `booking_id_mode`, `guards`, `cp6_ranking` from Task 7 — do not remove or restructure those):
 
@@ -2520,12 +2520,12 @@ Add a new `mod route_mode_tests { ... }` inside the existing `#[cfg(test)] mod t
     }
 ```
 
-- [ ] **Step 3: Run to verify it fails**
+- [x] **Step 3: Run to verify it fails**
 
 Run: `cargo test -p core-domain matching::tests::route_mode_tests`
 Expected: this specific module compiles (types already exist from Task 7) but every test in it panics with `not yet implemented: implemented in Task 8` (from `matches_route`'s `unimplemented!()`). This IS the expected RED state for this task — capture a snippet of the panic output as your RED evidence.
 
-- [ ] **Step 4: Implement `matches_route`**
+- [x] **Step 4: Implement `matches_route`**
 
 Replace the `fn matches_route(&self, _booking: &Booking) -> bool { unimplemented!("implemented in Task 8") }` stub in `matching.rs` with:
 
@@ -2648,13 +2648,13 @@ Replace the `fn matches_route(&self, _booking: &Booking) -> bool { unimplemented
     }
 ```
 
-- [ ] **Step 5: Run to verify it passes**
+- [x] **Step 5: Run to verify it passes**
 
 Run: `cargo test -p core-domain -- matching::tests::route_mode_tests matching::tests::shift_trip_targeting matching::tests::real_lane_aceh_to_cileungsi matching::tests::real_lane_kosambi_to_mataram matching::tests::flexible_superset_strict_f2 matching::tests::vehicle_empty_means_all matching::tests::flexible_multi_destination`
 
 Expected: `10 (route_mode_tests, incl. 1 regression test added during review) + 5 (shift_trip_targeting) + 5 (real_lane_aceh_to_cileungsi) + 11 (real_lane_kosambi_to_mataram) + 6 (flexible_superset_strict_f2) + 2 (vehicle_empty_means_all) + 4 (flexible_multi_destination) = 43` tests pass, 0 failed. (Corrected during Task 8's execution: an earlier draft of this plan undercounted the Kosambi-lane module as 9 tests — it's actually 11. Also +1 for a regression test added during review — see the `has_origin` fix note on `CompiledRule` above.)
 
-- [ ] **Step 5b: Un-ignore the 3 tests Task 7 deferred**
+- [x] **Step 5b: Un-ignore the 3 tests Task 7 deferred**
 
 Now that `matches_route` is implemented, remove `#[ignore = "requires matches_route (Task 8)"]` from these 3 tests (bodies stay exactly as Task 7 left them — no other change):
 - `matching::tests::max_accept_cap::under_cap_still_matches`
@@ -2664,12 +2664,12 @@ Now that `matches_route` is implemented, remove `#[ignore = "requires matches_ro
 Run: `cargo test -p core-domain -- matching::tests::max_accept_cap matching::tests::cp6_ranking`
 Expected: all tests in both modules pass now (including the 3 just un-ignored), `0 ignored`.
 
-- [ ] **Step 6: Clippy**
+- [x] **Step 6: Clippy**
 
 Run: `cargo clippy -p core-domain -- -D warnings`
 Expected: clean. (`matches_filter` is still `unimplemented!()` at this point — expected, Task 9's job — this does not trigger a clippy warning.)
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add Backend/crates/core-domain/src/matching.rs
@@ -2687,11 +2687,11 @@ git commit -m "feat(core-domain): route mode matching (strict/flexible, shift/tr
 - Consumes: everything from Task 7/8.
 - Produces: a working `CompiledRule::matches_filter` — the last `unimplemented!()` stub in the crate. After this task, `cargo test -p core-domain` runs the **entire** crate suite for the first time (Task 7/8 deliberately ran scoped subsets since `matches_filter` wasn't ready yet).
 
-- [ ] **Step 1: Read the reference source first**
+- [x] **Step 1: Read the reference source first**
 
 Read `matching.ts` lines 343-359 (filter-mode branch) and these `matching.test.ts` blocks: "matchesRule — filter mode COC semantics" (190-203) and the two CP-4 tests inside "Phase-1: booking_id dominance + empty-filter safety" (353-362).
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 Add inside the existing `#[cfg(test)] mod tests { ... }` block in `matching.rs`:
 
@@ -2749,12 +2749,12 @@ Add inside the existing `#[cfg(test)] mod tests { ... }` block in `matching.rs`:
     }
 ```
 
-- [ ] **Step 3: Run to verify it fails**
+- [x] **Step 3: Run to verify it fails**
 
 Run: `cargo test -p core-domain matching::tests::filter_mode_coc_semantics matching::tests::cp4_empty_filter_safety`
 Expected: every test panics with `not yet implemented: implemented in Task 9` (the `matches_filter` stub). Capture as RED evidence.
 
-- [ ] **Step 4: Implement `matches_filter`**
+- [x] **Step 4: Implement `matches_filter`**
 
 Replace the `fn matches_filter(&self, _booking: &Booking) -> bool { unimplemented!("implemented in Task 9") }` stub with:
 
@@ -2797,17 +2797,17 @@ Replace the `fn matches_filter(&self, _booking: &Booking) -> bool { unimplemente
     }
 ```
 
-- [ ] **Step 5: Run the FULL crate test suite for the first time**
+- [x] **Step 5: Run the FULL crate test suite for the first time**
 
 Run: `cargo test -p core-domain`
 Expected: every test across every module now passes — `7 (coc) + 7 (location) + 13 (vehicle, incl. 2 paren-stripping regression tests added during review) + 14 (route_parse, incl. 2 regression tests added during review) + 3 (sanitize) + 9 (dedupe) + 14 (Task 7: cap/booking_id/guards/cp6, incl. 2 direct-rule_rank supplementary tests added during review — all 3 tests Task 7 had to `#[ignore]` are un-ignored as of Task 8's Step 5b) + 43 (Task 8: route mode, corrected count + 1 has_origin regression test — see Task 8 Step 5) + 3+2 (this task: filter mode/CP-4) = 115` tests, `test result: ok. 115 passed; 0 failed; 0 ignored`. If the count differs, do not adjust the count to match — investigate which test is missing or duplicated and report it in your self-review.
 
-- [ ] **Step 6: Clippy**
+- [x] **Step 6: Clippy**
 
 Run: `cargo clippy -p core-domain -- -D warnings`
 Expected: clean — no more `unimplemented!()` stubs anywhere in the crate.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add Backend/crates/core-domain/src/matching.rs
@@ -2828,11 +2828,11 @@ git commit -m "feat(core-domain): filter mode matching + CP-4 empty-filter guard
 
 **Why this function exists as a near-duplicate of `matches_booking_id`:** the reference source's own comment (`matching.ts` right above `matchedBookingIdFor`) documents a real production incident: an earlier version of this function normalized differently from `matchesRule`, so a rule could WIN a match but this function would return `null` for it — the booking-id was never consumed, and the rule stayed "armed" forever for a ticket it had already won. The fix was making both use the exact same `normId`. Keep that invariant here: `matched_booking_id_for` must use `norm_id` — the identical function `matches_booking_id`/`dedupe_rules` use — never a different normalization.
 
-- [ ] **Step 1: Read the reference source first**
+- [x] **Step 1: Read the reference source first**
 
 Read `matching.ts` lines 205-246 (`findBestMatchingRule` — already ported in Task 7, re-read for context) and lines 370-386 (`matchedBookingIdFor` + its comment). Read `matching.test.ts`'s "findBestMatchingRule — overlapping rules" (205-246) and "matchedBookingIdFor — normalisasi HARUS identik dengan matchesRule (C2)" (432-461).
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 Add inside the existing `#[cfg(test)] mod tests { ... }` block:
 
@@ -2951,12 +2951,12 @@ Add inside the existing `#[cfg(test)] mod tests { ... }` block:
     }
 ```
 
-- [ ] **Step 3: Run to verify it fails**
+- [x] **Step 3: Run to verify it fails**
 
 Run: `cargo test -p core-domain matching::tests::overlapping_rules_tests matching::tests::matched_booking_id_for_tests`
 Expected: `overlapping_rules_tests` PASSES already (it only exercises `find_best_matching_rule`, fully implemented since Task 9) — that's fine, note it in your report as pre-existing coverage, not new RED/GREEN. `matched_booking_id_for_tests` FAILS to compile: `cannot find function \`matched_booking_id_for\``.
 
-- [ ] **Step 4: Implement `matched_booking_id_for`**
+- [x] **Step 4: Implement `matched_booking_id_for`**
 
 Add to `matching.rs`, near `matches_rule`/`find_best_matching_rule` (outside the `impl CompiledRule` block — this is a free function operating on a raw `AcceptRule`, matching the reference signature exactly):
 
@@ -2981,25 +2981,25 @@ pub fn matched_booking_id_for(booking: &Booking, rule: &AcceptRule) -> Option<St
 }
 ```
 
-- [ ] **Step 5: Run to verify it passes**
+- [x] **Step 5: Run to verify it passes**
 
 Run: `cargo test -p core-domain matching::tests::overlapping_rules_tests matching::tests::matched_booking_id_for_tests`
 Expected: `2 + 6 = 8` tests pass, 0 failed.
 
-- [ ] **Step 6: Wire into `lib.rs`**
+- [x] **Step 6: Wire into `lib.rs`**
 
 Add `matched_booking_id_for` to the existing `pub use matching::{...}` line in `lib.rs`.
 
-- [ ] **Step 7: Run the full crate suite once**
+- [x] **Step 7: Run the full crate suite once**
 
 Run: `cargo test -p core-domain`
 Expected: 115 (from Task 9) + 8 = 123 passing, 0 failed.
 
-- [ ] **Step 8: Clippy**
+- [x] **Step 8: Clippy**
 
 Run: `cargo clippy -p core-domain -- -D warnings` — expected clean.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add Backend/crates/core-domain/src/matching.rs Backend/crates/core-domain/src/lib.rs
@@ -3018,7 +3018,7 @@ git commit -m "feat(core-domain): matchedBookingIdFor + overlapping-rule ranking
 - Consumes: everything from Task 1-10.
 - Produces: nothing new consumed by later work — this is Fase 1's sign-off gate, mirroring Fase 0's Task 8.
 
-- [ ] **Step 1: Add the precompute-at-save demonstration test**
+- [x] **Step 1: Add the precompute-at-save demonstration test**
 
 Add inside the existing `#[cfg(test)] mod tests { ... }` block in `matching.rs`:
 
@@ -3051,17 +3051,17 @@ Add inside the existing `#[cfg(test)] mod tests { ... }` block in `matching.rs`:
     }
 ```
 
-- [ ] **Step 2: Run to verify it passes**
+- [x] **Step 2: Run to verify it passes**
 
 Run: `cargo test -p core-domain matching::tests::precompute_at_save_tests`
 Expected: 1 test passes. (This accesses `compiled.origin_norm`/`compiled.destinations_norm` directly — both are private fields on `CompiledRule`, which is fine since this test lives inside the same crate's `#[cfg(test)]` module and Rust privacy is module-scoped, not just crate-scoped-via-`pub`; if this doesn't compile because the test module isn't a descendant of `matching`'s private scope, move the test into `matching.rs`'s existing `mod tests` — not a new top-level integration test file — where it already has access.)
 
-- [ ] **Step 3: Full crate test suite**
+- [x] **Step 3: Full crate test suite**
 
 Run: `cargo test -p core-domain`
 Expected: 123 (Task 10) + 1 = **124 tests pass, 0 failed, 0 ignored**. This is the money-critical GATE from the master spec — do not proceed to Step 4 if anything fails.
 
-- [ ] **Step 4: Full workspace build/test/clippy (confirm nothing else broke)**
+- [x] **Step 4: Full workspace build/test/clippy (confirm nothing else broke)**
 
 ```bash
 cd Backend
@@ -3073,22 +3073,22 @@ cd ..
 
 Expected: all three clean — `reactor-core`/`auth-sidecar`'s existing 2 tests plus `core-domain`'s 115 plus the 7 remaining empty lib crates' 0-test runs, all `ok`.
 
-- [ ] **Step 5: Confirm no I/O dependency crept in**
+- [x] **Step 5: Confirm no I/O dependency crept in**
 
 Run: `cd Backend && cargo tree -p core-domain && cd ..`
 Expected: `core-domain` depends only on `serde_json` (plus serde_json's own transitive deps — `serde`, `itoa`, `ryu`, `memchr`, etc., which is expected and fine). Confirm `tokio`, `reqwest`, `sqlx`, `redis`, `hyper` do **not** appear anywhere in the tree — if any of them do, something pulled in an I/O dependency by accident and must be fixed before sign-off, not merely noted.
 
-- [ ] **Step 6: Cross-check every function named in this plan's Global Constraints "Cakupan" list is actually exported**
+- [x] **Step 6: Cross-check every function named in this plan's Global Constraints "Cakupan" list is actually exported**
 
 Run: `grep -n "^pub fn\|^pub struct\|^pub enum" Backend/crates/core-domain/src/*.rs`
 
 Manually confirm every item in the design doc's "Cakupan (in-scope)" list has a corresponding `pub` item in the grep output: `is_coc_name`, `is_coc`, `booking_type_of`, `norm_loc`, `loc_match`, `norm_vehicle`, `vehicle_match`, `sanitize_accept_rules`, `matches_rule`, `find_best_matching_rule`, `matched_booking_id_for`, `dedupe_rules`, `parse_route_stops`, `parse_route_detail_list`. If anything is missing, that's a real gap — add it and its test(s) before sign-off, don't just note it as a known gap.
 
-- [ ] **Step 7: Mark this plan complete**
+- [x] **Step 7: Mark this plan complete**
 
 Check every remaining `- [ ]` box in this file (`Docs/superpowers/plans/2026-07-13-fase-1-core-domain.md`) to `- [x]` — the intro sentence describing the checkbox convention (if any, mirroring Fase 0's plan) is prose, not a real checkbox; do not flip it (Fase 0's Task 8 hit exactly this false-positive from a blanket find/replace — do the edit by hand per-line, or grep-verify afterward that the intro line is untouched).
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add Backend/crates/core-domain/src/matching.rs Docs/superpowers/plans/2026-07-13-fase-1-core-domain.md
