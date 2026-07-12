@@ -2,7 +2,7 @@
 
 > Sumber kebenaran (source of truth) untuk seluruh proyek TOWER. Disalin verbatim dari
 > instruksi awal pengguna pada 2026-07-13. Semua spec/plan per-fase di
-> `docs/superpowers/specs/` harus konsisten dengan dokumen ini. Jika ada
+> `Docs/superpowers/specs/` harus konsisten dengan dokumen ini. Jika ada
 > ketidaksesuaian, dokumen ini yang menang kecuali pengguna menyatakan sebaliknya.
 
 ## Catatan konteks penting (disepakati saat brainstorming Fase 0)
