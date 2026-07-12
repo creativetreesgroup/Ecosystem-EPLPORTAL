@@ -15,28 +15,41 @@ fn vehicle_rule_label(normalized: &str) -> Option<&'static str> {
     }
 }
 
+/// Mirrors JS regex `/\([^)]*\)/g`: for each '(' scanned left-to-right, find the NEXT ')'
+/// after it (no nested-depth tracking — `[^)]*` just means "any non-')' char", so
+/// `(b (c)` is ONE match ending at the first ')'). Replace each matched span with a single
+/// space. An unmatched trailing '(' (no ')' anywhere after it) is left as literal text — the
+/// caller's subsequent `[^a-z0-9 ]` stripping pass turns the lone '(' into a space, same as
+/// the TS second regex pass does, but never drops the real content after it.
+fn strip_paren_spans(s: &str) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '(' {
+            if let Some(rel_close) = chars[i + 1..].iter().position(|&c| c == ')') {
+                let close_idx = i + 1 + rel_close;
+                out.push(' ');
+                i = close_idx + 1;
+                continue;
+            } else {
+                out.extend(&chars[i..]);
+                break;
+            }
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
+}
+
 /// Lowercase, strip any "(...)" span (capacity suffix), keep only `[a-z0-9 ]`, collapse
 /// whitespace runs, trim. Mirrors TS
 /// `(s||'').toLowerCase().replace(/\([^)]*\)/g,' ').replace(/[^a-z0-9 ]+/g,' ').replace(/\s+/g,' ').trim()`.
 pub fn norm_vehicle(s: &str) -> String {
     let lower = s.to_lowercase();
 
-    let mut depth = 0u32;
-    let mut no_parens = String::with_capacity(lower.len());
-    for ch in lower.chars() {
-        match ch {
-            '(' => {
-                depth += 1;
-                no_parens.push(' ');
-            }
-            ')' => {
-                depth = depth.saturating_sub(1);
-                no_parens.push(' ');
-            }
-            _ if depth > 0 => no_parens.push(' '),
-            _ => no_parens.push(ch),
-        }
-    }
+    let no_parens = strip_paren_spans(&lower);
 
     let mut out = String::with_capacity(no_parens.len());
     let mut last_was_space = true;
@@ -141,6 +154,17 @@ mod tests {
     #[test]
     fn norm_vehicle_strips_capacity_suffix() {
         assert_eq!(norm_vehicle("TRONTON (10WH)"), "tronton");
+    }
+
+    #[test]
+    fn norm_vehicle_unmatched_open_paren_preserves_trailing_content() {
+        assert_eq!(norm_vehicle("ENGKEL BAK (STD"), "engkel bak std");
+        assert_eq!(norm_vehicle("TRONTON (10WH"), "tronton 10wh");
+    }
+
+    #[test]
+    fn norm_vehicle_nested_parens_are_not_depth_tracked_matches_js_regex() {
+        assert_eq!(norm_vehicle("a (b (c) d) e"), "a d e");
     }
 
     #[test]
