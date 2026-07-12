@@ -7,15 +7,23 @@
 
 ## Catatan konteks penting (disepakati saat brainstorming Fase 0)
 
-- **Tidak ada reference repo eksternal.** Prompt asli menyebut `/root/projects/SPX-PORTAL`
-  sebagai source of truth fungsional untuk logika bisnis (matching.ts, coc.ts, dst).
-  Path tersebut **tidak ada** di mesin pengembangan ini (macOS, direktori kerja
-  `EPL-PROJECT` kosong saat proyek dimulai). Pengguna mengonfirmasi: bangun sepenuhnya
-  lokal di dalam `EPL-PROJECT`, ikuti deskripsi perilaku di master prompt ini
-  apa adanya (bukan porting line-for-line dari kode acuan yang tidak dapat diakses).
-  Setiap tempat di mana perilaku SPX/engine acuan diasumsikan alih-alih dibaca
-  langsung dari kode, akan ditandai eksplisit di spec/plan fase terkait (utamanya
-  Fase 1 dan seterusnya).
+- **[UPDATE — Fase 1] Reference repo kini tersedia.** Saat Fase 0 dimulai, path
+  `/root/projects/SPX-PORTAL` yang disebut prompt asli **tidak ada** di mesin
+  pengembangan ini, sehingga Fase 0 dibangun murni dari deskripsi perilaku di
+  master prompt (tanpa porting line-for-line). Fase 0 tidak butuh kode acuan sama
+  sekali sehingga ini tidak blocking saat itu.
+  Menjelang Fase 1, pengguna meng-clone repo acuan yang sebenarnya (nama repo:
+  `creativetrees/Ecosystem-PortalSPX`, bukan path lokal `/root/projects/SPX-PORTAL`
+  dari prompt asli) ke `/tmp/spx-portal-ref` via `gh` CLI (SSH alias/key khusus yang
+  disebut prompt tidak terkonfigurasi di mesin ini; `gh` CLI ternyata sudah
+  authenticated dengan scope `repo` dan dipakai sebagai fallback). File kunci untuk
+  Fase 1 sudah terverifikasi ada: `apps/api/src/services/matching.ts`,
+  `apps/api/src/services/matching.test.ts`, `apps/api/src/services/route.test.ts`,
+  `apps/api/src/lib/coc.ts`, `apps/api/src/lib/coc.test.ts`. **Mulai Fase 1, porting
+  rule engine mengikuti kode acuan ini line-for-line semantik seperti yang diwajibkan
+  prompt asli** — bukan lagi inferensi dari deskripsi. `/tmp/spx-portal-ref` bersifat
+  sementara (di luar `EPL-PROJECT`, tidak ter-commit); jika hilang/dibersihkan sistem,
+  perlu di-clone ulang sebelum lanjut kerja di Fase 1+.
 - Proyek dieksekusi **satu fase per sesi/putaran, terverifikasi** — setiap fase
   punya spec + plan + bukti verifikasi sendiri sebelum lanjut ke fase berikutnya.
 - Toolchain lokal saat mulai: Node v26.4.0, pnpm 11.9.0, Docker 29.6.1 +
