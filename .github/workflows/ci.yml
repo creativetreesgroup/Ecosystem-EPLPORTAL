@@ -11,6 +11,9 @@ env:
 jobs:
   rust:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: Backend
     steps:
       - uses: actions/checkout@v4
 
@@ -20,6 +23,8 @@ jobs:
           components: clippy, rustfmt
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: Backend -> target
 
       - name: Build
         run: cargo build --workspace --all-targets

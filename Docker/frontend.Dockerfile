@@ -1,9 +1,9 @@
 FROM node:lts-slim AS builder
 WORKDIR /build
 RUN corepack enable
-COPY package.json pnpm-lock.yaml ./
+COPY Frontend/package.json Frontend/pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
-COPY . .
+COPY Frontend/ .
 RUN pnpm build
 
 FROM node:lts-slim AS runtime

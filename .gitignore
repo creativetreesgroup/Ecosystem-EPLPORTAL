@@ -5,17 +5,17 @@
 .claude/settings.local.json
 
 # Rust
-/target/
+Backend/target/
 **/target/
-# Cargo.lock is committed intentionally (workspace ships binaries)
+# Backend/Cargo.lock is committed intentionally (workspace ships binaries)
 
 # Node / SvelteKit
-web/node_modules/
-web/.svelte-kit/
-web/build/
-web/.env
-web/.env.*
-!web/.env.example
+Frontend/node_modules/
+Frontend/.svelte-kit/
+Frontend/build/
+Frontend/.env
+Frontend/.env.*
+!Frontend/.env.example
 
 # Env / secrets
 .env

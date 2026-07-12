@@ -25,8 +25,8 @@ services:
 
   tower-reactor-core:
     build:
-      context: .
-      dockerfile: bin/reactor-core/Dockerfile
+      context: ..
+      dockerfile: Docker/reactor-core.Dockerfile
     container_name: tower-reactor-core
     restart: unless-stopped
     env_file:
@@ -44,8 +44,8 @@ services:
 
   tower-auth-sidecar:
     build:
-      context: .
-      dockerfile: bin/auth-sidecar/Dockerfile
+      context: ..
+      dockerfile: Docker/auth-sidecar.Dockerfile
     container_name: tower-auth-sidecar
     restart: unless-stopped
     env_file:
@@ -60,8 +60,8 @@ services:
 
   tower-web:
     build:
-      context: ./web
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: Docker/frontend.Dockerfile
     container_name: tower-web
     restart: unless-stopped
     environment:

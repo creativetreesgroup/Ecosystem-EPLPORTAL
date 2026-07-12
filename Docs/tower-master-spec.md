@@ -2,7 +2,7 @@
 
 > Sumber kebenaran (source of truth) untuk seluruh proyek TOWER. Disalin verbatim dari
 > instruksi awal pengguna pada 2026-07-13. Semua spec/plan per-fase di
-> `docs/superpowers/specs/` harus konsisten dengan dokumen ini. Jika ada
+> `Docs/superpowers/specs/` harus konsisten dengan dokumen ini. Jika ada
 > ketidaksesuaian, dokumen ini yang menang kecuali pengguna menyatakan sebaliknya.
 
 ## Catatan konteks penting (disepakati saat brainstorming Fase 0)
@@ -28,6 +28,22 @@
   punya spec + plan + bukti verifikasi sendiri sebelum lanjut ke fase berikutnya.
 - Toolchain lokal saat mulai: Node v26.4.0, pnpm 11.9.0, Docker 29.6.1 +
   Compose v5.3.0 tersedia; Rust/Cargo/rustup **tidak** terpasang (dipasang di Fase 0).
+- **Reorg layout top-level (2026-07-13, pasca Fase 0).** Struktur repo yang tadinya
+  flat di root (Cargo workspace, `bin/`, `web/`, docker-compose, docs) dipindah ke
+  5 folder top-level: `Backend/` (Cargo workspace root: `Cargo.toml`, `Cargo.lock`,
+  `deny.toml`, `crates/`, `bin/`), `Frontend/` (eks-`web/`, SvelteKit tanpa perubahan
+  internal), `Docker/` (semua Dockerfile + `docker-compose.yml` + `Caddyfile` +
+  `.env.example` disentralkan di sini), `OS/` (reserved, kosong untuk overlay VPS
+  Fase 8), dan `Docs/` (eks-`docs/`, rename case-only, isi tidak berubah). Keputusan
+  desain: ketiga service Docker (`reactor-core`, `auth-sidecar`, `tower-web`) memakai
+  `build.context: ..` (repo root) dengan `build.dockerfile: Docker/<nama>.Dockerfile`
+  — pola ini dipilih karena path dockerfile relatif terhadap context adalah cara
+  paling tidak ambigu untuk merujuk Dockerfile yang tinggal di luar `Backend/` dan
+  `Frontend/` tapi tetap di dalam context repo root; akibatnya path `COPY` di tiap
+  Dockerfile diberi prefix `Backend/` atau `Frontend/` sesuai lokasi barunya, dan
+  `.dockerignore` root (bukan lagi `web/.dockerignore`, yang dihapus) berlaku untuk
+  ketiga build. Perilaku runtime, nama service, network, port binding, dan healthcheck
+  tidak berubah — hanya lokasi file dan path referensinya.
 
 ---
 
