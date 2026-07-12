@@ -10,6 +10,7 @@ members = [
     "crates/notifier",
     "crates/api-gateway",
     "bin/reactor-core",
+    "bin/auth-sidecar",
 ]
 
 [workspace.package]
