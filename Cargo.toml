@@ -9,6 +9,7 @@ members = [
     "crates/ws-hub",
     "crates/notifier",
     "crates/api-gateway",
+    "bin/reactor-core",
 ]
 
 [workspace.package]
