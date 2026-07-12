@@ -687,6 +687,21 @@ mod tests {
             let stops = parse_route_stops(&rdl(&["Yogyakarta DC", "Purbalingga DC", "Banyumas DC"]));
             assert_eq!(stops, vec!["Yogyakarta DC", "Purbalingga DC", "Banyumas DC"]);
         }
+
+        // Added during Task 4's review: not from route.test.ts (which doesn't exercise these
+        // shapes), but required to lock in two fixes — see pick_nullish_value's and
+        // bare_string's doc comments for the incidents these prevent.
+        #[test]
+        fn route_list_wrong_type_does_not_fall_through_to_routes() {
+            let raw = json!({ "route_list": "invalid", "routes": [{ "dc_name": "A DC" }] });
+            assert_eq!(parse_route_stops(&raw), Vec::<String>::new());
+        }
+
+        #[test]
+        fn route_stops_null_entry_bare_stringifies_to_literal_null_not_empty() {
+            let raw = json!({ "route_stops": [serde_json::Value::Null, "Aceh DC"] });
+            assert_eq!(parse_route_stops(&raw), vec!["null".to_string(), "Aceh DC".to_string()]);
+        }
     }
 }
 ```
@@ -710,15 +725,35 @@ pub struct RouteNode {
     pub city: String,
 }
 
-/// `String(x ?? '')` — null/missing become "", everything else stringifies. Never treats a
-/// present empty string as "missing" (see the module doc for why that distinction matters).
+/// Bare JS `String(x)` coercion — unlike `field_string` (`x ?? ''` then stringify), this does
+/// NOT treat null as `""`: JS `String(null)` is the literal string `"null"`, a non-empty,
+/// truthy value. Array/Object inputs are approximated as their compact JSON representation
+/// rather than JS's exact `Array.prototype.toString()`/`"[object Object]"` — this file's
+/// fields (route/DC names) never realistically hold non-primitive values, and no reference
+/// test exercises this shape, so exact fidelity here isn't worth the complexity (a documented
+/// simplification, not a silent gap).
+///
+/// (Corrected during Task 4's review: `field_string`'s original null→"" handling was
+/// mistakenly reused for step 1's `route_stops.map(String)`, which is BARE `String(x)` in the
+/// reference — a `null` entry must stringify to `"null"`, not `""`. See `field_string`'s doc
+/// comment for why the two must stay distinct functions, not be merged.)
+fn bare_string(v: &Value) -> String {
+    match v {
+        Value::Null => "null".to_string(),
+        Value::String(s) => s.clone(),
+        Value::Number(n) => n.to_string(),
+        Value::Bool(b) => b.to_string(),
+        Value::Array(_) | Value::Object(_) => v.to_string(),
+    }
+}
+
+/// `String(x ?? '')` — null/missing become "", everything else stringifies via `bare_string`.
+/// Never treats a present empty string as "missing" (see the module doc for why that
+/// distinction matters). NOT the same as bare `String(x)` — see `bare_string`.
 fn field_string(v: Option<&Value>) -> String {
     match v {
         None | Some(Value::Null) => String::new(),
-        Some(Value::String(s)) => s.clone(),
-        Some(Value::Number(n)) => n.to_string(),
-        Some(Value::Bool(b)) => b.to_string(),
-        Some(_) => String::new(),
+        Some(other) => bare_string(other),
     }
 }
 
@@ -727,8 +762,26 @@ fn field_string(v: Option<&Value>) -> String {
 fn field_nullish(v: Option<&Value>) -> Option<String> {
     match v {
         None | Some(Value::Null) => None,
-        Some(other) => Some(field_string(Some(other))),
+        Some(other) => Some(bare_string(other)),
     }
+}
+
+/// `x ?? y ?? z` resolved as a raw `Value` reference (not yet type-checked) — the first key
+/// that is present and non-null wins, REGARDLESS OF TYPE. The caller then type-checks only
+/// that one resolved value; it must never fall through to the next key just because the
+/// first-resolved value was the wrong type — see `parse_route_stops` step 3's comment for the
+/// production-incident-class bug this exact mistake caused once already (an earlier draft of
+/// this function chained `.and_then(Value::as_array).or_else(...)` per key, which silently
+/// reads `routes` when `route_list` is present-but-wrong-type instead of correctly producing
+/// no match at all, same as the reference).
+fn pick_nullish_value<'a>(raw: &'a Value, keys: &[&str]) -> Option<&'a Value> {
+    for &k in keys {
+        match raw.get(k) {
+            None | Some(Value::Null) => continue,
+            Some(v) => return Some(v),
+        }
+    }
+    None
 }
 
 /// JS truthiness for `if (raw.sgi_route_name)`: false for null/missing/""/0/false, true otherwise.
@@ -785,9 +838,11 @@ pub fn parse_route_stops(raw: &Value) -> Vec<String> {
     // check is on the raw array, not the post-filter result).
     if let Some(arr) = raw.get("route_stops").and_then(Value::as_array) {
         if !arr.is_empty() {
+            // Bare `String(x)`, per the reference (`.map(String)`, no `?? ''` first) — a
+            // `null` entry stringifies to the literal `"null"`, not `""`.
             return arr
                 .iter()
-                .map(|v| field_string(Some(v)))
+                .map(bare_string)
                 .filter(|s| !s.is_empty())
                 .collect();
         }
@@ -799,15 +854,15 @@ pub fn parse_route_stops(raw: &Value) -> Vec<String> {
         return rdl_nodes.into_iter().map(|n| n.name).collect();
     }
 
-    // 3. route_list / routes / route array — `dc_name ?? hub_name ?? name ?? location ?? ''`
-    // per entry (nullish-coalescing chain, NOT "first non-empty").
-    let route_list = raw
-        .get("route_list")
-        .and_then(Value::as_array)
-        .or_else(|| raw.get("routes").and_then(Value::as_array))
-        .or_else(|| raw.get("route").and_then(Value::as_array));
-    if let Some(list) = route_list {
+    // 3. route_list / routes / route array — resolve ONE value via `??` semantics first
+    // (regardless of type), THEN type-check only that value. Do NOT check-and-fall-through
+    // per key — a present-but-wrong-type `route_list` must produce no match here (falling
+    // through to step 4), never silently read `routes` instead.
+    let route_list_value = pick_nullish_value(raw, &["route_list", "routes", "route"]);
+    if let Some(list) = route_list_value.and_then(Value::as_array) {
         if !list.is_empty() {
+            // `dc_name ?? hub_name ?? name ?? location ?? ''` per entry (nullish-coalescing
+            // chain, NOT "first non-empty").
             let stops: Vec<String> = list
                 .iter()
                 .map(|r| {
@@ -847,7 +902,7 @@ pub fn parse_route_stops(raw: &Value) -> Vec<String> {
 - [ ] **Step 6: Run to verify it passes**
 
 Run: `cargo test -p core-domain route_parse`
-Expected: `test result: ok. 12 passed; 0 failed`.
+Expected: `test result: ok. 14 passed; 0 failed`. (12 from the reference port + 2 regression tests added during Task 4's review for the route_list-fallback and bare-stringify fixes — see the `parse_route_stops_tests` module's trailing tests in Step 5.)
 
 - [ ] **Step 7: Wire into `lib.rs`**
 
@@ -2651,7 +2706,7 @@ Replace the `fn matches_filter(&self, _booking: &Booking) -> bool { unimplemente
 - [ ] **Step 5: Run the FULL crate test suite for the first time**
 
 Run: `cargo test -p core-domain`
-Expected: every test across every module now passes — `7 (coc) + 7 (location) + 13 (vehicle, incl. 2 paren-stripping regression tests added during review) + 12 (route_parse) + 3 (sanitize) + 9 (dedupe) + 3+6+1+2 (Task 7: cap/booking_id/guards/cp6) + 40 (Task 8: route mode) + 3+2 (this task: filter mode/CP-4) = 108` tests, `test result: ok. 108 passed; 0 failed`. If the count differs, do not adjust the count to match — investigate which test is missing or duplicated and report it in your self-review.
+Expected: every test across every module now passes — `7 (coc) + 7 (location) + 13 (vehicle, incl. 2 paren-stripping regression tests added during review) + 14 (route_parse, incl. 2 regression tests added during review) + 3 (sanitize) + 9 (dedupe) + 3+6+1+2 (Task 7: cap/booking_id/guards/cp6) + 40 (Task 8: route mode) + 3+2 (this task: filter mode/CP-4) = 110` tests, `test result: ok. 110 passed; 0 failed`. If the count differs, do not adjust the count to match — investigate which test is missing or duplicated and report it in your self-review.
 
 - [ ] **Step 6: Clippy**
 
@@ -2844,7 +2899,7 @@ Add `matched_booking_id_for` to the existing `pub use matching::{...}` line in `
 - [ ] **Step 7: Run the full crate suite once**
 
 Run: `cargo test -p core-domain`
-Expected: 108 (from Task 9) + 8 = 116 passing, 0 failed.
+Expected: 110 (from Task 9) + 8 = 118 passing, 0 failed.
 
 - [ ] **Step 8: Clippy**
 
@@ -2910,7 +2965,7 @@ Expected: 1 test passes. (This accesses `compiled.origin_norm`/`compiled.destina
 - [ ] **Step 3: Full crate test suite**
 
 Run: `cargo test -p core-domain`
-Expected: 116 (Task 10) + 1 = **117 tests pass, 0 failed**. This is the money-critical GATE from the master spec — do not proceed to Step 4 if anything fails.
+Expected: 118 (Task 10) + 1 = **119 tests pass, 0 failed**. This is the money-critical GATE from the master spec — do not proceed to Step 4 if anything fails.
 
 - [ ] **Step 4: Full workspace build/test/clippy (confirm nothing else broke)**
 
