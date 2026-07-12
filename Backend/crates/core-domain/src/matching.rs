@@ -243,9 +243,41 @@ impl CompiledRule {
         true
     }
 
-    // Task 9 fills this in (filter-mode conditions + CP-4 empty-filter guard).
-    fn matches_filter(&self, _booking: &Booking) -> bool {
-        unimplemented!("implemented in Task 9")
+    fn matches_filter(&self, booking: &Booking) -> bool {
+        let c = &self.conditions;
+        // CP-4: an enabled filter rule with ZERO active conditions must match NOTHING — without
+        // this guard every check below is skipped and the function falls through to `true`,
+        // turning a blank/misconfigured filter rule into a blanket accept of the entire pool.
+        let filter_active =
+            c.max_weight.is_some() || c.max_cod_amount.is_some() || c.coc_only || c.non_coc_only || !self.service_types_norm.is_empty();
+        if !filter_active {
+            return false;
+        }
+        if let Some(max_weight) = c.max_weight {
+            if booking.weight > max_weight {
+                return false;
+            }
+        }
+        if let Some(max_cod) = c.max_cod_amount {
+            if booking.cod_amount > max_cod {
+                return false;
+            }
+        }
+        // Line-haul "COC" means an SPXID ticket, not the COD/cash-on-delivery flag — these are
+        // deliberately separate concepts (see coc.rs's module doc).
+        if c.coc_only && booking.booking_type != BookingType::Spxid {
+            return false;
+        }
+        if c.non_coc_only && booking.booking_type == BookingType::Spxid {
+            return false;
+        }
+        if !self.service_types_norm.is_empty() {
+            let ticket_norm = norm_vehicle(&booking.vehicle_type);
+            if !self.service_types_norm.iter().any(|r| vehicle_match_normalized(&ticket_norm, r)) {
+                return false;
+            }
+        }
+        true
     }
 }
 
@@ -868,6 +900,58 @@ mod tests {
             let mut b = mk_booking(&["Surabaya DC", "Denpasar DC"]);
             b.vehicle_type = "BLINDVAN (4WH)".into();
             assert!(!CompiledRule::compile(&r).matches(&b, &mk_state()));
+        }
+    }
+
+    mod filter_mode_coc_semantics {
+        use super::*;
+
+        #[test]
+        fn coc_only_treats_spxid_as_coc_even_when_cod_flag_is_false() {
+            let r = mk_rule(RuleMode::Filter, RuleConditions { coc_only: true, ..Default::default() });
+            let mut b = mk_booking(&[]);
+            b.booking_type = BookingType::Spxid;
+            assert!(CompiledRule::compile(&r).matches(&b, &mk_state()));
+        }
+
+        #[test]
+        fn coc_only_rejects_reguler_even_when_cod_flag_is_true() {
+            let r = mk_rule(RuleMode::Filter, RuleConditions { coc_only: true, ..Default::default() });
+            let mut b = mk_booking(&[]);
+            b.booking_type = BookingType::Reguler;
+            b.cod_amount = 1.0; // stand-in for "COD flag true"; matches_filter must not read this as COC
+            assert!(!CompiledRule::compile(&r).matches(&b, &mk_state()));
+        }
+
+        #[test]
+        fn non_coc_only_rejects_spxid_even_when_cod_flag_is_false() {
+            let r = mk_rule(RuleMode::Filter, RuleConditions { non_coc_only: true, ..Default::default() });
+            let mut b = mk_booking(&[]);
+            b.booking_type = BookingType::Spxid;
+            assert!(!CompiledRule::compile(&r).matches(&b, &mk_state()));
+        }
+    }
+
+    mod cp4_empty_filter_safety {
+        use super::*;
+
+        #[test]
+        fn empty_filter_rule_matches_nothing_no_blanket_accept() {
+            let r = mk_rule(RuleMode::Filter, RuleConditions::default());
+            let b = mk_booking(&["Anywhere DC"]);
+            assert!(!CompiledRule::compile(&r).matches(&b, &mk_state()));
+        }
+
+        #[test]
+        fn filter_rule_with_active_condition_still_matches_correctly() {
+            let r = mk_rule(RuleMode::Filter, RuleConditions { coc_only: true, ..Default::default() });
+            let compiled = CompiledRule::compile(&r);
+            let mut spxid = mk_booking(&["X"]);
+            spxid.booking_type = BookingType::Spxid;
+            assert!(compiled.matches(&spxid, &mk_state()));
+            let mut reguler = mk_booking(&["X"]);
+            reguler.booking_type = BookingType::Reguler;
+            assert!(!compiled.matches(&reguler, &mk_state()));
         }
     }
 
