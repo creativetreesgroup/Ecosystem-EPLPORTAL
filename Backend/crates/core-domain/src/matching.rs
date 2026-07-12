@@ -1,6 +1,7 @@
-use crate::booking::Booking;
-use crate::rule::{norm_id, AcceptRule, MatchState, RuleConditions, RuleMode, RouteMatchMode};
-use crate::vehicle::norm_vehicle;
+use crate::booking::{Booking, BookingType};
+use crate::location::loc_match_normalized;
+use crate::rule::{norm_id, AcceptRule, MatchState, RuleBookingType, RuleConditions, RuleMode, RouteMatchMode};
+use crate::vehicle::{norm_vehicle, vehicle_match_normalized};
 
 /// `[mode_score, priority, dest_count, has_origin, is_strict, service_type_count]`. Derived
 /// `Ord` gives exactly the reference `compareRuleRank`'s tuple comparison: first differing
@@ -36,15 +37,11 @@ pub struct CompiledRule {
     pub conditions: RuleConditions,
     rank: RuleRank,
     // Precomputed once at compile() time, not re-derived per booking. `origin_norm`/
-    // `destinations_norm`/`service_types_norm` are not yet read by any code in THIS task —
-    // they're consumed by `matches_route`/`matches_filter`, which Tasks 8/9 fill in — hence the
-    // explicit `allow` instead of leaving them unread by accident. `booking_ids_norm` IS already
-    // read, by this task's own `matches_booking_id`.
-    #[allow(dead_code)]
+    // `destinations_norm`/`service_types_norm` are read by `matches_route` (Task 8);
+    // `service_types_norm` will also be read by `matches_filter` (Task 9). `booking_ids_norm`
+    // is read by `matches_booking_id`.
     origin_norm: String,
-    #[allow(dead_code)]
     destinations_norm: Vec<String>,
-    #[allow(dead_code)]
     service_types_norm: Vec<String>,
     booking_ids_norm: Vec<String>,
 }
@@ -128,9 +125,111 @@ impl CompiledRule {
             .any(|id| tx == *id || bk == *id || rq == *id || (id.len() >= 9 && tx.contains(id.as_str())))
     }
 
-    // Task 8 fills this in (strict + flexible route matching, ordered destination walk, guards).
-    fn matches_route(&self, _booking: &Booking) -> bool {
-        unimplemented!("implemented in Task 8")
+    fn matches_route(&self, booking: &Booking) -> bool {
+        let c = &self.conditions;
+        let stops: Vec<String> = booking.route_stops.iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+        let flexible = c.match_mode == RouteMatchMode::Flexible;
+
+        // SAFETY GUARD: a route rule with no origin, no destinations, AND no other active
+        // filter would match EVERY ticket if uncapped — an empty route rule must match NOTHING.
+        let has_other_filter = !c.service_types.is_empty()
+            || c.max_weight.is_some()
+            || c.max_cod_amount.is_some()
+            || c.coc_only
+            || c.non_coc_only
+            || c.booking_type != RuleBookingType::All;
+        if self.origin_norm.is_empty() && self.destinations_norm.is_empty() && !has_other_filter {
+            return false;
+        }
+
+        if !self.origin_norm.is_empty() {
+            // Origin must be the REAL start point: report_station_name first, then the first
+            // stop. Region/province labels never satisfy a route rule (Booking doesn't even
+            // carry those fields — see Task 1).
+            let by_report_station = loc_match_normalized(&booking.report_station, &self.origin_norm);
+            let by_first_stop = stops.first().map(|s| loc_match_normalized(s, &self.origin_norm)).unwrap_or(false);
+            if !by_report_station && !by_first_stop {
+                return false;
+            }
+        }
+
+        if !self.destinations_norm.is_empty() {
+            if stops.is_empty() {
+                return false;
+            }
+            let origin_consumes_first_stop = if !self.origin_norm.is_empty() {
+                stops.first().map(|s| loc_match_normalized(s, &self.origin_norm)).unwrap_or(false)
+            } else {
+                false
+            };
+            let start_idx = usize::from(origin_consumes_first_stop);
+            if !self.destinations_match_in_order(&stops, start_idx, flexible) {
+                return false;
+            }
+        }
+
+        if c.booking_type != RuleBookingType::All {
+            let want = match c.booking_type {
+                RuleBookingType::Spxid => BookingType::Spxid,
+                RuleBookingType::Reguler => BookingType::Reguler,
+                RuleBookingType::All => unreachable!(),
+            };
+            if booking.booking_type != want {
+                return false;
+            }
+        }
+        if !self.service_types_norm.is_empty() {
+            let ticket_norm = norm_vehicle(&booking.vehicle_type);
+            if !self.service_types_norm.iter().any(|r| vehicle_match_normalized(&ticket_norm, r)) {
+                return false;
+            }
+        }
+        if let Some(max_weight) = c.max_weight {
+            if booking.weight > max_weight {
+                return false;
+            }
+        }
+        if let Some(max_cod) = c.max_cod_amount {
+            if booking.cod_amount > max_cod {
+                return false;
+            }
+        }
+        if c.coc_only && booking.booking_type != BookingType::Spxid {
+            return false;
+        }
+        if c.non_coc_only && booking.booking_type == BookingType::Spxid {
+            return false;
+        }
+        true
+    }
+
+    /// Ordered, whole-word walk through `stops` starting at `start_idx`, consuming
+    /// `self.destinations_norm` in order. STRICT: any destination not found → false
+    /// immediately. FLEXIBLE: an intermediate (non-last) destination may be absent and is
+    /// skipped without advancing the cursor; the LAST destination (the endpoint) must still be
+    /// found or the whole match fails.
+    fn destinations_match_in_order(&self, stops: &[String], start_idx: usize, flexible: bool) -> bool {
+        let mut idx = start_idx;
+        let dests = &self.destinations_norm;
+        for (d, want_norm) in dests.iter().enumerate() {
+            let mut found: Option<usize> = None;
+            for (j, stop) in stops.iter().enumerate().skip(idx) {
+                if loc_match_normalized(stop, want_norm) {
+                    found = Some(j);
+                    break;
+                }
+            }
+            match found {
+                Some(j) => idx = j + 1,
+                None => {
+                    if flexible && d != dests.len() - 1 {
+                        continue;
+                    }
+                    return false;
+                }
+            }
+        }
+        true
     }
 
     // Task 9 fills this in (filter-mode conditions + CP-4 empty-filter guard).
@@ -202,7 +301,6 @@ mod tests {
         // test suite across tasks 7/8, not a Task 7 defect — ignored until Task 8 lands, then
         // un-ignore (the assertion itself needs no change).
         #[test]
-        #[ignore = "requires matches_route (Task 8) — RuleMode::Route rule can't actually match yet"]
         fn under_cap_still_matches() {
             let mut conditions = RuleConditions { origin: "Padang DC".into(), destinations: vec!["Cileungsi DC".into()], ..Default::default() };
             conditions.max_accept_count = 2;
@@ -289,7 +387,6 @@ mod tests {
         // the assertions themselves need no change. See `rule_rank_booking_id_dominates_*` below
         // for a same-property check that doesn't require route matching to work.
         #[test]
-        #[ignore = "requires matches_route (Task 8) — RuleMode::Route rule can't actually match yet"]
         fn exact_booking_id_rule_beats_higher_priority_route_rule_on_same_ticket() {
             let mut b = mk_booking(&["Padang DC", "Cileungsi DC"]);
             b.booking_id = "BKID12345678".into();
@@ -311,7 +408,6 @@ mod tests {
         }
 
         #[test]
-        #[ignore = "requires matches_route (Task 8) — RuleMode::Route rule can't actually match yet"]
         fn among_two_route_rules_higher_priority_still_wins() {
             let b = mk_booking(&["Padang DC", "Cileungsi DC"]);
             let conditions = || RuleConditions { origin: "Padang DC".into(), destinations: vec!["Cileungsi DC".into()], ..Default::default() };
@@ -352,6 +448,441 @@ mod tests {
             let lo = AcceptRule { id: "lo".into(), priority: 1, ..mk_rule(RuleMode::Route, conditions()) };
             let hi = AcceptRule { id: "hi".into(), priority: 5, ..mk_rule(RuleMode::Route, conditions()) };
             assert!(rule_rank(&hi) > rule_rank(&lo));
+        }
+    }
+
+    mod route_mode_tests {
+        use super::*;
+
+        fn route(origin: &str, dests: &[&str]) -> RuleConditions {
+            RuleConditions { origin: origin.into(), destinations: dests.iter().map(|s| s.to_string()).collect(), ..Default::default() }
+        }
+
+        #[test]
+        fn origin_and_dest_match_in_order_is_true() {
+            let r = mk_rule(RuleMode::Route, route("Padang DC", &["Cileungsi DC"]));
+            let b = mk_booking(&["Padang DC", "Cileungsi DC"]);
+            assert!(CompiledRule::compile(&r).matches(&b, &mk_state()));
+        }
+
+        #[test]
+        fn bali_origin_does_not_sweep_balikpapan_dc_route() {
+            let conditions = RuleConditions { origin: "bali".into(), destinations: vec![], booking_type: RuleBookingType::All, service_types: vec!["x".into()], ..Default::default() };
+            let r = mk_rule(RuleMode::Route, conditions);
+            let b = mk_booking(&["Balikpapan DC", "Pontianak DC"]);
+            assert!(!CompiledRule::compile(&r).matches(&b, &mk_state()));
+        }
+
+        #[test]
+        fn wrong_destination_is_false() {
+            let r = mk_rule(RuleMode::Route, route("Padang DC", &["Cileungsi DC"]));
+            let b = mk_booking(&["Padang DC", "Surabaya DC"]);
+            assert!(!CompiledRule::compile(&r).matches(&b, &mk_state()));
+        }
+
+        #[test]
+        fn strict_order_enforced_dest_must_come_after_origin() {
+            let r = mk_rule(RuleMode::Route, route("Padang DC", &["Cileungsi DC"]));
+            let b = mk_booking(&["Cileungsi DC", "Padang DC"]);
+            assert!(!CompiledRule::compile(&r).matches(&b, &mk_state()));
+        }
+
+        #[test]
+        fn flexible_mode_only_endpoint_must_match_intermediate_hubs_ignored() {
+            let mut conditions = route("Pekanbaru DC", &["Cileungsi DC"]);
+            conditions.match_mode = RouteMatchMode::Flexible;
+            let r = mk_rule(RuleMode::Route, conditions);
+            let b = mk_booking(&["Pekanbaru DC", "Palembang DC", "Cileungsi DC"]);
+            assert!(CompiledRule::compile(&r).matches(&b, &mk_state()));
+        }
+
+        #[test]
+        fn empty_route_rule_no_origin_dest_filter_matches_nothing() {
+            let r = mk_rule(RuleMode::Route, route("", &[]));
+            let b = mk_booking(&["Anywhere DC", "Else DC"]);
+            assert!(!CompiledRule::compile(&r).matches(&b, &mk_state()));
+        }
+
+        #[test]
+        fn origin_can_match_report_station_name_even_when_stops_are_partial() {
+            let r = mk_rule(RuleMode::Route, route("Padang DC", &["Cileungsi DC"]));
+            let mut b = mk_booking(&["Cileungsi DC"]);
+            b.report_station = "Padang DC".into();
+            assert!(CompiledRule::compile(&r).matches(&b, &mk_state()));
+        }
+
+        #[test]
+        fn origin_must_not_fall_back_to_province_region_labels() {
+            // report_station is deliberately left empty and originRegion/originProvince (not
+            // modeled on Booking at all — see Task 1's design note) are absent — the matcher
+            // must reject on the actual stop name alone, proving those TS fields are unread.
+            let r = mk_rule(RuleMode::Route, route("Padang DC", &["Cileungsi DC"]));
+            let b = mk_booking(&["Bukittinggi DC", "Cileungsi DC"]);
+            assert!(!CompiledRule::compile(&r).matches(&b, &mk_state()));
+        }
+
+        #[test]
+        fn final_destination_must_be_an_actual_route_stop_not_only_dest_region() {
+            let r = mk_rule(RuleMode::Route, route("Padang DC", &["Cileungsi DC"]));
+            let b = mk_booking(&["Padang DC", "Bekasi DC"]);
+            assert!(!CompiledRule::compile(&r).matches(&b, &mk_state()));
+        }
+    }
+
+    mod shift_trip_targeting {
+        use super::*;
+
+        #[test]
+        fn no_shift_trip_condition_unaffected_matches() {
+            let mut b = mk_booking(&["Padang DC", "Cileungsi DC"]);
+            b.shift_type = 1;
+            let r = mk_rule(RuleMode::Route, RuleConditions { origin: "Padang DC".into(), destinations: vec!["Cileungsi DC".into()], ..Default::default() });
+            assert!(CompiledRule::compile(&r).matches(&b, &mk_state()));
+        }
+
+        #[test]
+        fn shift_types_filter_matches_when_booking_shift_in_list() {
+            let mut b = mk_booking(&["Padang DC", "Cileungsi DC"]);
+            b.shift_type = 1;
+            let r = mk_rule(RuleMode::Route, RuleConditions { origin: "Padang DC".into(), destinations: vec!["Cileungsi DC".into()], shift_types: vec![1, 2], ..Default::default() });
+            assert!(CompiledRule::compile(&r).matches(&b, &mk_state()));
+        }
+
+        #[test]
+        fn shift_types_filter_rejects_when_booking_shift_not_in_list() {
+            let b = mk_booking(&["Padang DC", "Cileungsi DC"]); // shift_type defaults to 0
+            let r = mk_rule(RuleMode::Route, RuleConditions { origin: "Padang DC".into(), destinations: vec!["Cileungsi DC".into()], shift_types: vec![2], ..Default::default() });
+            assert!(!CompiledRule::compile(&r).matches(&b, &mk_state()));
+        }
+
+        #[test]
+        fn trip_types_filter_rejects_when_booking_trip_not_in_list() {
+            let b = mk_booking(&["Padang DC", "Cileungsi DC"]); // trip_type defaults to 0
+            let r = mk_rule(RuleMode::Route, RuleConditions { origin: "Padang DC".into(), destinations: vec!["Cileungsi DC".into()], trip_types: vec![1], ..Default::default() });
+            assert!(!CompiledRule::compile(&r).matches(&b, &mk_state()));
+        }
+
+        #[test]
+        fn shift_and_trip_both_required_both_must_match() {
+            let r = mk_rule(RuleMode::Route, RuleConditions { origin: "Padang DC".into(), destinations: vec!["Cileungsi DC".into()], shift_types: vec![1], trip_types: vec![2], ..Default::default() });
+            let compiled = CompiledRule::compile(&r);
+            let mut ok = mk_booking(&["Padang DC", "Cileungsi DC"]);
+            ok.shift_type = 1;
+            ok.trip_type = 2;
+            assert!(compiled.matches(&ok, &mk_state()));
+            let mut bad = mk_booking(&["Padang DC", "Cileungsi DC"]);
+            bad.shift_type = 1;
+            bad.trip_type = 0;
+            assert!(!compiled.matches(&bad, &mk_state()));
+        }
+    }
+
+    // REAL production lane — booking 5996405, SPXID_VM_001397649: Origin "Aceh DC" → Dest1
+    // "Cileungsi DC", strict, TRONTON, COC.
+    mod real_lane_aceh_to_cileungsi {
+        use super::*;
+
+        fn aceh_rule() -> AcceptRule {
+            mk_rule(
+                RuleMode::Route,
+                RuleConditions {
+                    origin: "Aceh DC".into(),
+                    destinations: vec!["Cileungsi DC".into()],
+                    match_mode: RouteMatchMode::Strict,
+                    booking_type: RuleBookingType::Spxid,
+                    service_types: vec!["TRONTON".into()],
+                    coc_only: true,
+                    ..Default::default()
+                },
+            )
+        }
+
+        fn real_booking(stops: &[&str]) -> Booking {
+            let mut b = mk_booking(stops);
+            b.booking_type = BookingType::Spxid;
+            b.vehicle_type = "TRONTON (10WH)".into();
+            b
+        }
+
+        #[test]
+        fn the_real_ticket_5996405_matches_the_rule() {
+            let compiled = CompiledRule::compile(&aceh_rule());
+            assert!(compiled.matches(&real_booking(&["Aceh DC", "Cileungsi DC"]), &mk_state()));
+        }
+
+        #[test]
+        fn tronton_10wh_vehicle_satisfies_service_type_tronton_suffix_tolerated() {
+            let compiled = CompiledRule::compile(&aceh_rule());
+            let mut b = real_booking(&["Aceh DC", "Cileungsi DC"]);
+            b.vehicle_type = "TRONTON (10WH)".into();
+            assert!(compiled.matches(&b, &mk_state()));
+        }
+
+        #[test]
+        fn different_origin_multi_hop_does_not_match_strict_aceh_rule() {
+            let compiled = CompiledRule::compile(&aceh_rule());
+            let b = real_booking(&["Tegal 2 DC", "Bekasi DC", "Cileungsi DC"]);
+            assert!(!compiled.matches(&b, &mk_state()));
+        }
+
+        #[test]
+        fn a_reguler_non_spxid_aceh_to_cileungsi_ticket_is_rejected_by_coc_only() {
+            let compiled = CompiledRule::compile(&aceh_rule());
+            let mut b = real_booking(&["Aceh DC", "Cileungsi DC"]);
+            b.booking_type = BookingType::Reguler;
+            assert!(!compiled.matches(&b, &mk_state()));
+        }
+
+        #[test]
+        fn flexible_variant_catches_any_origin_to_cileungsi_endpoint() {
+            let r = mk_rule(
+                RuleMode::Route,
+                RuleConditions {
+                    destinations: vec!["Cileungsi DC".into()],
+                    match_mode: RouteMatchMode::Flexible,
+                    booking_type: RuleBookingType::Spxid,
+                    service_types: vec!["TRONTON".into()],
+                    coc_only: true,
+                    ..Default::default()
+                },
+            );
+            let compiled = CompiledRule::compile(&r);
+            let b = real_booking(&["Tegal 2 DC", "Bekasi DC", "Cileungsi DC"]);
+            assert!(compiled.matches(&b, &mk_state()));
+        }
+    }
+
+    // REAL production lane (target): Kosambi DC → Mataram DC → Mataram 2 DC. Rule kcxv1i3omgm
+    // from Redis. Real recurring ticket 6091653 / SPXID_VM_001399072, vehicle "TRONTON (10WH)".
+    mod real_lane_kosambi_to_mataram {
+        use super::*;
+
+        fn kosambi_rule() -> AcceptRule {
+            AcceptRule {
+                id: "kcxv1i3omgm".into(),
+                name: "Route Rule".into(),
+                ..mk_rule(
+                    RuleMode::Route,
+                    RuleConditions {
+                        origin: "Kosambi DC".into(),
+                        destinations: vec!["Mataram DC".into(), "Mataram 2 DC".into()],
+                        match_mode: RouteMatchMode::Strict,
+                        booking_type: RuleBookingType::Spxid,
+                        service_types: vec!["TRONTON".into()],
+                        coc_only: true,
+                        max_accept_count: 1,
+                        accepted_count: 0,
+                        ..Default::default()
+                    },
+                )
+            }
+        }
+
+        fn real_booking(stops: &[&str]) -> Booking {
+            let mut b = mk_booking(stops);
+            b.booking_type = BookingType::Spxid;
+            b.vehicle_type = "TRONTON (10WH)".into();
+            b.report_station = "Kosambi DC".into();
+            b.spx_tx_id = "SPXID_VM_001399072".into();
+            b.booking_id = "6091653".into();
+            b
+        }
+
+        #[test]
+        fn the_real_target_ticket_matches() {
+            let compiled = CompiledRule::compile(&kosambi_rule());
+            assert!(compiled.matches(&real_booking(&["Kosambi DC", "Mataram DC", "Mataram 2 DC"]), &mk_state()));
+        }
+
+        #[test]
+        fn find_best_matching_rule_returns_the_route_rule() {
+            let b = real_booking(&["Kosambi DC", "Mataram DC", "Mataram 2 DC"]);
+            let best = find_best_matching_rule(&b, &[kosambi_rule()], &mk_state()).expect("expected a match");
+            assert_eq!(best.name, "Route Rule");
+        }
+
+        #[test]
+        fn tronton_10wh_satisfies_service_type_tronton_capacity_suffix_tolerated() {
+            assert!(vehicle_match_normalized(&norm_vehicle("TRONTON (10WH)"), &norm_vehicle("TRONTON")));
+        }
+
+        #[test]
+        fn wrong_vehicle_cdd_long_is_false() {
+            let compiled = CompiledRule::compile(&kosambi_rule());
+            let mut b = real_booking(&["Kosambi DC", "Mataram DC", "Mataram 2 DC"]);
+            b.vehicle_type = "CDD LONG (6WH)".into();
+            assert!(!compiled.matches(&b, &mk_state()));
+        }
+
+        #[test]
+        fn wrong_booking_type_reguler_not_spxid_is_false() {
+            let compiled = CompiledRule::compile(&kosambi_rule());
+            let mut b = real_booking(&["Kosambi DC", "Mataram DC", "Mataram 2 DC"]);
+            b.booking_type = BookingType::Reguler;
+            assert!(!compiled.matches(&b, &mk_state()));
+        }
+
+        #[test]
+        fn route_out_of_order_mataram_2_before_mataram_is_false() {
+            let compiled = CompiledRule::compile(&kosambi_rule());
+            let b = real_booking(&["Kosambi DC", "Mataram 2 DC", "Mataram DC"]);
+            assert!(!compiled.matches(&b, &mk_state()));
+        }
+
+        #[test]
+        fn origin_not_kosambi_is_false() {
+            let compiled = CompiledRule::compile(&kosambi_rule());
+            let mut b = real_booking(&["Surabaya DC", "Mataram DC", "Mataram 2 DC"]);
+            b.report_station = "Surabaya DC".into();
+            assert!(!compiled.matches(&b, &mk_state()));
+        }
+
+        #[test]
+        fn destination_mataram_dc_present_but_mataram_2_dc_missing_is_false() {
+            let compiled = CompiledRule::compile(&kosambi_rule());
+            let b = real_booking(&["Kosambi DC", "Mataram DC"]);
+            assert!(!compiled.matches(&b, &mk_state()));
+        }
+
+        #[test]
+        fn whole_word_safety_mataram_dc_must_not_satisfy_mataram_2_dc_leg() {
+            let compiled = CompiledRule::compile(&kosambi_rule());
+            let b = real_booking(&["Kosambi DC", "Mataram DC", "Denpasar DC"]);
+            assert!(!compiled.matches(&b, &mk_state()));
+        }
+
+        #[test]
+        fn reversed_dest_duplicate_rule_does_not_match_forward_route() {
+            let reversed = AcceptRule {
+                id: "cgkf87q3cpl".into(),
+                name: "Route Rule".into(),
+                ..mk_rule(
+                    RuleMode::Route,
+                    RuleConditions {
+                        origin: "Kosambi DC".into(),
+                        destinations: vec!["Mataram 2 DC".into(), "Mataram DC".into()],
+                        match_mode: RouteMatchMode::Strict,
+                        booking_type: RuleBookingType::Spxid,
+                        service_types: vec!["TRONTON".into()],
+                        coc_only: true,
+                        ..Default::default()
+                    },
+                )
+            };
+            let compiled = CompiledRule::compile(&reversed);
+            assert!(!compiled.matches(&real_booking(&["Kosambi DC", "Mataram DC", "Mataram 2 DC"]), &mk_state()));
+        }
+
+        #[test]
+        fn cap_reached_rearm_guard_is_false_until_daily_reset() {
+            let mut r = kosambi_rule();
+            r.conditions.max_accept_count = 1;
+            r.conditions.accepted_count = 1;
+            let compiled = CompiledRule::compile(&r);
+            assert!(!compiled.matches(&real_booking(&["Kosambi DC", "Mataram DC", "Mataram 2 DC"]), &mk_state()));
+        }
+    }
+
+    // Regresi F2: flexible = superset strict (ekor hub setelah DC tujuan)
+    mod flexible_superset_strict_f2 {
+        use super::*;
+
+        #[test]
+        fn rute_berekor_hub_setelah_dc_tujuan_tetap_match_flexible() {
+            let r = mk_rule(RuleMode::Route, RuleConditions { origin: "Surabaya DC".into(), destinations: vec!["Denpasar DC".into()], match_mode: RouteMatchMode::Flexible, ..Default::default() });
+            let b = mk_booking(&["Surabaya DC", "Denpasar DC", "Badung Hub"]);
+            assert!(CompiledRule::compile(&r).matches(&b, &mk_state()));
+        }
+
+        #[test]
+        fn paritas_strict_juga_match_kasus_ekor_hub_yang_sama() {
+            let r = mk_rule(RuleMode::Route, RuleConditions { origin: "Surabaya DC".into(), destinations: vec!["Denpasar DC".into()], match_mode: RouteMatchMode::Strict, ..Default::default() });
+            let b = mk_booking(&["Surabaya DC", "Denpasar DC", "Badung Hub"]);
+            assert!(CompiledRule::compile(&r).matches(&b, &mk_state()));
+        }
+
+        #[test]
+        fn destinasi_sama_sekali_tidak_ada_di_rute_flexible_tetap_false() {
+            let r = mk_rule(RuleMode::Route, RuleConditions { origin: "Surabaya DC".into(), destinations: vec!["Denpasar DC".into()], match_mode: RouteMatchMode::Flexible, ..Default::default() });
+            let b = mk_booking(&["Surabaya DC", "Malang DC", "Badung Hub"]);
+            assert!(!CompiledRule::compile(&r).matches(&b, &mk_state()));
+        }
+
+        #[test]
+        fn flexible_tanpa_origin_endpoint_di_mana_pun_di_rute_match() {
+            let r = mk_rule(RuleMode::Route, RuleConditions { destinations: vec!["Cileungsi DC".into()], match_mode: RouteMatchMode::Flexible, booking_type: RuleBookingType::Spxid, ..Default::default() });
+            let mut b = mk_booking(&["Tegal 2 DC", "Cileungsi DC", "Bekasi Hub"]);
+            b.booking_type = BookingType::Spxid;
+            assert!(CompiledRule::compile(&r).matches(&b, &mk_state()));
+        }
+
+        #[test]
+        fn flexible_destinasi_yang_hanya_muncul_di_posisi_origin_tidak_dihitung() {
+            let r = mk_rule(RuleMode::Route, RuleConditions { origin: "Denpasar DC".into(), destinations: vec!["Denpasar DC".into()], match_mode: RouteMatchMode::Flexible, ..Default::default() });
+            let b = mk_booking(&["Denpasar DC", "Badung Hub"]);
+            assert!(!CompiledRule::compile(&r).matches(&b, &mk_state()));
+        }
+
+        #[test]
+        fn flexible_dengan_rute_kosong_belum_enrich_false() {
+            let r = mk_rule(RuleMode::Route, RuleConditions { origin: "Surabaya DC".into(), destinations: vec!["Denpasar DC".into()], match_mode: RouteMatchMode::Flexible, ..Default::default() });
+            let mut b = mk_booking(&[]);
+            b.report_station = "Surabaya DC".into();
+            assert!(!CompiledRule::compile(&r).matches(&b, &mk_state()));
+        }
+    }
+
+    // Kontrak kendaraan: kosong = terima SEMUA jenis; terisi = wajib cocok
+    mod vehicle_empty_means_all {
+        use super::*;
+
+        #[test]
+        fn service_types_empty_accepts_any_vehicle() {
+            let r = mk_rule(RuleMode::Route, RuleConditions { origin: "Surabaya DC".into(), destinations: vec!["Denpasar DC".into()], service_types: vec![], ..Default::default() });
+            let mut b = mk_booking(&["Surabaya DC", "Denpasar DC"]);
+            b.vehicle_type = "BLINDVAN (4WH)".into();
+            assert!(CompiledRule::compile(&r).matches(&b, &mk_state()));
+        }
+
+        #[test]
+        fn service_types_filled_rejects_unlisted_vehicle() {
+            let r = mk_rule(RuleMode::Route, RuleConditions { origin: "Surabaya DC".into(), destinations: vec!["Denpasar DC".into()], service_types: vec!["TRONTON".into()], ..Default::default() });
+            let mut b = mk_booking(&["Surabaya DC", "Denpasar DC"]);
+            b.vehicle_type = "BLINDVAN (4WH)".into();
+            assert!(!CompiledRule::compile(&r).matches(&b, &mk_state()));
+        }
+    }
+
+    // Regresi audit F2 lanjutan: flexible multi-destinasi tidak boleh salah-arah
+    mod flexible_multi_destination {
+        use super::*;
+
+        fn rule() -> AcceptRule {
+            mk_rule(RuleMode::Route, RuleConditions { origin: "Jakarta Hub".into(), destinations: vec!["Bandung DC".into(), "Surabaya DC".into()], match_mode: RouteMatchMode::Flexible, ..Default::default() })
+        }
+
+        #[test]
+        fn rute_salah_urutan_endpoint_sebelum_dest_perantara_ditolak() {
+            let b = mk_booking(&["Jakarta Hub", "Surabaya DC", "Bandung DC"]);
+            assert!(!CompiledRule::compile(&rule()).matches(&b, &mk_state()));
+        }
+
+        #[test]
+        fn dest_perantara_absen_tapi_endpoint_hadir_match() {
+            let b = mk_booking(&["Jakarta Hub", "Cirebon DC", "Surabaya DC"]);
+            assert!(CompiledRule::compile(&rule()).matches(&b, &mk_state()));
+        }
+
+        #[test]
+        fn urutan_lengkap_plus_ekor_hub_match() {
+            let b = mk_booking(&["Jakarta Hub", "Bandung DC", "Surabaya DC", "Sidoarjo Hub"]);
+            assert!(CompiledRule::compile(&rule()).matches(&b, &mk_state()));
+        }
+
+        #[test]
+        fn endpoint_absen_sama_sekali_ditolak_walau_dest_perantara_hadir() {
+            let b = mk_booking(&["Jakarta Hub", "Bandung DC", "Semarang DC"]);
+            assert!(!CompiledRule::compile(&rule()).matches(&b, &mk_state()));
         }
     }
 }
