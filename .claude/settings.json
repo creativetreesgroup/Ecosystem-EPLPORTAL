@@ -1,18 +1,4 @@
 {
-  "permissions": {
-    "allow": [
-      "Read",
-      "Edit",
-      "Write",
-      "Bash",
-      "WebFetch",
-      "WebSearch",
-      "Glob",
-      "Agent",
-      "TodoWrite",
-      "bypassPermissions"
-    ]
-  },
   "enabledPlugins": {
     "playwright@claude-plugins-official": true,
     "claude-md-management@claude-plugins-official": true,
