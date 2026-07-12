@@ -266,6 +266,104 @@ fn dedup_nonneg_ints(values: &[i64]) -> Vec<i32> {
     out
 }
 
+fn dedup_keep_order<F: Fn(&str) -> String>(items: &[String], key: F) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for it in items {
+        let k = key(it);
+        if k.is_empty() || seen.contains(&k) {
+            continue;
+        }
+        seen.insert(k);
+        out.push(it.clone());
+    }
+    out
+}
+
+/// Collapse rules that target the SAME thing (operators re-enter the same lane / booking-id
+/// many times). Run on every save so duplicates can never accumulate.
+pub fn dedupe_rules(rules: &[AcceptRule]) -> Vec<AcceptRule> {
+    // Claim booking-ids ENABLED-first, then input order within a status: a disabled rule
+    // entered earlier must not steal an id from an enabled rule entered later (C1 — the id
+    // would silently vanish from the active rule on save otherwise).
+    let mut claimed_id: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut id_keep: HashMap<usize, Vec<String>> = HashMap::new();
+    for &want_enabled in &[true, false] {
+        for (idx, r) in rules.iter().enumerate() {
+            if r.mode != RuleMode::BookingId || r.enabled != want_enabled {
+                continue;
+            }
+            let mut keep = Vec::new();
+            for raw in &r.conditions.booking_ids {
+                let n = norm_id(raw);
+                if n.is_empty() || claimed_id.contains(&n) {
+                    continue;
+                }
+                claimed_id.insert(n);
+                keep.push(raw.clone());
+            }
+            id_keep.insert(idx, keep);
+        }
+    }
+
+    let mut out: Vec<AcceptRule> = Vec::new();
+    let mut route_at: HashMap<String, usize> = HashMap::new();
+
+    for (idx, r) in rules.iter().enumerate() {
+        let c = &r.conditions;
+
+        if r.mode == RuleMode::Route {
+            let dests_sig: String =
+                c.destinations.iter().map(|d| norm_loc(d)).filter(|s| !s.is_empty()).collect::<Vec<_>>().join(">");
+            let service_types_sig: String = {
+                let mut v: Vec<String> =
+                    c.service_types.iter().map(|s| s.to_lowercase().trim().to_string()).filter(|s| !s.is_empty()).collect();
+                v.sort();
+                v.join(",")
+            };
+            let mode_str = match c.match_mode { RouteMatchMode::Flexible => "flexible", RouteMatchMode::Strict => "strict" };
+            let booking_type_str = match c.booking_type {
+                RuleBookingType::Spxid => "spxid",
+                RuleBookingType::Reguler => "reguler",
+                RuleBookingType::All => "all",
+            };
+            let sig = format!("{}|{}|{}|{}|{}", norm_loc(&c.origin), dests_sig, mode_str, booking_type_str, service_types_sig);
+
+            if let Some(&at) = route_at.get(&sig) {
+                // Same lane already present → MERGE, never silently shrink capacity or lose
+                // progress: keep the most permissive cap (0 = unlimited wins), the higher
+                // accepted_count, enabled if either side is.
+                let a = out[at].conditions.max_accept_count;
+                let b = c.max_accept_count;
+                out[at].conditions.max_accept_count = if a == 0 || b == 0 { 0 } else { a.max(b) };
+                out[at].conditions.accepted_count = out[at].conditions.accepted_count.max(c.accepted_count);
+                out[at].enabled = out[at].enabled || r.enabled;
+                continue;
+            }
+
+            route_at.insert(sig, out.len());
+            let mut merged = r.clone();
+            merged.conditions.destinations = dedup_keep_order(&c.destinations, norm_loc);
+            out.push(merged);
+            continue;
+        }
+
+        if r.mode == RuleMode::BookingId {
+            let ids = id_keep.get(&idx).cloned().unwrap_or_default();
+            if !ids.is_empty() {
+                let mut merged = r.clone();
+                merged.conditions.booking_ids = ids;
+                out.push(merged);
+            }
+            continue;
+        }
+
+        out.push(r.clone()); // filter / other modes: untouched
+    }
+
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -327,6 +425,131 @@ mod tests {
             );
             let result = sanitize_accept_rules(&[rule]);
             assert!(result.warnings.iter().any(|w| w.contains("tanpa Booking ID")));
+        }
+    }
+
+    mod dedupe_rules_tests {
+        use super::*;
+
+        fn route_rule(id: &str, origin: &str, dests: &[&str]) -> AcceptRule {
+            AcceptRule {
+                id: id.to_string(),
+                name: id.to_string(),
+                enabled: true,
+                priority: 0,
+                mode: RuleMode::Route,
+                conditions: RuleConditions {
+                    origin: origin.to_string(),
+                    destinations: dests.iter().map(|s| s.to_string()).collect(),
+                    ..Default::default()
+                },
+            }
+        }
+
+        fn route_rule_capped(id: &str, origin: &str, dests: &[&str], max_accept_count: u32, accepted_count: u32) -> AcceptRule {
+            let mut r = route_rule(id, origin, dests);
+            r.conditions.max_accept_count = max_accept_count;
+            r.conditions.accepted_count = accepted_count;
+            r
+        }
+
+        fn bkid_rule(id: &str, ids: &[&str], enabled: bool) -> AcceptRule {
+            AcceptRule {
+                id: id.to_string(),
+                name: id.to_string(),
+                enabled,
+                priority: 0,
+                mode: RuleMode::BookingId,
+                conditions: RuleConditions {
+                    booking_ids: ids.iter().map(|s| s.to_string()).collect(),
+                    ..Default::default()
+                },
+            }
+        }
+
+        #[test]
+        fn same_lane_entered_3x_collapses_to_1() {
+            let out = dedupe_rules(&[
+                route_rule("a", "Padang DC", &["Cileungsi DC"]),
+                route_rule("b", "Padang DC", &["Cileungsi DC"]),
+                route_rule("c", "Padang DC", &["Cileungsi DC"]),
+            ]);
+            assert_eq!(out.len(), 1);
+        }
+
+        #[test]
+        fn separator_variant_of_same_lane_still_collapses() {
+            let out = dedupe_rules(&[
+                route_rule("a", "Padang DC", &["Cileungsi DC"]),
+                route_rule("b", "Padang-DC", &["Cileungsi_DC"]),
+            ]);
+            assert_eq!(out.len(), 1);
+        }
+
+        #[test]
+        fn different_lanes_are_kept() {
+            let out = dedupe_rules(&[
+                route_rule("a", "Padang DC", &["Cileungsi DC"]),
+                route_rule("b", "Aceh DC", &["Cileungsi DC"]),
+            ]);
+            assert_eq!(out.len(), 2);
+        }
+
+        #[test]
+        fn collapse_keeps_most_permissive_cap_and_higher_accepted_count() {
+            let out = dedupe_rules(&[
+                route_rule_capped("a", "Padang DC", &["Cileungsi DC"], 1, 1),
+                route_rule_capped("b", "Padang DC", &["Cileungsi DC"], 5, 0),
+            ]);
+            assert_eq!(out.len(), 1);
+            assert_eq!(out[0].conditions.max_accept_count, 5);
+            assert_eq!(out[0].conditions.accepted_count, 1);
+        }
+
+        #[test]
+        fn booking_id_repeated_within_and_across_rules_deduped() {
+            let out = dedupe_rules(&[
+                bkid_rule("a", &["SPXID_VM_001397509", "SPXID VM 001397509"], true),
+                bkid_rule("b", &["SPXID_VM_001397509"], true),
+            ]);
+            assert_eq!(out.len(), 1);
+            assert_eq!(out[0].conditions.booking_ids, vec!["SPXID_VM_001397509"]);
+        }
+
+        #[test]
+        fn disabled_rule_entered_earlier_does_not_steal_id_from_enabled_rule_later_c1() {
+            let out = dedupe_rules(&[
+                bkid_rule("old", &["SPXID_VM_001402220"], false),
+                bkid_rule("new", &["SPXID_VM_001402220"], true),
+            ]);
+            let ids: Vec<&str> = out.iter().map(|r| r.id.as_str()).collect();
+            assert_eq!(ids, vec!["new"]);
+            assert_eq!(out[0].conditions.booking_ids, vec!["SPXID_VM_001402220"]);
+        }
+
+        #[test]
+        fn two_enabled_rules_share_id_earlier_one_wins() {
+            let out = dedupe_rules(&[
+                bkid_rule("a", &["SPXID_VM_001402220", "SPXID_VM_001402221"], true),
+                bkid_rule("b", &["SPXID VM 001402220"], true),
+            ]);
+            let ids: Vec<&str> = out.iter().map(|r| r.id.as_str()).collect();
+            assert_eq!(ids, vec!["a"]);
+            assert_eq!(out[0].conditions.booking_ids.len(), 2);
+        }
+
+        #[test]
+        fn unique_disabled_rule_is_kept_not_a_duplicate_of_anyone() {
+            let out = dedupe_rules(&[bkid_rule("solo", &["SPXID_VM_001999999"], false)]);
+            let ids: Vec<&str> = out.iter().map(|r| r.id.as_str()).collect();
+            assert_eq!(ids, vec!["solo"]);
+        }
+
+        #[test]
+        fn sanitize_then_dedupe_chain_drops_empty_booking_id_rule() {
+            let raw = raw_rule("booking_id", RawRuleConditions { booking_ids: vec![], ..Default::default() });
+            let sanitized = sanitize_accept_rules(&[raw]);
+            assert_eq!(dedupe_rules(&sanitized.rules).len(), 0);
         }
     }
 }
