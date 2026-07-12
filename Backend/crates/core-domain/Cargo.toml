@@ -3,3 +3,6 @@ name = "core-domain"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+
+[dependencies]
+serde_json = "1.0.150"
