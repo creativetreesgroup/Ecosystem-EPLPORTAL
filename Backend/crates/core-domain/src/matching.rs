@@ -40,6 +40,16 @@ pub struct CompiledRule {
     // `destinations_norm`/`service_types_norm` are read by `matches_route` (Task 8);
     // `service_types_norm` will also be read by `matches_filter` (Task 9). `booking_ids_norm`
     // is read by `matches_booking_id`.
+    //
+    // `has_origin` is computed from the RAW trimmed `origin` string (matching the TS
+    // reference's `if (origin)` gate, where `origin = (c.origin ?? '').trim()`), NOT from
+    // whether `origin_norm` happens to be empty. A punctuation-only origin like "---" is
+    // non-empty raw but normalizes to "" — the TS reference still treats that as "this rule
+    // HAS an origin requirement" (an unsatisfiable one, since `locMatch` needs a non-empty
+    // needle), and rejects everything. Gating on `origin_norm.is_empty()` instead would
+    // silently skip the origin requirement entirely, letting such a rule match on
+    // destinations/filters alone — an over-accept bug.
+    has_origin: bool,
     origin_norm: String,
     destinations_norm: Vec<String>,
     service_types_norm: Vec<String>,
@@ -71,6 +81,7 @@ impl CompiledRule {
             mode: rule.mode,
             conditions: rule.conditions.clone(),
             rank: rule_rank(rule),
+            has_origin: !origin_trimmed.is_empty(),
             origin_norm: norm_loc(origin_trimmed),
             destinations_norm,
             service_types_norm,
@@ -138,11 +149,11 @@ impl CompiledRule {
             || c.coc_only
             || c.non_coc_only
             || c.booking_type != RuleBookingType::All;
-        if self.origin_norm.is_empty() && self.destinations_norm.is_empty() && !has_other_filter {
+        if !self.has_origin && self.destinations_norm.is_empty() && !has_other_filter {
             return false;
         }
 
-        if !self.origin_norm.is_empty() {
+        if self.has_origin {
             // Origin must be the REAL start point: report_station_name first, then the first
             // stop. Region/province labels never satisfy a route rule (Booking doesn't even
             // carry those fields — see Task 1).
@@ -157,7 +168,7 @@ impl CompiledRule {
             if stops.is_empty() {
                 return false;
             }
-            let origin_consumes_first_stop = if !self.origin_norm.is_empty() {
+            let origin_consumes_first_stop = if self.has_origin {
                 stops.first().map(|s| loc_match_normalized(s, &self.origin_norm)).unwrap_or(false)
             } else {
                 false
@@ -525,6 +536,13 @@ mod tests {
         fn final_destination_must_be_an_actual_route_stop_not_only_dest_region() {
             let r = mk_rule(RuleMode::Route, route("Padang DC", &["Cileungsi DC"]));
             let b = mk_booking(&["Padang DC", "Bekasi DC"]);
+            assert!(!CompiledRule::compile(&r).matches(&b, &mk_state()));
+        }
+
+        #[test]
+        fn punctuation_only_origin_is_unsatisfiable_not_skipped() {
+            let r = mk_rule(RuleMode::Route, route("---", &["Cileungsi DC"]));
+            let b = mk_booking(&["Padang DC", "Cileungsi DC"]);
             assert!(!CompiledRule::compile(&r).matches(&b, &mk_state()));
         }
     }
