@@ -1080,6 +1080,19 @@ fn to_optional_non_neg(v: Option<f64>) -> Option<u32> {
         _ => None,
     }
 }
+
+/// Same truncate-and-clamp-to-non-negative semantics as `to_optional_non_neg`, but stays in
+/// `f64` — used for `max_weight`/`max_cod_amount`, which must NOT be narrowed through `u32`
+/// (a value above ~4.29 billion would silently saturate, corrupting a money-critical field).
+/// (Added during Task 5's review: the original plan fed these two fields through the `u32`
+/// version, which wouldn't compile against their `Option<f64>` field type — and narrowing to
+/// fix the compile error would have introduced exactly the precision-loss bug this avoids.)
+fn to_optional_non_neg_f64(v: Option<f64>) -> Option<f64> {
+    match v {
+        Some(n) if n.is_finite() => Some(n.max(0.0).trunc()),
+        _ => None,
+    }
+}
 ```
 
 - [ ] **Step 4: Write `sanitize_accept_rules`**
@@ -1136,8 +1149,8 @@ pub fn sanitize_accept_rules(rules: &[RawAcceptRule]) -> RuleSanitizeResult {
         let match_mode =
             if c.match_mode.as_deref() == Some("flexible") { RouteMatchMode::Flexible } else { RouteMatchMode::Strict };
 
-        let max_weight = to_optional_non_neg(c.max_weight);
-        let max_cod_amount = to_optional_non_neg(c.max_cod_amount);
+        let max_weight = to_optional_non_neg_f64(c.max_weight);
+        let max_cod_amount = to_optional_non_neg_f64(c.max_cod_amount);
         let min_deadline_min = to_optional_non_neg(c.min_deadline_min);
         let max_accept_count = to_optional_non_neg(c.max_accept_count).unwrap_or(0);
         let accepted_count = to_int(c.accepted_count.map(|x| x as f64), 0).max(0) as u32;
