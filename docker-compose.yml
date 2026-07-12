@@ -1,0 +1,113 @@
+name: tower
+
+networks:
+  tower-net:
+    driver: bridge
+
+volumes:
+  tower-postgres-data:
+  tower-redis-data:
+
+services:
+  tower-caddy:
+    image: caddy:2-alpine
+    container_name: tower-caddy
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    networks:
+      - tower-net
+    depends_on:
+      - tower-web
+      - tower-reactor-core
+
+  tower-reactor-core:
+    build:
+      context: .
+      dockerfile: bin/reactor-core/Dockerfile
+    container_name: tower-reactor-core
+    restart: unless-stopped
+    env_file:
+      - .env
+    networks:
+      - tower-net
+    depends_on:
+      - tower-postgres
+      - tower-redis
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8081/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  tower-auth-sidecar:
+    build:
+      context: .
+      dockerfile: bin/auth-sidecar/Dockerfile
+    container_name: tower-auth-sidecar
+    restart: unless-stopped
+    env_file:
+      - .env
+    networks:
+      - tower-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8082/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  tower-web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    container_name: tower-web
+    restart: unless-stopped
+    environment:
+      PORT: "3000"
+      ORIGIN: "http://localhost:8080"
+    networks:
+      - tower-net
+    depends_on:
+      - tower-reactor-core
+
+  tower-postgres:
+    image: postgres:16
+    container_name: tower-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: tower
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tower_dev_only}
+      POSTGRES_DB: tower
+    volumes:
+      - tower-postgres-data:/var/lib/postgresql/data
+    networks:
+      - tower-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tower -d tower"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  tower-redis:
+    image: redis:7
+    container_name: tower-redis
+    restart: unless-stopped
+    volumes:
+      - tower-redis-data:/data
+    networks:
+      - tower-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  tower-retention:
+    image: alpine:3
+    container_name: tower-retention
+    restart: "no"
+    command: ["sh", "-c", "echo 'tower-retention: no-op placeholder (Fase 8 implements the real pg_cron-driven job)'; sleep 5"]
+    networks:
+      - tower-net

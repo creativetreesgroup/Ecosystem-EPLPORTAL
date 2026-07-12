@@ -1,0 +1,9 @@
+:80 {
+	handle_path /api/* {
+		reverse_proxy tower-reactor-core:8081
+	}
+
+	handle {
+		reverse_proxy tower-web:3000
+	}
+}
