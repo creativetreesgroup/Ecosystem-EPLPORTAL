@@ -3,15 +3,14 @@
 //! Fase 6 (api-gateway, manual accept); it owns the shared Redis keyspace so the
 //! two callers cannot diverge.
 pub mod account_lock;
+pub mod agency_dup;
 pub mod dedup;
 pub mod gate;
 pub mod quota;
 pub mod restore;
 
+pub use agency_dup::{fetch_self_email, verify_agency_dup, AgencyDupOutcome};
 pub use dedup::AccountDedupState;
 pub use gate::{
     ClaimOutcome, ExecutorError, ExecutorHandle, ManualClaimOutcome, RedisPool, ACCEPT_GATE_LUA,
 };
-
-// Later tasks add:
-// pub mod agency_dup; (Task 6)
