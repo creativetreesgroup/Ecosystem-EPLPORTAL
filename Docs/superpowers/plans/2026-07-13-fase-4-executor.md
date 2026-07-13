@@ -70,7 +70,7 @@ Full context: [`Docs/tower-master-spec.md`](../../tower-master-spec.md) and [`Do
   - `pub enum ExecutorError { Redis(#[from] redis::RedisError), Db(String) }`.
   - `pub const ACCEPT_GATE_LUA: &str` (declared here, its body is the verbatim script — used by Task 3).
 
-- [ ] **Step 1: Register nothing new; add dependencies**
+- [x] **Step 1: Register nothing new; add dependencies**
 
 `executor` is already in `Backend/Cargo.toml`'s `members`. Add its deps (run from `Backend/`):
 
@@ -92,7 +92,7 @@ cd ..
 
 Expected resolution: `redis` **1.3.0**, `dashmap` **6.2.1**, `wiremock` **0.6.x**. `redis`/`dashmap`/`wiremock` are MIT; the rest are `MIT OR Apache-2.0`. The only license action needed is `BSL-1.0` (Step 2) for `redis`'s mandatory `xxhash-rust` transitive dep.
 
-- [ ] **Step 2: Add `BSL-1.0` to the `deny.toml` allow-list**
+- [x] **Step 2: Add `BSL-1.0` to the `deny.toml` allow-list**
 
 Edit `Backend/deny.toml`, adding `"BSL-1.0"` to the `[licenses] allow` array (after `"Zlib",`):
 
@@ -107,7 +107,7 @@ Edit `Backend/deny.toml`, adding `"BSL-1.0"` to the `[licenses] allow` array (af
 
 Do NOT touch `[bans]`, `[sources]`, `[advisories]`, `private = { ignore = true }`, or `confidence-threshold`.
 
-- [ ] **Step 3: Publish `tower-redis` on a temporary dev port (mirror `tower-postgres`)**
+- [x] **Step 3: Publish `tower-redis` on a temporary dev port (mirror `tower-postgres`)**
 
 In `Docker/docker-compose.yml`, add a `ports:` block to the `tower-redis` service. Use **`127.0.0.1:16379:6379`** — port 6379 is commonly occupied by another Redis on the dev host, so map to 16379 (the same "+10000" convention Fase 2 used for Postgres 15432). Do NOT touch `tower-postgres`'s existing `127.0.0.1:15432:5432` block. Insert the block between `restart: unless-stopped` and `volumes:`:
 
@@ -141,7 +141,7 @@ In `Docker/docker-compose.yml`, add a `ports:` block to the `tower-redis` servic
       retries: 5
 ```
 
-- [ ] **Step 4: Write `gate.rs` (pool, handle skeleton, error, Lua const)**
+- [x] **Step 4: Write `gate.rs` (pool, handle skeleton, error, Lua const)**
 
 The `ACCEPT_GATE_LUA` body here is the verbatim design-doc script; Task 3 adds the `try_claim_*` methods that use it. Reproduce the Redis API shape exactly (see Global Constraints — it was compiled and run against Redis 7).
 
@@ -247,7 +247,7 @@ impl ExecutorHandle {
 }
 ```
 
-- [ ] **Step 5: Write `lib.rs`**
+- [x] **Step 5: Write `lib.rs`**
 
 ```rust
 // Backend/crates/executor/src/lib.rs
@@ -263,7 +263,7 @@ pub use gate::{ExecutorError, ExecutorHandle, RedisPool, ACCEPT_GATE_LUA};
 // pub mod account_lock; pub mod quota; (Task 5) pub mod agency_dup; (Task 6)
 ```
 
-- [ ] **Step 6: Write the connection round-trip test**
+- [x] **Step 6: Write the connection round-trip test**
 
 ```rust
 // Backend/crates/executor/tests/redis_roundtrip.rs
@@ -294,7 +294,7 @@ async fn pool_connects_and_round_trips() {
 }
 ```
 
-- [ ] **Step 7: Bring up Redis, build, test, clippy, deny**
+- [x] **Step 7: Bring up Redis, build, test, clippy, deny**
 
 ```bash
 cd Docker && docker compose up -d tower-redis && cd ..
@@ -308,7 +308,7 @@ cd ..
 
 Expected: the round-trip test passes; clippy clean; `cargo deny check` prints `advisories ok, bans ok, licenses ok, sources ok` (it fails with a `BSL-1.0` rejection if Step 2 was skipped). If `conn()` cannot connect, confirm `tower-redis` is healthy and that Step 3's `127.0.0.1:16379` publish is present.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add Backend/crates/executor Backend/Cargo.toml Backend/Cargo.lock Backend/deny.toml Docker/docker-compose.yml
@@ -334,7 +334,7 @@ git commit -m "feat(executor): crate scaffold + RedisPool/ExecutorHandle + tower
   - `pub fn is_known(&self, spx_id: &str) -> bool` — in `accepting_now` OR `accepted_ids` (used by `try_claim_manual`, Task 3).
   - `pub fn accepted_len(&self) -> usize`.
 
-- [ ] **Step 1: Write `dedup.rs`**
+- [x] **Step 1: Write `dedup.rs`**
 
 ```rust
 // Backend/crates/executor/src/dedup.rs
@@ -479,7 +479,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Concurrency test — exactly one winner (DoD #1)**
+- [x] **Step 2: Concurrency test — exactly one winner (DoD #1)**
 
 Add to `dedup.rs`'s `#[cfg(test)] mod tests` (this test needs the multi-thread runtime, so it uses `#[tokio::test(flavor = "multi_thread", worker_threads = 8)]`):
 
@@ -515,14 +515,14 @@ Add to `dedup.rs`'s `#[cfg(test)] mod tests` (this test needs the multi-thread r
     }
 ```
 
-- [ ] **Step 3: Wire into `lib.rs`**
+- [x] **Step 3: Wire into `lib.rs`**
 
 ```rust
 pub mod dedup;
 pub use dedup::AccountDedupState;
 ```
 
-- [ ] **Step 4: Test + clippy + commit**
+- [x] **Step 4: Test + clippy + commit**
 
 ```bash
 cd Backend
@@ -554,7 +554,7 @@ Expected: all `dedup` tests pass, including exactly-one-winner under the multi-t
 
 **Design note (read before coding):** `redis::Script::invoke_async` already does EVALSHA→(NOSCRIPT)→LOAD+retry, so `try_claim_auto` just calls `self.gate.key(...).key(...).arg(...).invoke_async(...)` and maps the `i64` result. The inflight key rule component is `rule_id.map(|u| u.to_string()).unwrap_or_else(|| "_norule".into())` — the SAME `<ruleId|_norule>` string `apply_rule_consumption` (Task 5) uses for `SREM` (both derive it from the rule's DB `Uuid`, so they always agree). `try_claim_manual` shares `KEYS[1]` (`spx:claim:<acct>:<spxId>`) exactly so a manual click and the poller can never both win the same ticket.
 
-- [ ] **Step 1: Add the outcomes and methods to `gate.rs`**
+- [x] **Step 1: Add the outcomes and methods to `gate.rs`**
 
 Append to `Backend/crates/executor/src/gate.rs` (add `use redis::AsyncCommands;` and `use uuid::Uuid;` to the imports at the top, and `use crate::dedup::AccountDedupState;`):
 
@@ -675,7 +675,7 @@ impl ExecutorHandle {
 }
 ```
 
-- [ ] **Step 2: Assert the Lua is byte-identical to the design doc (DoD #2, first half)**
+- [x] **Step 2: Assert the Lua is byte-identical to the design doc (DoD #2, first half)**
 
 Add a unit test inside `gate.rs` (a `#[cfg(test)] mod tests`) that pins the literal script text. This guards against an accidental "cleanup" reformat that would change the SHA:
 
@@ -713,7 +713,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Real-Redis tests for all three return values + fail-closed vs fail-open (DoD #2 + #3 + #8)**
+- [x] **Step 3: Real-Redis tests for all three return values + fail-closed vs fail-open (DoD #2 + #3 + #8)**
 
 ```rust
 // Backend/crates/executor/tests/gate_redis.rs
@@ -814,13 +814,13 @@ async fn manual_rejects_when_layer1_already_known() {
 }
 ```
 
-- [ ] **Step 4: Wire into `lib.rs`**
+- [x] **Step 4: Wire into `lib.rs`**
 
 ```rust
 pub use gate::{ClaimOutcome, ManualClaimOutcome};
 ```
 
-- [ ] **Step 5: Test + clippy + commit**
+- [x] **Step 5: Test + clippy + commit**
 
 ```bash
 cd Docker && docker compose up -d tower-redis && cd ..
@@ -849,7 +849,7 @@ Expected: the byte-exact Lua unit test, the three-return-value test, the fail-cl
   - `pub async fn restore_accepted_ids(&self, account_id: &str, state: &AccountDedupState) -> Result<usize, ExecutorError>` — `ZREMRANGEBYSCORE key 0 (now-7d)` then `ZRANGE key 0 -1`, seeding `state`. Returns the restored count.
   - `pub async fn record_durable_accept(&self, account_id: &str, spx_id: &str) -> Result<(), ExecutorError>` — `ZADD` with the current epoch score (called by Fase 5 on a successful accept). Plus a testable variant `record_durable_accept_at(&self, account_id, spx_id, epoch_secs: i64)`.
 
-- [ ] **Step 1: Write `restore.rs`**
+- [x] **Step 1: Write `restore.rs`**
 
 ```rust
 // Backend/crates/executor/src/restore.rs
@@ -929,7 +929,7 @@ impl ExecutorHandle {
 }
 ```
 
-- [ ] **Step 2: Wire into `lib.rs`**
+- [x] **Step 2: Wire into `lib.rs`**
 
 ```rust
 pub mod restore;
@@ -937,7 +937,7 @@ pub mod restore;
 
 (`restore_accepted_ids` / `record_durable_accept*` are inherent methods on `ExecutorHandle`, already re-exported via the `ExecutorHandle` type — no extra `pub use` needed.)
 
-- [ ] **Step 3: Trim-window test (DoD #4)**
+- [x] **Step 3: Trim-window test (DoD #4)**
 
 ```rust
 // Backend/crates/executor/tests/restore_redis.rs
@@ -986,7 +986,7 @@ async fn restore_keeps_in_window_and_trims_stale() {
 }
 ```
 
-- [ ] **Step 4: Test + clippy + commit**
+- [x] **Step 4: Test + clippy + commit**
 
 ```bash
 cd Docker && docker compose up -d tower-redis && cd ..
@@ -1023,7 +1023,7 @@ Expected: the trim-window test passes (restored == 1, stale trimmed).
 
 **Design note (read before coding):** The atomic conditional `UPDATE` (`SET accepted_count = accepted_count + 1 … WHERE … AND (max_accept_count = 0 OR accepted_count < max_accept_count) RETURNING accepted_count`) IS the reference `applyRuleConsumption`'s "re-read latest → increment → persist" fused into one race-free statement — no SELECT-then-UPDATE TOCTOU. The per-account `tokio::sync::Mutex` is the faithful port of `withAccountLock` and also serializes the paired Redis `SREM` so the effective count never dips. The DB `UPDATE` binds `tenant_id` explicitly (belt-and-suspenders: the `tower` login is a BYPASSRLS superuser in dev, so RLS alone would not scope it). Persist (step 3) happens BEFORE the Redis `SREM` (step 4), matching the design's ordering so the count never momentarily dips below the true value.
 
-- [ ] **Step 1: Write `store::quota`**
+- [x] **Step 1: Write `store::quota`**
 
 ```rust
 // Backend/crates/store/src/quota.rs
@@ -1097,7 +1097,7 @@ pub async fn consume_rule_quota(
 }
 ```
 
-- [ ] **Step 2: Wire `store::lib.rs`**
+- [x] **Step 2: Wire `store::lib.rs`**
 
 Add to `Backend/crates/store/src/lib.rs` (keep the existing `pub mod models; pub mod pool; pub use pool::{...};`):
 
@@ -1110,7 +1110,7 @@ pub use quota::{consume_rule_quota, QuotaConsumeOutcome};
 pub use sqlx::PgPool;
 ```
 
-- [ ] **Step 3: Write `executor::account_lock`**
+- [x] **Step 3: Write `executor::account_lock`**
 
 ```rust
 // Backend/crates/executor/src/account_lock.rs
@@ -1147,7 +1147,7 @@ impl ExecutorHandle {
 }
 ```
 
-- [ ] **Step 4: Write `executor::quota`**
+- [x] **Step 4: Write `executor::quota`**
 
 ```rust
 // Backend/crates/executor/src/quota.rs
@@ -1194,14 +1194,14 @@ impl ExecutorHandle {
 }
 ```
 
-- [ ] **Step 5: Wire `executor::lib.rs`**
+- [x] **Step 5: Wire `executor::lib.rs`**
 
 ```rust
 pub mod account_lock;
 pub mod quota;
 ```
 
-- [ ] **Step 6: Concurrency test — no lost update, cap never exceeded (DoD #6)**
+- [x] **Step 6: Concurrency test — no lost update, cap never exceeded (DoD #6)**
 
 ```rust
 // Backend/crates/executor/tests/quota_pg.rs
@@ -1307,7 +1307,7 @@ cd ..
 
 (This is a **dev-dependency only** — production `executor` still has no direct `sqlx` dep; Task 8 verifies that.)
 
-- [ ] **Step 7: Bring up services, test, clippy, commit**
+- [x] **Step 7: Bring up services, test, clippy, commit**
 
 ```bash
 cd Docker && docker compose up -d tower-postgres tower-redis && cd ..
@@ -1342,7 +1342,7 @@ Expected: `store`'s existing tests still pass; the concurrency test proves exact
 
 **Design note (read before coding):** `SpxClient::fetch_bidding_log(cookies, booking_id: i64)` returns `Result<serde_json::Value, SpxError>`. The design doc wrote `booking_id: &str`, but this plan uses **`i64`** to match the Fase 3 client signature (avoiding a fragile string-parse) — a deliberate reconciliation, documented here. The reference (`spx.ts:459-464`, `poller.ts:806-810`) parses `json.data.list`, keeps `booking_operation_type === 4`, prefers `operator` containing `@`, sorts by `create_time` ascending, takes the first; `booking_operation_type`/`create_time` may be JSON numbers or numeric strings (`Number(x)` in TS), so parse flexibly. The profile email fallback keys (`spx.ts:1016-1017`) are `email, user_email, email_address, account_email, contact_email, login_email`, read from the response's `data` object (falling back to top level).
 
-- [ ] **Step 1: Write `agency_dup.rs`**
+- [x] **Step 1: Write `agency_dup.rs`**
 
 ```rust
 // Backend/crates/executor/src/agency_dup.rs
@@ -1516,14 +1516,14 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Wire into `lib.rs`**
+- [x] **Step 2: Wire into `lib.rs`**
 
 ```rust
 pub mod agency_dup;
 pub use agency_dup::{fetch_self_email, verify_agency_dup, AgencyDupOutcome};
 ```
 
-- [ ] **Step 3: wiremock tests — timing, early-stop, tie-break, classification (DoD #5)**
+- [x] **Step 3: wiremock tests — timing, early-stop, tie-break, classification (DoD #5)**
 
 `verify_agency_dup` calls `SpxClient::fetch_bidding_log`, a GET to `/api/line_haul/agency/booking/bidding/log/list`. Point `SpxClient` at a wiremock server and assert timing + classification. `SpxCookies` derives `Default`.
 
@@ -1647,7 +1647,7 @@ async fn tie_break_prefers_earliest_create_time() {
 
 Note on `SpxClient::new` with wiremock: Fase 3's `client_requests.rs` tests already drive `SpxClient` against a wiremock `http://127.0.0.1:PORT` base, so the emulated client talks plaintext HTTP to the mock. If the installed `SpxClient::new` rejects a plaintext-localhost base under emulation, follow Fase 3's Task-9 note (construct without `.emulation()` in tests) — do not change the endpoint path or the JSON shape, which are the load-bearing parts.
 
-- [ ] **Step 4: Test + clippy + commit**
+- [x] **Step 4: Test + clippy + commit**
 
 ```bash
 cd Backend
@@ -1674,7 +1674,7 @@ Expected: the 4 pure-helper unit tests + the 4 wiremock tests pass, including th
 
 **Design note (read before coding):** Purely additive — do NOT modify `CompiledRule`, `rule_rank`, `find_best_matching_rule`, or any of the 127 existing tests. Operates over ALREADY-compiled rules (the hot path compiles once, matches many). Tie-break is **first-wins** via a manual loop with strict `>` (a later same-rank rule does not replace an earlier one) — matches the existing `find_best_matching_rule`'s tie-break exactly, and must NOT use `Iterator::max_by_key` (last-wins).
 
-- [ ] **Step 1: Add the function to `matching.rs`**
+- [x] **Step 1: Add the function to `matching.rs`**
 
 Insert after the existing `find_best_matching_rule` function (before the `matched_booking_id_for` function):
 
@@ -1708,7 +1708,7 @@ pub fn find_best_matching_rule_compiled(
 }
 ```
 
-- [ ] **Step 2: Add first-wins + cross-check tests**
+- [x] **Step 2: Add first-wins + cross-check tests**
 
 Add a new module inside `matching.rs`'s existing `#[cfg(test)] mod tests` block (reuse the existing `use crate::test_support::{mk_booking, mk_rule, mk_state};` helpers):
 
@@ -1840,7 +1840,7 @@ Add a new module inside `matching.rs`'s existing `#[cfg(test)] mod tests` block 
     }
 ```
 
-- [ ] **Step 3: Test (all of core-domain, proving nothing regressed) + clippy + commit**
+- [x] **Step 3: Test (all of core-domain, proving nothing regressed) + clippy + commit**
 
 ```bash
 cd Backend
@@ -1863,7 +1863,7 @@ Expected: every existing `core-domain` test still passes unchanged, plus the two
 - Consumes: everything from Tasks 1-7.
 - Produces: recorded evidence the Fase 4 Definition of Done (design doc) is met.
 
-- [ ] **Step 1: Bring up services, run the full executor suite from clean containers**
+- [x] **Step 1: Bring up services, run the full executor suite from clean containers**
 
 ```bash
 cd Docker && docker compose up -d tower-postgres tower-redis && cd ..
@@ -1873,7 +1873,7 @@ cd Backend && cargo test -p executor -- --test-threads=1 && cd ..
 
 Expected: every `executor` test passes — the Redis round-trip, Layer-1 exactly-one-winner, the gate's three return values + fail-closed/fail-open + shared-key, the 7-day restore trim, the quota concurrency test, and the agency-dup timing/classification tests.
 
-- [ ] **Step 2: Full workspace build/test/clippy**
+- [x] **Step 2: Full workspace build/test/clippy**
 
 ```bash
 cd Backend
@@ -1885,7 +1885,7 @@ cd ..
 
 Expected: all clean — `core-domain`'s existing tests + the new compiled-variant tests, `store`'s suite + the new `quota` module, `spx-client`, `executor`'s full suite, and the other crates, all green; clippy clean workspace-wide.
 
-- [ ] **Step 3: `cargo deny check` — licenses stay clean (the `BSL-1.0` gate)**
+- [x] **Step 3: `cargo deny check` — licenses stay clean (the `BSL-1.0` gate)**
 
 ```bash
 cd Backend && cargo deny check && cd ..
@@ -1893,7 +1893,7 @@ cd Backend && cargo deny check && cd ..
 
 Expected: `advisories ok, bans ok, licenses ok, sources ok`. If licenses fail, it is the `BSL-1.0` from `redis`'s `xxhash-rust` — confirm Task 1 Step 2 added `"BSL-1.0"` to the allow-list. Do NOT add any copyleft license.
 
-- [ ] **Step 4: Confirm `executor`'s production dep footprint is exactly what's expected (DoD #9)**
+- [x] **Step 4: Confirm `executor`'s production dep footprint is exactly what's expected (DoD #9)**
 
 ```bash
 cd Backend
@@ -1908,7 +1908,7 @@ Expected (normal/production edges): `redis`, `dashmap`, `thiserror`, `uuid`, `se
 - **No second DB driver** (no `tokio-postgres`/`diesel`) and **no duplicate HTTP client** (no `reqwest`; SPX HTTP is `spx-client`'s `wreq`, pulled transitively, not a second one).
 - Exactly one `redis`, one `dashmap`.
 
-- [ ] **Step 5: Cross-check every DoD item in the design doc**
+- [x] **Step 5: Cross-check every DoD item in the design doc**
 
 Read `Docs/superpowers/specs/2026-07-13-fase-4-executor-design.md`'s "Definition of Done — Fase 4" (9 items) and cite the concrete evidence for each — do not just assert:
 1. Layer 1 atomic (`DashSet::insert`) — `dedup.rs`'s `concurrent_claim_exactly_one_winner` (Task 2).
@@ -1921,11 +1921,11 @@ Read `Docs/superpowers/specs/2026-07-13-fase-4-executor-design.md`'s "Definition
 8. Manual shares the auto claim key — `gate_redis.rs`'s `manual_and_auto_share_the_claim_key` (Task 3).
 9. `cargo test`/`clippy`/`deny` clean + no unexpected I/O deps — Steps 1-4 output.
 
-- [ ] **Step 6: Mark this plan complete**
+- [x] **Step 6: Mark this plan complete**
 
 Check every remaining `- [ ]` box in this file to `- [x]` by hand or with a targeted script — then verify (grep) that no non-checkbox prose containing the literal `- [ ]` substring got corrupted. **This exact mistake — corrupting `- [ ]` sequences that appear inside prose rather than as real checkboxes — has already happened TWICE in this project's history (caught during Fase 1's and Fase 3's sign-offs). Do not repeat it a third time.** Only real leading-`- [ ]` step checkboxes should change; any `- [ ]` embedded in a sentence or code block must be left exactly as-is.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add Backend Docs/superpowers/plans/2026-07-13-fase-4-executor.md
