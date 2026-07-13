@@ -7,16 +7,20 @@
 //! so no test-only client variant is needed.
 use spx_client::client::{
     SpxClient, PATH_ACCEPT, PATH_BIDDING_LIST, PATH_BOOKING_LOG, PATH_BOOKING_OVERVIEW,
-    PATH_COUNT_V2, PATH_NOTIFICATION, PATH_PROFILE, PATH_PROFILE_ACCOUNT_INFO,
-    PATH_PROFILE_AGENCY, PATH_PROFILE_AGENCY_INFO, PATH_PROFILE_USER, PATH_PROFILE_USER_INFO,
-    PATH_REQUEST_LIST, PATH_USER_LIST,
+    PATH_COUNT_V2, PATH_NOTIFICATION, PATH_PROFILE, PATH_PROFILE_ACCOUNT_INFO, PATH_PROFILE_AGENCY,
+    PATH_PROFILE_AGENCY_INFO, PATH_PROFILE_USER, PATH_PROFILE_USER_INFO, PATH_REQUEST_LIST,
+    PATH_USER_LIST,
 };
 use spx_client::cookies::SpxCookies;
 use wiremock::matchers::{body_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn cookies() -> SpxCookies {
-    SpxCookies { fms_user_agency_id: "42".into(), csrftoken: "CSRF".into(), ..Default::default() }
+    SpxCookies {
+        fms_user_agency_id: "42".into(),
+        csrftoken: "CSRF".into(),
+        ..Default::default()
+    }
 }
 
 #[tokio::test]
@@ -32,7 +36,10 @@ async fn bidding_list_posts_to_correct_path_with_headers() {
         .await;
 
     let client = SpxClient::new(server.uri()).expect("client");
-    let bookings = client.fetch_bookings(&cookies(), 1, 50).await.expect("fetch");
+    let bookings = client
+        .fetch_bookings(&cookies(), 1, 50)
+        .await
+        .expect("fetch");
     assert_eq!(bookings.len(), 1);
     assert_eq!(bookings[0].booking_id, "B1");
 }
@@ -50,7 +57,10 @@ async fn count_v2_posts_request_tab_all_and_unwraps_data() {
         .await;
 
     let client = SpxClient::new(server.uri()).expect("client");
-    let counts = client.fetch_booking_counts(&cookies()).await.expect("fetch");
+    let counts = client
+        .fetch_booking_counts(&cookies())
+        .await
+        .expect("fetch");
     assert_eq!(counts["pending"], 3);
 }
 
@@ -59,13 +69,21 @@ async fn request_list_posts_numeric_booking_id_body() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path(PATH_REQUEST_LIST))
-        .and(body_json(serde_json::json!({ "booking_id": 100, "pageno": 1, "count": 20 })))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "retcode": 0, "data": [] })))
+        .and(body_json(
+            serde_json::json!({ "booking_id": 100, "pageno": 1, "count": 20 }),
+        ))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({ "retcode": 0, "data": [] })),
+        )
         .mount(&server)
         .await;
 
     let client = SpxClient::new(server.uri()).expect("client");
-    let res = client.fetch_request_list(&cookies(), 100, 20).await.expect("fetch");
+    let res = client
+        .fetch_request_list(&cookies(), 100, 20)
+        .await
+        .expect("fetch");
     assert_eq!(res["retcode"], 0);
 }
 
@@ -74,7 +92,9 @@ async fn accept_classifies_agency_dup_from_body() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path(PATH_ACCEPT))
-        .and(body_json(serde_json::json!({ "booking_id": 100, "agency_id": 42 })))
+        .and(body_json(
+            serde_json::json!({ "booking_id": 100, "agency_id": 42 }),
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "retcode": 150399,
             "message": "Operation failed. Your agency already accepted this request before."
@@ -153,7 +173,10 @@ async fn notification_count_posts_expected_body() {
         .and(body_json(serde_json::json!({
             "use_case": "agency portal", "user_type": 4, "notification_type_list": [30]
         })))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "retcode": 0, "data": { "count": 5 } })))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({ "retcode": 0, "data": { "count": 5 } })),
+        )
         .mount(&server)
         .await;
 
@@ -167,12 +190,18 @@ async fn bidding_log_gets_with_query_params() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path(spx_client::client::PATH_BIDDING_LOG_LIST))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "retcode": 0, "data": [] })))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({ "retcode": 0, "data": [] })),
+        )
         .mount(&server)
         .await;
 
     let client = SpxClient::new(server.uri()).expect("client");
-    let res = client.fetch_bidding_log(&cookies(), 100).await.expect("fetch");
+    let res = client
+        .fetch_bidding_log(&cookies(), 100)
+        .await
+        .expect("fetch");
     assert_eq!(res["retcode"], 0);
 }
 
@@ -184,12 +213,18 @@ async fn user_list_posts_request_source_and_agency_id() {
         .and(body_json(serde_json::json!({
             "request_source": 1, "agency_id": 42, "pageno": 1, "count": 100
         })))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "retcode": 0, "data": [] })))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({ "retcode": 0, "data": [] })),
+        )
         .mount(&server)
         .await;
 
     let client = SpxClient::new(server.uri()).expect("client");
-    let res = client.fetch_agency_users(&cookies(), 42).await.expect("fetch");
+    let res = client
+        .fetch_agency_users(&cookies(), 42)
+        .await
+        .expect("fetch");
     assert_eq!(res["retcode"], 0);
 }
 
@@ -198,7 +233,10 @@ async fn profile_uses_get_on_the_primary_path() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path(PATH_PROFILE))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "retcode": 0, "data": { "agency_id": 42 } })))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({ "retcode": 0, "data": { "agency_id": 42 } })),
+        )
         .mount(&server)
         .await;
 
@@ -295,12 +333,18 @@ async fn booking_overview_posts_fallback_body() {
         .and(body_json(serde_json::json!({
             "pageno": 1, "count": 100, "request_acceptance_status": 1, "request_tab_all": true
         })))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "retcode": 0, "data": {} })))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({ "retcode": 0, "data": {} })),
+        )
         .mount(&server)
         .await;
 
     let client = SpxClient::new(server.uri()).expect("client");
-    let res = client.fetch_booking_overview(&cookies()).await.expect("fetch");
+    let res = client
+        .fetch_booking_overview(&cookies())
+        .await
+        .expect("fetch");
     assert_eq!(res["retcode"], 0);
 }
 
@@ -309,13 +353,21 @@ async fn booking_log_posts_probe_body() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path(PATH_BOOKING_LOG))
-        .and(body_json(serde_json::json!({ "booking_id": 100, "pageno": 1, "count": 20 })))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "retcode": 0, "data": [] })))
+        .and(body_json(
+            serde_json::json!({ "booking_id": 100, "pageno": 1, "count": 20 }),
+        ))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({ "retcode": 0, "data": [] })),
+        )
         .mount(&server)
         .await;
 
     let client = SpxClient::new(server.uri()).expect("client");
-    let res = client.fetch_booking_log(&cookies(), 100).await.expect("fetch");
+    let res = client
+        .fetch_booking_log(&cookies(), 100)
+        .await
+        .expect("fetch");
     assert_eq!(res["retcode"], 0);
 }
 

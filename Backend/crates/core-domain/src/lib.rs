@@ -9,7 +9,9 @@ pub mod vehicle;
 pub use booking::{Booking, BookingType};
 pub use coc::{booking_type_of, is_coc, is_coc_name};
 pub use location::{loc_match, loc_match_normalized, norm_loc};
-pub use matching::{find_best_matching_rule, matched_booking_id_for, matches_rule, CompiledRule, RuleRank};
+pub use matching::{
+    find_best_matching_rule, matched_booking_id_for, matches_rule, CompiledRule, RuleRank,
+};
 pub use route_parse::{parse_route_detail_list, parse_route_stops, RouteNode};
 pub use rule::{
     dedupe_rules, sanitize_accept_rules, AcceptRule, MatchState, RawAcceptRule, RawRuleConditions,
@@ -29,7 +31,14 @@ pub(crate) mod test_support {
     /// specific fields with Rust struct-update syntax at the call site, e.g.
     /// `AcceptRule { priority: 9, id: "rt".into(), ..mk_rule(RuleMode::Route, conditions) }`.
     pub(crate) fn mk_rule(mode: RuleMode, conditions: RuleConditions) -> AcceptRule {
-        AcceptRule { id: "r1".to_string(), name: "test".to_string(), enabled: true, priority: 0, mode, conditions }
+        AcceptRule {
+            id: "r1".to_string(),
+            name: "test".to_string(),
+            enabled: true,
+            priority: 0,
+            mode,
+            conditions,
+        }
     }
 
     pub(crate) fn mk_state() -> MatchState {
@@ -40,6 +49,9 @@ pub(crate) mod test_support {
     /// given stops and every other field at its zero value, then override specific fields with
     /// Rust struct-update syntax at the call site, e.g. `Booking { spx_tx_id: "X".into(), ..mk_booking(&[]) }`.
     pub(crate) fn mk_booking(route_stops: &[&str]) -> Booking {
-        Booking { route_stops: route_stops.iter().map(|s| s.to_string()).collect(), ..Default::default() }
+        Booking {
+            route_stops: route_stops.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        }
     }
 }

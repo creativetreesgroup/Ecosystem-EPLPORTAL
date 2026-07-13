@@ -93,14 +93,21 @@ mod tests {
         let m = master();
         let tenant = Uuid::new_v4();
         let api_key = "waha-plaintext-key-XYZ";
-        let s = WahaSettings::encrypt_new(&m, tenant, "http://waha:3000", "default", api_key).unwrap();
+        let s =
+            WahaSettings::encrypt_new(&m, tenant, "http://waha:3000", "default", api_key).unwrap();
 
         // The serialized JSONB must not contain the plaintext key substring.
         let json = s.to_json_value().to_string();
-        assert!(!json.contains(api_key), "plaintext WAHA key leaked into JSONB: {json}");
+        assert!(
+            !json.contains(api_key),
+            "plaintext WAHA key leaked into JSONB: {json}"
+        );
 
         use crate::crypto::secret::ExposeSecret;
         let back = WahaSettings::from_json_value(&s.to_json_value()).unwrap();
-        assert_eq!(back.decrypt_api_key(&m, tenant).unwrap().expose_secret(), api_key);
+        assert_eq!(
+            back.decrypt_api_key(&m, tenant).unwrap().expose_secret(),
+            api_key
+        );
     }
 }

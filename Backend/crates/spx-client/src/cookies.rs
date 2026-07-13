@@ -79,7 +79,11 @@ pub fn build_headers(c: &SpxCookies, base_url: &str) -> HeaderMap {
             h.insert(HeaderName::from_static(name), v);
         }
     };
-    set(&mut h, "accept", "application/json, text/plain, */*".to_string());
+    set(
+        &mut h,
+        "accept",
+        "application/json, text/plain, */*".to_string(),
+    );
     set(&mut h, "accept-language", "en-US,en;q=0.9".to_string());
     set(&mut h, "cache-control", "no-cache".to_string());
     set(&mut h, "content-type", "application/json".to_string());
@@ -87,7 +91,11 @@ pub fn build_headers(c: &SpxCookies, base_url: &str) -> HeaderMap {
     set(&mut h, "user-agent", user_agent());
     set(&mut h, "referer", format!("{base_url}/"));
     set(&mut h, "origin", base_url.to_string());
-    set(&mut h, "from-host", "logistics.myagencyservice.id".to_string());
+    set(
+        &mut h,
+        "from-host",
+        "logistics.myagencyservice.id".to_string(),
+    );
     set(&mut h, "connection", "keep-alive".to_string());
     set(&mut h, "sec-ch-ua", sec_ch_ua());
     set(&mut h, "sec-ch-ua-mobile", "?0".to_string());
@@ -133,14 +141,22 @@ mod tests {
         let h = build_headers(&sample(), "https://logistics.myagencyservice.id");
         assert_eq!(h.get("x-csrftoken").unwrap(), "CSRF");
         assert_eq!(h.get("device-id").unwrap(), "DEV-1");
-        assert_eq!(h.get("origin").unwrap(), "https://logistics.myagencyservice.id");
+        assert_eq!(
+            h.get("origin").unwrap(),
+            "https://logistics.myagencyservice.id"
+        );
         assert!(h
             .get("user-agent")
             .unwrap()
             .to_str()
             .unwrap()
             .contains("Chrome/148"));
-        assert!(h.get("cookie").unwrap().to_str().unwrap().contains("fms_user_skey=SKEY"));
+        assert!(h
+            .get("cookie")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .contains("fms_user_skey=SKEY"));
     }
 
     #[test]

@@ -101,7 +101,11 @@ pub fn parse_route_detail_list(raw: &Value) -> Vec<RouteNode> {
             let addr = n.get("address_info");
             let province = addr.map(|a| field_string(a.get("l1"))).unwrap_or_default();
             let city = addr.map(|a| field_string(a.get("l2"))).unwrap_or_default();
-            nodes.push(RouteNode { name, province, city });
+            nodes.push(RouteNode {
+                name,
+                province,
+                city,
+            });
         }
     }
     nodes
@@ -157,7 +161,11 @@ pub fn parse_route_stops(raw: &Value) -> Vec<String> {
     // 4. SGI enriched route string (truthiness check, not just non-null).
     if is_truthy(raw.get("sgi_route_name")) {
         let s = field_string(raw.get("sgi_route_name"));
-        return s.split(" -> ").filter(|p| !p.is_empty()).map(String::from).collect();
+        return s
+            .split(" -> ")
+            .filter(|p| !p.is_empty())
+            .map(String::from)
+            .collect();
     }
 
     // 5. report_station_name (origin DC from bidding/list).
@@ -167,8 +175,19 @@ pub fn parse_route_stops(raw: &Value) -> Vec<String> {
     }
 
     // 6. Origin + destination DC names (`pick` semantics: skip null/undefined/empty-string).
-    let o = pick_field(raw, &["origin_dc_name", "origin_hub", "from_dc_name", "origin_name"]);
-    let d = pick_field(raw, &["dest_dc_name", "dest_hub", "to_dc_name", "dest_name"]);
+    let o = pick_field(
+        raw,
+        &[
+            "origin_dc_name",
+            "origin_hub",
+            "from_dc_name",
+            "origin_name",
+        ],
+    );
+    let d = pick_field(
+        raw,
+        &["dest_dc_name", "dest_hub", "to_dc_name", "dest_name"],
+    );
     [o, d].into_iter().filter(|s| !s.is_empty()).collect()
 }
 
@@ -233,7 +252,8 @@ mod tests {
 
         #[test]
         fn pre_enriched_route_stops_array_wins_highest_priority() {
-            let raw = json!({ "route_stops": ["Aceh DC", "Cileungsi DC"], "route_detail_list": [] });
+            let raw =
+                json!({ "route_stops": ["Aceh DC", "Cileungsi DC"], "route_detail_list": [] });
             assert_eq!(parse_route_stops(&raw), vec!["Aceh DC", "Cileungsi DC"]);
         }
 
@@ -262,8 +282,12 @@ mod tests {
 
         #[test]
         fn three_stop_route_preserved_in_order() {
-            let stops = parse_route_stops(&rdl(&["Yogyakarta DC", "Purbalingga DC", "Banyumas DC"]));
-            assert_eq!(stops, vec!["Yogyakarta DC", "Purbalingga DC", "Banyumas DC"]);
+            let stops =
+                parse_route_stops(&rdl(&["Yogyakarta DC", "Purbalingga DC", "Banyumas DC"]));
+            assert_eq!(
+                stops,
+                vec!["Yogyakarta DC", "Purbalingga DC", "Banyumas DC"]
+            );
         }
 
         #[test]
@@ -275,7 +299,10 @@ mod tests {
         #[test]
         fn route_stops_null_entry_bare_stringifies_to_literal_null_not_empty() {
             let raw = json!({ "route_stops": [serde_json::Value::Null, "Aceh DC"] });
-            assert_eq!(parse_route_stops(&raw), vec!["null".to_string(), "Aceh DC".to_string()]);
+            assert_eq!(
+                parse_route_stops(&raw),
+                vec!["null".to_string(), "Aceh DC".to_string()]
+            );
         }
     }
 }

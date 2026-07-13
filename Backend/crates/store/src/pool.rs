@@ -3,7 +3,10 @@ use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
 pub async fn connect(database_url: &str) -> Result<PgPool, sqlx::Error> {
-    PgPoolOptions::new().max_connections(10).connect(database_url).await
+    PgPoolOptions::new()
+        .max_connections(10)
+        .connect(database_url)
+        .await
 }
 
 pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::migrate::MigrateError> {

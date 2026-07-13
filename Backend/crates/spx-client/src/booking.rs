@@ -158,15 +158,19 @@ fn parse_provinces(raw: &Value) -> Provinces {
             dest_region: last.name.clone(),
         };
     }
-    let province_full = nullish_str(raw, &["sgi_province_name", "province_name"]).unwrap_or_default();
+    let province_full =
+        nullish_str(raw, &["sgi_province_name", "province_name"]).unwrap_or_default();
     let parts: Vec<&str> = province_full.split(" -> ").collect();
     let first_part = parts.first().copied().unwrap_or("").to_string();
     let last_part = parts.last().copied().unwrap_or("").to_string();
     Provinces {
         origin: nullish_str(raw, &["origin_province", "pickup_province"]).unwrap_or(first_part),
         dest: nullish_str(raw, &["dest_province", "delivery_province"]).unwrap_or(last_part),
-        origin_region: nullish_str(raw, &["origin_dc_name", "origin_hub", "report_station_name"])
-            .unwrap_or_default(),
+        origin_region: nullish_str(
+            raw,
+            &["origin_dc_name", "origin_hub", "report_station_name"],
+        )
+        .unwrap_or_default(),
         dest_region: nullish_str(raw, &["dest_dc_name", "dest_hub"]).unwrap_or_default(),
     }
 }
@@ -176,7 +180,16 @@ pub fn normalize_booking(raw: &Value) -> SpxBooking {
     let booking_id = pick_str(raw, &["booking_id", "bookingId", "booking_sn", "id"]);
     let request_id = pick_str(raw, &["request_id", "requestId", "req_id"]);
     let spx_tx_id = {
-        let v = pick_str(raw, &["booking_name", "spx_tx_id", "spxTxId", "tx_id", "tracking_no"]);
+        let v = pick_str(
+            raw,
+            &[
+                "booking_name",
+                "spx_tx_id",
+                "spxTxId",
+                "tx_id",
+                "tracking_no",
+            ],
+        );
         if v.is_empty() {
             booking_id.clone()
         } else {
@@ -187,11 +200,17 @@ pub fn normalize_booking(raw: &Value) -> SpxBooking {
     let route_stops = parse_route_stops(raw);
     let provinces = parse_provinces(raw);
 
-    let deadline_at = match pick(raw, &["bidding_ddl", "deadline_at", "pickup_time_ms", "expired_at"]) {
+    let deadline_at = match pick(
+        raw,
+        &["bidding_ddl", "deadline_at", "pickup_time_ms", "expired_at"],
+    ) {
         Some(v) => to_ms(to_num(v)),
         None => now_ms() + 3_600_000,
     };
-    let pickup_ms = match pick(raw, &["booking_date", "schedule_at", "pickup_time", "pickup_date"]) {
+    let pickup_ms = match pick(
+        raw,
+        &["booking_date", "schedule_at", "pickup_time", "pickup_date"],
+    ) {
         Some(v) => to_ms(to_num(v)),
         None => deadline_at,
     };
@@ -202,8 +221,18 @@ pub fn normalize_booking(raw: &Value) -> SpxBooking {
     };
 
     // Vehicle type: prefer display name; a BARE-NUMERIC code is discarded (M5).
-    let vtype_name = pick_str(raw, &["vehicle_type_name", "right_vehicle_type_name", "sgi_vehicle_name"]);
-    let vtype_code = pick_str(raw, &["truck_type", "vehicle_type", "vehicleType", "service_type"]);
+    let vtype_name = pick_str(
+        raw,
+        &[
+            "vehicle_type_name",
+            "right_vehicle_type_name",
+            "sgi_vehicle_name",
+        ],
+    );
+    let vtype_code = pick_str(
+        raw,
+        &["truck_type", "vehicle_type", "vehicleType", "service_type"],
+    );
     let vtype_code_clean = {
         let t = vtype_code.trim();
         if !t.is_empty() && t.chars().all(|c| c.is_ascii_digit()) {
@@ -217,11 +246,17 @@ pub fn normalize_booking(raw: &Value) -> SpxBooking {
     } else {
         vtype_code_clean
     };
-    let vehicle_capacity = pick_str(raw, &["truck_capacity", "vehicle_capacity", "vehicleCapacity"]);
+    let vehicle_capacity = pick_str(
+        raw,
+        &["truck_capacity", "vehicle_capacity", "vehicleCapacity"],
+    );
 
     // Status: numeric 1/2/3 -> pending/accepted/failed, else stringify (default pending).
     let status = {
-        let v = pick(raw, &["request_acceptance_status", "status", "booking_status"]);
+        let v = pick(
+            raw,
+            &["request_acceptance_status", "status", "booking_status"],
+        );
         let code = v.and_then(|v| match v {
             Value::Number(n) => n.as_i64(),
             Value::String(s) => s.trim().parse::<i64>().ok(),
@@ -241,8 +276,16 @@ pub fn normalize_booking(raw: &Value) -> SpxBooking {
 
     // COC/SPXID type from the REAL transaction name (booking_name), NOT the
     // bookingId fallback (M4). Absent real name -> reguler.
-    let tx_name_for_type =
-        pick_str(raw, &["booking_name", "spx_tx_id", "spxTxId", "tx_id", "tracking_no"]);
+    let tx_name_for_type = pick_str(
+        raw,
+        &[
+            "booking_name",
+            "spx_tx_id",
+            "spxTxId",
+            "tx_id",
+            "tracking_no",
+        ],
+    );
     let booking_type = booking_type_of(&tx_name_for_type);
 
     let onsite_raw = pick_str(raw, &["onsite_id", "onsiteId"]);
@@ -347,9 +390,18 @@ mod tests {
     #[test]
     fn status_code_mapping() {
         assert_eq!(normalize_booking(&json!({ "status": 1 })).status, "pending");
-        assert_eq!(normalize_booking(&json!({ "status": "2" })).status, "accepted");
-        assert_eq!(normalize_booking(&json!({ "request_acceptance_status": 3 })).status, "failed");
-        assert_eq!(normalize_booking(&json!({ "status": "weird" })).status, "weird");
+        assert_eq!(
+            normalize_booking(&json!({ "status": "2" })).status,
+            "accepted"
+        );
+        assert_eq!(
+            normalize_booking(&json!({ "request_acceptance_status": 3 })).status,
+            "failed"
+        );
+        assert_eq!(
+            normalize_booking(&json!({ "status": "weird" })).status,
+            "weird"
+        );
         assert_eq!(normalize_booking(&json!({})).status, "pending");
     }
 

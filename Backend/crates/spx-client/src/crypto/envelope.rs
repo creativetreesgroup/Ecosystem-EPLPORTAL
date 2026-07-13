@@ -123,11 +123,21 @@ pub fn encrypt(
         Aes256Gcm::new_from_slice(subkey.expose_secret()).map_err(|_| CryptoError::Aead)?;
     let mut nonce_bytes = [0u8; 12];
     getrandom::fill(&mut nonce_bytes).map_err(|_| CryptoError::Rng)?;
-    let nonce = Nonce::<U12>::try_from(&nonce_bytes[..]).map_err(|_| CryptoError::BadNonceLength(12))?;
+    let nonce =
+        Nonce::<U12>::try_from(&nonce_bytes[..]).map_err(|_| CryptoError::BadNonceLength(12))?;
     let bytes = cipher
-        .encrypt(&nonce, Payload { msg: plaintext, aad })
+        .encrypt(
+            &nonce,
+            Payload {
+                msg: plaintext,
+                aad,
+            },
+        )
         .map_err(|_| CryptoError::Aead)?;
-    Ok(Ciphertext { bytes, nonce: nonce_bytes })
+    Ok(Ciphertext {
+        bytes,
+        nonce: nonce_bytes,
+    })
 }
 
 pub fn decrypt(
@@ -142,7 +152,13 @@ pub fn decrypt(
         Aes256Gcm::new_from_slice(subkey.expose_secret()).map_err(|_| CryptoError::Aead)?;
     let nonce = Nonce::<U12>::try_from(&nonce[..]).map_err(|_| CryptoError::BadNonceLength(12))?;
     cipher
-        .decrypt(&nonce, Payload { msg: ciphertext, aad })
+        .decrypt(
+            &nonce,
+            Payload {
+                msg: ciphertext,
+                aad,
+            },
+        )
         .map_err(|_| CryptoError::Aead)
 }
 
@@ -231,7 +247,10 @@ mod tests {
         let c1 = encrypt(&m, LABEL_WAHA_KEY, b"same", &aad).unwrap();
         let c2 = encrypt(&m, LABEL_WAHA_KEY, b"same", &aad).unwrap();
         assert_ne!(c1.nonce, c2.nonce, "nonce must be random per encryption");
-        assert_ne!(c1.bytes, c2.bytes, "ciphertext must differ under a fresh nonce");
+        assert_ne!(
+            c1.bytes, c2.bytes,
+            "ciphertext must differ under a fresh nonce"
+        );
     }
 
     // DoD #3 / #4b: purpose-scoped subkeys are BYTE-FOR-BYTE distinct from the
@@ -245,7 +264,11 @@ mod tests {
         let waha = derive_subkey(&m, LABEL_WAHA_KEY).unwrap();
         let hmac = derive_subkey(&m, LABEL_QUICK_ACCEPT_HMAC).unwrap();
         assert_ne!(cred.expose_secret(), waha.expose_secret());
-        assert_ne!(cred.expose_secret(), hmac.expose_secret(), "AES subkey must != HMAC subkey");
+        assert_ne!(
+            cred.expose_secret(),
+            hmac.expose_secret(),
+            "AES subkey must != HMAC subkey"
+        );
         assert_ne!(waha.expose_secret(), hmac.expose_secret());
     }
 

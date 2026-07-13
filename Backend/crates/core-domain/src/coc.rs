@@ -17,7 +17,11 @@ pub fn is_coc(spx_id: &str, booking_name: &str) -> bool {
 
 /// Canonical COC/REG label from a booking's transaction name.
 pub fn booking_type_of(name: &str) -> BookingType {
-    if is_coc_name(name) { BookingType::Spxid } else { BookingType::Reguler }
+    if is_coc_name(name) {
+        BookingType::Spxid
+    } else {
+        BookingType::Reguler
+    }
 }
 
 #[cfg(test)]

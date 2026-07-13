@@ -25,12 +25,18 @@ fn loads_exactly_32_bytes() {
 fn rejects_wrong_length() {
     let short = temp_path("short");
     std::fs::write(&short, [1u8; 16]).unwrap(); // 16 bytes, not 32
-    assert!(MasterKey::load_from_file(&short).is_err(), "must reject a 16-byte file");
+    assert!(
+        MasterKey::load_from_file(&short).is_err(),
+        "must reject a 16-byte file"
+    );
     std::fs::remove_file(&short).ok();
 
     let long = temp_path("long");
     std::fs::write(&long, [1u8; 64]).unwrap(); // 64 bytes
-    assert!(MasterKey::load_from_file(&long).is_err(), "must reject a 64-byte file");
+    assert!(
+        MasterKey::load_from_file(&long).is_err(),
+        "must reject a 64-byte file"
+    );
     std::fs::remove_file(&long).ok();
 }
 

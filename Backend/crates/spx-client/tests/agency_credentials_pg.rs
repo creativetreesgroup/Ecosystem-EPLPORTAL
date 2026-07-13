@@ -72,18 +72,24 @@ async fn agency_credential_encrypt_store_fetch_decrypt() {
     assert_eq!(row.key_version, KEY_VERSION);
     // The stored ciphertext must NEVER contain the plaintext bytes.
     assert!(
-        !row.ciphertext.windows(plaintext_password.len()).any(|w| w == plaintext_password.as_bytes()),
+        !row.ciphertext
+            .windows(plaintext_password.len())
+            .any(|w| w == plaintext_password.as_bytes()),
         "plaintext password leaked into stored ciphertext"
     );
 
     let nonce: [u8; 12] = row.nonce.as_slice().try_into().expect("12-byte nonce");
-    let decrypted = decrypt_agency_password(&master, tenant_id, &row.ciphertext, &nonce)
-        .expect("decrypt");
+    let decrypted =
+        decrypt_agency_password(&master, tenant_id, &row.ciphertext, &nonce).expect("decrypt");
     use spx_client::crypto::secret::ExposeSecret;
     assert_eq!(decrypted.expose_secret(), plaintext_password);
 
     // Cleanup.
-    sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_id).execute(&pool).await.ok();
+    sqlx::query("DELETE FROM tenants WHERE id = $1")
+        .bind(tenant_id)
+        .execute(&pool)
+        .await
+        .ok();
 }
 
 /// AAD-binding property: a row encrypted for tenant A must fail to decrypt
@@ -162,6 +168,14 @@ async fn agency_credential_wrong_tenant_fails_to_decrypt() {
     assert_eq!(correct.expose_secret(), plaintext_password);
 
     // Cleanup.
-    sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_a).execute(&pool).await.ok();
-    sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_b).execute(&pool).await.ok();
+    sqlx::query("DELETE FROM tenants WHERE id = $1")
+        .bind(tenant_a)
+        .execute(&pool)
+        .await
+        .ok();
+    sqlx::query("DELETE FROM tenants WHERE id = $1")
+        .bind(tenant_b)
+        .execute(&pool)
+        .await
+        .ok();
 }

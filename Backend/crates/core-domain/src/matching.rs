@@ -1,6 +1,8 @@
 use crate::booking::{Booking, BookingType};
 use crate::location::loc_match_normalized;
-use crate::rule::{norm_id, AcceptRule, MatchState, RuleBookingType, RuleConditions, RuleMode, RouteMatchMode};
+use crate::rule::{
+    norm_id, AcceptRule, MatchState, RouteMatchMode, RuleBookingType, RuleConditions, RuleMode,
+};
 use crate::vehicle::{norm_vehicle, vehicle_match_normalized};
 
 /// `[mode_score, priority, dest_count, has_origin, is_strict, service_type_count]`. Derived
@@ -18,14 +20,25 @@ fn rule_rank(rule: &AcceptRule) -> RuleRank {
     };
     let is_route = rule.mode == RuleMode::Route;
     let dest_count = if is_route {
-        c.destinations.iter().map(|d| d.trim()).filter(|d| !d.is_empty()).count() as i32
+        c.destinations
+            .iter()
+            .map(|d| d.trim())
+            .filter(|d| !d.is_empty())
+            .count() as i32
     } else {
         0
     };
     let has_origin = i32::from(is_route && !c.origin.trim().is_empty());
     let is_strict = i32::from(is_route && c.match_mode == RouteMatchMode::Strict);
     let service_type_count = c.service_types.len() as i32;
-    RuleRank([mode_score, rule.priority, dest_count, has_origin, is_strict, service_type_count])
+    RuleRank([
+        mode_score,
+        rule.priority,
+        dest_count,
+        has_origin,
+        is_strict,
+        service_type_count,
+    ])
 }
 
 pub struct CompiledRule {
@@ -69,9 +82,19 @@ impl CompiledRule {
             .filter(|d| !d.is_empty())
             .map(norm_loc)
             .collect();
-        let service_types_norm: Vec<String> = rule.conditions.service_types.iter().map(|s| norm_vehicle(s)).collect();
-        let booking_ids_norm: Vec<String> =
-            rule.conditions.booking_ids.iter().map(|s| norm_id(s)).filter(|s| !s.is_empty()).collect();
+        let service_types_norm: Vec<String> = rule
+            .conditions
+            .service_types
+            .iter()
+            .map(|s| norm_vehicle(s))
+            .collect();
+        let booking_ids_norm: Vec<String> = rule
+            .conditions
+            .booking_ids
+            .iter()
+            .map(|s| norm_id(s))
+            .filter(|s| !s.is_empty())
+            .collect();
 
         CompiledRule {
             id: rule.id.clone(),
@@ -100,7 +123,8 @@ impl CompiledRule {
         let c = &self.conditions;
 
         if c.max_accept_count > 0 {
-            let used = c.accepted_count + state.rule_accept_counts.get(&self.id).copied().unwrap_or(0);
+            let used =
+                c.accepted_count + state.rule_accept_counts.get(&self.id).copied().unwrap_or(0);
             if used >= c.max_accept_count {
                 return false;
             }
@@ -118,7 +142,7 @@ impl CompiledRule {
         }
 
         match self.mode {
-            RuleMode::Route => self.matches_route(booking),   // implemented in Task 8
+            RuleMode::Route => self.matches_route(booking), // implemented in Task 8
             RuleMode::Filter => self.matches_filter(booking), // implemented in Task 9
             RuleMode::BookingId => unreachable!("handled above"),
         }
@@ -131,14 +155,19 @@ impl CompiledRule {
         let tx = norm_id(&booking.spx_tx_id);
         let bk = norm_id(&booking.booking_id);
         let rq = norm_id(&booking.request_id);
-        self.booking_ids_norm
-            .iter()
-            .any(|id| tx == *id || bk == *id || rq == *id || (id.len() >= 9 && tx.contains(id.as_str())))
+        self.booking_ids_norm.iter().any(|id| {
+            tx == *id || bk == *id || rq == *id || (id.len() >= 9 && tx.contains(id.as_str()))
+        })
     }
 
     fn matches_route(&self, booking: &Booking) -> bool {
         let c = &self.conditions;
-        let stops: Vec<String> = booking.route_stops.iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+        let stops: Vec<String> = booking
+            .route_stops
+            .iter()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
         let flexible = c.match_mode == RouteMatchMode::Flexible;
 
         // SAFETY GUARD: a route rule with no origin, no destinations, AND no other active
@@ -157,8 +186,12 @@ impl CompiledRule {
             // Origin must be the REAL start point: report_station_name first, then the first
             // stop. Region/province labels never satisfy a route rule (Booking doesn't even
             // carry those fields — see Task 1).
-            let by_report_station = loc_match_normalized(&booking.report_station, &self.origin_norm);
-            let by_first_stop = stops.first().map(|s| loc_match_normalized(s, &self.origin_norm)).unwrap_or(false);
+            let by_report_station =
+                loc_match_normalized(&booking.report_station, &self.origin_norm);
+            let by_first_stop = stops
+                .first()
+                .map(|s| loc_match_normalized(s, &self.origin_norm))
+                .unwrap_or(false);
             if !by_report_station && !by_first_stop {
                 return false;
             }
@@ -169,7 +202,10 @@ impl CompiledRule {
                 return false;
             }
             let origin_consumes_first_stop = if self.has_origin {
-                stops.first().map(|s| loc_match_normalized(s, &self.origin_norm)).unwrap_or(false)
+                stops
+                    .first()
+                    .map(|s| loc_match_normalized(s, &self.origin_norm))
+                    .unwrap_or(false)
             } else {
                 false
             };
@@ -191,7 +227,11 @@ impl CompiledRule {
         }
         if !self.service_types_norm.is_empty() {
             let ticket_norm = norm_vehicle(&booking.vehicle_type);
-            if !self.service_types_norm.iter().any(|r| vehicle_match_normalized(&ticket_norm, r)) {
+            if !self
+                .service_types_norm
+                .iter()
+                .any(|r| vehicle_match_normalized(&ticket_norm, r))
+            {
                 return false;
             }
         }
@@ -219,7 +259,12 @@ impl CompiledRule {
     /// immediately. FLEXIBLE: an intermediate (non-last) destination may be absent and is
     /// skipped without advancing the cursor; the LAST destination (the endpoint) must still be
     /// found or the whole match fails.
-    fn destinations_match_in_order(&self, stops: &[String], start_idx: usize, flexible: bool) -> bool {
+    fn destinations_match_in_order(
+        &self,
+        stops: &[String],
+        start_idx: usize,
+        flexible: bool,
+    ) -> bool {
         let mut idx = start_idx;
         let dests = &self.destinations_norm;
         for (d, want_norm) in dests.iter().enumerate() {
@@ -248,8 +293,11 @@ impl CompiledRule {
         // CP-4: an enabled filter rule with ZERO active conditions must match NOTHING — without
         // this guard every check below is skipped and the function falls through to `true`,
         // turning a blank/misconfigured filter rule into a blanket accept of the entire pool.
-        let filter_active =
-            c.max_weight.is_some() || c.max_cod_amount.is_some() || c.coc_only || c.non_coc_only || !self.service_types_norm.is_empty();
+        let filter_active = c.max_weight.is_some()
+            || c.max_cod_amount.is_some()
+            || c.coc_only
+            || c.non_coc_only
+            || !self.service_types_norm.is_empty();
         if !filter_active {
             return false;
         }
@@ -273,7 +321,11 @@ impl CompiledRule {
         }
         if !self.service_types_norm.is_empty() {
             let ticket_norm = norm_vehicle(&booking.vehicle_type);
-            if !self.service_types_norm.iter().any(|r| vehicle_match_normalized(&ticket_norm, r)) {
+            if !self
+                .service_types_norm
+                .iter()
+                .any(|r| vehicle_match_normalized(&ticket_norm, r))
+            {
                 return false;
             }
         }
@@ -290,7 +342,11 @@ pub fn matches_rule(booking: &Booking, rule: &AcceptRule, state: &MatchState) ->
 
 /// Compiles every candidate and returns the highest-ranked match, or `None`. Task 10 is where
 /// this gets its own dedicated ranking/overlap tests beyond this task's CP-6 smoke tests.
-pub fn find_best_matching_rule(booking: &Booking, rules: &[AcceptRule], state: &MatchState) -> Option<CompiledRule> {
+pub fn find_best_matching_rule(
+    booking: &Booking,
+    rules: &[AcceptRule],
+    state: &MatchState,
+) -> Option<CompiledRule> {
     let mut best: Option<CompiledRule> = None;
     for rule in rules {
         let compiled = CompiledRule::compile(rule);
@@ -299,7 +355,11 @@ pub fn find_best_matching_rule(booking: &Booking, rules: &[AcceptRule], state: &
         }
         best = match best {
             None => Some(compiled),
-            Some(b) => Some(if compiled.rank() > b.rank() { compiled } else { b }),
+            Some(b) => Some(if compiled.rank() > b.rank() {
+                compiled
+            } else {
+                b
+            }),
         };
     }
     best
@@ -339,7 +399,11 @@ mod tests {
 
         #[test]
         fn cap_reached_via_persisted_accepted_count_is_false() {
-            let mut conditions = RuleConditions { origin: "Padang DC".into(), destinations: vec!["Cileungsi DC".into()], ..Default::default() };
+            let mut conditions = RuleConditions {
+                origin: "Padang DC".into(),
+                destinations: vec!["Cileungsi DC".into()],
+                ..Default::default()
+            };
             conditions.max_accept_count = 1;
             conditions.accepted_count = 1;
             let r = mk_rule(RuleMode::Route, conditions);
@@ -349,7 +413,11 @@ mod tests {
 
         #[test]
         fn cap_reached_via_in_flight_rule_accept_counts_is_false() {
-            let mut conditions = RuleConditions { origin: "Padang DC".into(), destinations: vec!["Cileungsi DC".into()], ..Default::default() };
+            let mut conditions = RuleConditions {
+                origin: "Padang DC".into(),
+                destinations: vec!["Cileungsi DC".into()],
+                ..Default::default()
+            };
             conditions.max_accept_count = 2;
             conditions.accepted_count = 1;
             let r = mk_rule(RuleMode::Route, conditions);
@@ -368,7 +436,11 @@ mod tests {
         // un-ignore (the assertion itself needs no change).
         #[test]
         fn under_cap_still_matches() {
-            let mut conditions = RuleConditions { origin: "Padang DC".into(), destinations: vec!["Cileungsi DC".into()], ..Default::default() };
+            let mut conditions = RuleConditions {
+                origin: "Padang DC".into(),
+                destinations: vec!["Cileungsi DC".into()],
+                ..Default::default()
+            };
             conditions.max_accept_count = 2;
             let r = mk_rule(RuleMode::Route, conditions);
             let b = mk_booking(&["Padang DC", "Cileungsi DC"]);
@@ -381,7 +453,13 @@ mod tests {
 
         #[test]
         fn exact_spx_tx_id_match_is_true() {
-            let r = mk_rule(RuleMode::BookingId, RuleConditions { booking_ids: vec!["SPXID_VM_001396561".into()], ..Default::default() });
+            let r = mk_rule(
+                RuleMode::BookingId,
+                RuleConditions {
+                    booking_ids: vec!["SPXID_VM_001396561".into()],
+                    ..Default::default()
+                },
+            );
             let mut b = mk_booking(&[]);
             b.spx_tx_id = "SPXID_VM_001396561".into();
             assert!(CompiledRule::compile(&r).matches(&b, &mk_state()));
@@ -389,7 +467,13 @@ mod tests {
 
         #[test]
         fn short_partial_id_under_9_chars_does_not_substring_match() {
-            let r = mk_rule(RuleMode::BookingId, RuleConditions { booking_ids: vec!["12345".into()], ..Default::default() });
+            let r = mk_rule(
+                RuleMode::BookingId,
+                RuleConditions {
+                    booking_ids: vec!["12345".into()],
+                    ..Default::default()
+                },
+            );
             let mut b = mk_booking(&[]);
             b.spx_tx_id = "SPXID_12345_VM".into();
             assert!(!CompiledRule::compile(&r).matches(&b, &mk_state()));
@@ -397,7 +481,13 @@ mod tests {
 
         #[test]
         fn full_numeric_id_9_or_more_chars_substring_matches() {
-            let r = mk_rule(RuleMode::BookingId, RuleConditions { booking_ids: vec!["001396561".into()], ..Default::default() });
+            let r = mk_rule(
+                RuleMode::BookingId,
+                RuleConditions {
+                    booking_ids: vec!["001396561".into()],
+                    ..Default::default()
+                },
+            );
             let mut b = mk_booking(&[]);
             b.spx_tx_id = "SPXID_VM_001396561".into();
             assert!(CompiledRule::compile(&r).matches(&b, &mk_state()));
@@ -413,7 +503,13 @@ mod tests {
 
         #[test]
         fn separator_tolerant_spaces_in_pasted_id_still_match_underscore_booking_name() {
-            let r = mk_rule(RuleMode::BookingId, RuleConditions { booking_ids: vec!["SPXID VM 001397509".into()], ..Default::default() });
+            let r = mk_rule(
+                RuleMode::BookingId,
+                RuleConditions {
+                    booking_ids: vec!["SPXID VM 001397509".into()],
+                    ..Default::default()
+                },
+            );
             let mut b = mk_booking(&[]);
             b.spx_tx_id = "SPXID_VM_001397509".into();
             assert!(CompiledRule::compile(&r).matches(&b, &mk_state()));
@@ -421,7 +517,13 @@ mod tests {
 
         #[test]
         fn separator_tolerant_stray_underscore_space_still_matches() {
-            let r = mk_rule(RuleMode::BookingId, RuleConditions { booking_ids: vec!["SPXID_ VM_001397492C".into()], ..Default::default() });
+            let r = mk_rule(
+                RuleMode::BookingId,
+                RuleConditions {
+                    booking_ids: vec!["SPXID_ VM_001397492C".into()],
+                    ..Default::default()
+                },
+            );
             let mut b = mk_booking(&[]);
             b.spx_tx_id = "SPXID_VM_001397492C".into();
             assert!(CompiledRule::compile(&r).matches(&b, &mk_state()));
@@ -435,7 +537,14 @@ mod tests {
         fn disabled_rule_never_matches() {
             let r = AcceptRule {
                 enabled: false,
-                ..mk_rule(RuleMode::Route, RuleConditions { origin: "Padang DC".into(), destinations: vec!["Cileungsi DC".into()], ..Default::default() })
+                ..mk_rule(
+                    RuleMode::Route,
+                    RuleConditions {
+                        origin: "Padang DC".into(),
+                        destinations: vec!["Cileungsi DC".into()],
+                        ..Default::default()
+                    },
+                )
             };
             let b = mk_booking(&["Padang DC", "Cileungsi DC"]);
             assert!(!CompiledRule::compile(&r).matches(&b, &mk_state()));
@@ -460,12 +569,25 @@ mod tests {
             let bkid = AcceptRule {
                 id: "bk".into(),
                 priority: 0,
-                ..mk_rule(RuleMode::BookingId, RuleConditions { booking_ids: vec!["BKID12345678".into()], ..Default::default() })
+                ..mk_rule(
+                    RuleMode::BookingId,
+                    RuleConditions {
+                        booking_ids: vec!["BKID12345678".into()],
+                        ..Default::default()
+                    },
+                )
             };
             let route = AcceptRule {
                 id: "rt".into(),
                 priority: 9,
-                ..mk_rule(RuleMode::Route, RuleConditions { origin: "Padang DC".into(), destinations: vec!["Cileungsi DC".into()], ..Default::default() })
+                ..mk_rule(
+                    RuleMode::Route,
+                    RuleConditions {
+                        origin: "Padang DC".into(),
+                        destinations: vec!["Cileungsi DC".into()],
+                        ..Default::default()
+                    },
+                )
             };
             let best = find_best_matching_rule(&b, &[route, bkid], &mk_state());
             let best = best.expect("expected a match");
@@ -476,10 +598,23 @@ mod tests {
         #[test]
         fn among_two_route_rules_higher_priority_still_wins() {
             let b = mk_booking(&["Padang DC", "Cileungsi DC"]);
-            let conditions = || RuleConditions { origin: "Padang DC".into(), destinations: vec!["Cileungsi DC".into()], ..Default::default() };
-            let lo = AcceptRule { id: "lo".into(), priority: 1, ..mk_rule(RuleMode::Route, conditions()) };
-            let hi = AcceptRule { id: "hi".into(), priority: 5, ..mk_rule(RuleMode::Route, conditions()) };
-            let best = find_best_matching_rule(&b, &[lo, hi], &mk_state()).expect("expected a match");
+            let conditions = || RuleConditions {
+                origin: "Padang DC".into(),
+                destinations: vec!["Cileungsi DC".into()],
+                ..Default::default()
+            };
+            let lo = AcceptRule {
+                id: "lo".into(),
+                priority: 1,
+                ..mk_rule(RuleMode::Route, conditions())
+            };
+            let hi = AcceptRule {
+                id: "hi".into(),
+                priority: 5,
+                ..mk_rule(RuleMode::Route, conditions())
+            };
+            let best =
+                find_best_matching_rule(&b, &[lo, hi], &mk_state()).expect("expected a match");
             assert_eq!(best.id, "hi");
         }
 
@@ -493,12 +628,25 @@ mod tests {
             let bkid = AcceptRule {
                 id: "bk".into(),
                 priority: 0,
-                ..mk_rule(RuleMode::BookingId, RuleConditions { booking_ids: vec!["BKID12345678".into()], ..Default::default() })
+                ..mk_rule(
+                    RuleMode::BookingId,
+                    RuleConditions {
+                        booking_ids: vec!["BKID12345678".into()],
+                        ..Default::default()
+                    },
+                )
             };
             let route = AcceptRule {
                 id: "rt".into(),
                 priority: 9,
-                ..mk_rule(RuleMode::Route, RuleConditions { origin: "Padang DC".into(), destinations: vec!["Cileungsi DC".into()], ..Default::default() })
+                ..mk_rule(
+                    RuleMode::Route,
+                    RuleConditions {
+                        origin: "Padang DC".into(),
+                        destinations: vec!["Cileungsi DC".into()],
+                        ..Default::default()
+                    },
+                )
             };
             assert!(
                 rule_rank(&bkid) > rule_rank(&route),
@@ -510,9 +658,21 @@ mod tests {
         // still decides (indices 0 tie at mode_score=2, index 1 breaks the tie: 5 > 1).
         #[test]
         fn rule_rank_among_two_route_rules_higher_priority_ranks_higher_directly() {
-            let conditions = || RuleConditions { origin: "Padang DC".into(), destinations: vec!["Cileungsi DC".into()], ..Default::default() };
-            let lo = AcceptRule { id: "lo".into(), priority: 1, ..mk_rule(RuleMode::Route, conditions()) };
-            let hi = AcceptRule { id: "hi".into(), priority: 5, ..mk_rule(RuleMode::Route, conditions()) };
+            let conditions = || RuleConditions {
+                origin: "Padang DC".into(),
+                destinations: vec!["Cileungsi DC".into()],
+                ..Default::default()
+            };
+            let lo = AcceptRule {
+                id: "lo".into(),
+                priority: 1,
+                ..mk_rule(RuleMode::Route, conditions())
+            };
+            let hi = AcceptRule {
+                id: "hi".into(),
+                priority: 5,
+                ..mk_rule(RuleMode::Route, conditions())
+            };
             assert!(rule_rank(&hi) > rule_rank(&lo));
         }
     }
@@ -521,7 +681,11 @@ mod tests {
         use super::*;
 
         fn route(origin: &str, dests: &[&str]) -> RuleConditions {
-            RuleConditions { origin: origin.into(), destinations: dests.iter().map(|s| s.to_string()).collect(), ..Default::default() }
+            RuleConditions {
+                origin: origin.into(),
+                destinations: dests.iter().map(|s| s.to_string()).collect(),
+                ..Default::default()
+            }
         }
 
         #[test]
@@ -533,7 +697,13 @@ mod tests {
 
         #[test]
         fn bali_origin_does_not_sweep_balikpapan_dc_route() {
-            let conditions = RuleConditions { origin: "bali".into(), destinations: vec![], booking_type: RuleBookingType::All, service_types: vec!["x".into()], ..Default::default() };
+            let conditions = RuleConditions {
+                origin: "bali".into(),
+                destinations: vec![],
+                booking_type: RuleBookingType::All,
+                service_types: vec!["x".into()],
+                ..Default::default()
+            };
             let r = mk_rule(RuleMode::Route, conditions);
             let b = mk_booking(&["Balikpapan DC", "Pontianak DC"]);
             assert!(!CompiledRule::compile(&r).matches(&b, &mk_state()));
@@ -609,7 +779,14 @@ mod tests {
         fn no_shift_trip_condition_unaffected_matches() {
             let mut b = mk_booking(&["Padang DC", "Cileungsi DC"]);
             b.shift_type = 1;
-            let r = mk_rule(RuleMode::Route, RuleConditions { origin: "Padang DC".into(), destinations: vec!["Cileungsi DC".into()], ..Default::default() });
+            let r = mk_rule(
+                RuleMode::Route,
+                RuleConditions {
+                    origin: "Padang DC".into(),
+                    destinations: vec!["Cileungsi DC".into()],
+                    ..Default::default()
+                },
+            );
             assert!(CompiledRule::compile(&r).matches(&b, &mk_state()));
         }
 
@@ -617,27 +794,60 @@ mod tests {
         fn shift_types_filter_matches_when_booking_shift_in_list() {
             let mut b = mk_booking(&["Padang DC", "Cileungsi DC"]);
             b.shift_type = 1;
-            let r = mk_rule(RuleMode::Route, RuleConditions { origin: "Padang DC".into(), destinations: vec!["Cileungsi DC".into()], shift_types: vec![1, 2], ..Default::default() });
+            let r = mk_rule(
+                RuleMode::Route,
+                RuleConditions {
+                    origin: "Padang DC".into(),
+                    destinations: vec!["Cileungsi DC".into()],
+                    shift_types: vec![1, 2],
+                    ..Default::default()
+                },
+            );
             assert!(CompiledRule::compile(&r).matches(&b, &mk_state()));
         }
 
         #[test]
         fn shift_types_filter_rejects_when_booking_shift_not_in_list() {
             let b = mk_booking(&["Padang DC", "Cileungsi DC"]); // shift_type defaults to 0
-            let r = mk_rule(RuleMode::Route, RuleConditions { origin: "Padang DC".into(), destinations: vec!["Cileungsi DC".into()], shift_types: vec![2], ..Default::default() });
+            let r = mk_rule(
+                RuleMode::Route,
+                RuleConditions {
+                    origin: "Padang DC".into(),
+                    destinations: vec!["Cileungsi DC".into()],
+                    shift_types: vec![2],
+                    ..Default::default()
+                },
+            );
             assert!(!CompiledRule::compile(&r).matches(&b, &mk_state()));
         }
 
         #[test]
         fn trip_types_filter_rejects_when_booking_trip_not_in_list() {
             let b = mk_booking(&["Padang DC", "Cileungsi DC"]); // trip_type defaults to 0
-            let r = mk_rule(RuleMode::Route, RuleConditions { origin: "Padang DC".into(), destinations: vec!["Cileungsi DC".into()], trip_types: vec![1], ..Default::default() });
+            let r = mk_rule(
+                RuleMode::Route,
+                RuleConditions {
+                    origin: "Padang DC".into(),
+                    destinations: vec!["Cileungsi DC".into()],
+                    trip_types: vec![1],
+                    ..Default::default()
+                },
+            );
             assert!(!CompiledRule::compile(&r).matches(&b, &mk_state()));
         }
 
         #[test]
         fn shift_and_trip_both_required_both_must_match() {
-            let r = mk_rule(RuleMode::Route, RuleConditions { origin: "Padang DC".into(), destinations: vec!["Cileungsi DC".into()], shift_types: vec![1], trip_types: vec![2], ..Default::default() });
+            let r = mk_rule(
+                RuleMode::Route,
+                RuleConditions {
+                    origin: "Padang DC".into(),
+                    destinations: vec!["Cileungsi DC".into()],
+                    shift_types: vec![1],
+                    trip_types: vec![2],
+                    ..Default::default()
+                },
+            );
             let compiled = CompiledRule::compile(&r);
             let mut ok = mk_booking(&["Padang DC", "Cileungsi DC"]);
             ok.shift_type = 1;
@@ -764,19 +974,26 @@ mod tests {
         #[test]
         fn the_real_target_ticket_matches() {
             let compiled = CompiledRule::compile(&kosambi_rule());
-            assert!(compiled.matches(&real_booking(&["Kosambi DC", "Mataram DC", "Mataram 2 DC"]), &mk_state()));
+            assert!(compiled.matches(
+                &real_booking(&["Kosambi DC", "Mataram DC", "Mataram 2 DC"]),
+                &mk_state()
+            ));
         }
 
         #[test]
         fn find_best_matching_rule_returns_the_route_rule() {
             let b = real_booking(&["Kosambi DC", "Mataram DC", "Mataram 2 DC"]);
-            let best = find_best_matching_rule(&b, &[kosambi_rule()], &mk_state()).expect("expected a match");
+            let best = find_best_matching_rule(&b, &[kosambi_rule()], &mk_state())
+                .expect("expected a match");
             assert_eq!(best.name, "Route Rule");
         }
 
         #[test]
         fn tronton_10wh_satisfies_service_type_tronton_capacity_suffix_tolerated() {
-            assert!(vehicle_match_normalized(&norm_vehicle("TRONTON (10WH)"), &norm_vehicle("TRONTON")));
+            assert!(vehicle_match_normalized(
+                &norm_vehicle("TRONTON (10WH)"),
+                &norm_vehicle("TRONTON")
+            ));
         }
 
         #[test]
@@ -843,7 +1060,10 @@ mod tests {
                 )
             };
             let compiled = CompiledRule::compile(&reversed);
-            assert!(!compiled.matches(&real_booking(&["Kosambi DC", "Mataram DC", "Mataram 2 DC"]), &mk_state()));
+            assert!(!compiled.matches(
+                &real_booking(&["Kosambi DC", "Mataram DC", "Mataram 2 DC"]),
+                &mk_state()
+            ));
         }
 
         #[test]
@@ -852,7 +1072,10 @@ mod tests {
             r.conditions.max_accept_count = 1;
             r.conditions.accepted_count = 1;
             let compiled = CompiledRule::compile(&r);
-            assert!(!compiled.matches(&real_booking(&["Kosambi DC", "Mataram DC", "Mataram 2 DC"]), &mk_state()));
+            assert!(!compiled.matches(
+                &real_booking(&["Kosambi DC", "Mataram DC", "Mataram 2 DC"]),
+                &mk_state()
+            ));
         }
     }
 
@@ -862,28 +1085,60 @@ mod tests {
 
         #[test]
         fn rute_berekor_hub_setelah_dc_tujuan_tetap_match_flexible() {
-            let r = mk_rule(RuleMode::Route, RuleConditions { origin: "Surabaya DC".into(), destinations: vec!["Denpasar DC".into()], match_mode: RouteMatchMode::Flexible, ..Default::default() });
+            let r = mk_rule(
+                RuleMode::Route,
+                RuleConditions {
+                    origin: "Surabaya DC".into(),
+                    destinations: vec!["Denpasar DC".into()],
+                    match_mode: RouteMatchMode::Flexible,
+                    ..Default::default()
+                },
+            );
             let b = mk_booking(&["Surabaya DC", "Denpasar DC", "Badung Hub"]);
             assert!(CompiledRule::compile(&r).matches(&b, &mk_state()));
         }
 
         #[test]
         fn paritas_strict_juga_match_kasus_ekor_hub_yang_sama() {
-            let r = mk_rule(RuleMode::Route, RuleConditions { origin: "Surabaya DC".into(), destinations: vec!["Denpasar DC".into()], match_mode: RouteMatchMode::Strict, ..Default::default() });
+            let r = mk_rule(
+                RuleMode::Route,
+                RuleConditions {
+                    origin: "Surabaya DC".into(),
+                    destinations: vec!["Denpasar DC".into()],
+                    match_mode: RouteMatchMode::Strict,
+                    ..Default::default()
+                },
+            );
             let b = mk_booking(&["Surabaya DC", "Denpasar DC", "Badung Hub"]);
             assert!(CompiledRule::compile(&r).matches(&b, &mk_state()));
         }
 
         #[test]
         fn destinasi_sama_sekali_tidak_ada_di_rute_flexible_tetap_false() {
-            let r = mk_rule(RuleMode::Route, RuleConditions { origin: "Surabaya DC".into(), destinations: vec!["Denpasar DC".into()], match_mode: RouteMatchMode::Flexible, ..Default::default() });
+            let r = mk_rule(
+                RuleMode::Route,
+                RuleConditions {
+                    origin: "Surabaya DC".into(),
+                    destinations: vec!["Denpasar DC".into()],
+                    match_mode: RouteMatchMode::Flexible,
+                    ..Default::default()
+                },
+            );
             let b = mk_booking(&["Surabaya DC", "Malang DC", "Badung Hub"]);
             assert!(!CompiledRule::compile(&r).matches(&b, &mk_state()));
         }
 
         #[test]
         fn flexible_tanpa_origin_endpoint_di_mana_pun_di_rute_match() {
-            let r = mk_rule(RuleMode::Route, RuleConditions { destinations: vec!["Cileungsi DC".into()], match_mode: RouteMatchMode::Flexible, booking_type: RuleBookingType::Spxid, ..Default::default() });
+            let r = mk_rule(
+                RuleMode::Route,
+                RuleConditions {
+                    destinations: vec!["Cileungsi DC".into()],
+                    match_mode: RouteMatchMode::Flexible,
+                    booking_type: RuleBookingType::Spxid,
+                    ..Default::default()
+                },
+            );
             let mut b = mk_booking(&["Tegal 2 DC", "Cileungsi DC", "Bekasi Hub"]);
             b.booking_type = BookingType::Spxid;
             assert!(CompiledRule::compile(&r).matches(&b, &mk_state()));
@@ -891,14 +1146,30 @@ mod tests {
 
         #[test]
         fn flexible_destinasi_yang_hanya_muncul_di_posisi_origin_tidak_dihitung() {
-            let r = mk_rule(RuleMode::Route, RuleConditions { origin: "Denpasar DC".into(), destinations: vec!["Denpasar DC".into()], match_mode: RouteMatchMode::Flexible, ..Default::default() });
+            let r = mk_rule(
+                RuleMode::Route,
+                RuleConditions {
+                    origin: "Denpasar DC".into(),
+                    destinations: vec!["Denpasar DC".into()],
+                    match_mode: RouteMatchMode::Flexible,
+                    ..Default::default()
+                },
+            );
             let b = mk_booking(&["Denpasar DC", "Badung Hub"]);
             assert!(!CompiledRule::compile(&r).matches(&b, &mk_state()));
         }
 
         #[test]
         fn flexible_dengan_rute_kosong_belum_enrich_false() {
-            let r = mk_rule(RuleMode::Route, RuleConditions { origin: "Surabaya DC".into(), destinations: vec!["Denpasar DC".into()], match_mode: RouteMatchMode::Flexible, ..Default::default() });
+            let r = mk_rule(
+                RuleMode::Route,
+                RuleConditions {
+                    origin: "Surabaya DC".into(),
+                    destinations: vec!["Denpasar DC".into()],
+                    match_mode: RouteMatchMode::Flexible,
+                    ..Default::default()
+                },
+            );
             let mut b = mk_booking(&[]);
             b.report_station = "Surabaya DC".into();
             assert!(!CompiledRule::compile(&r).matches(&b, &mk_state()));
@@ -911,7 +1182,15 @@ mod tests {
 
         #[test]
         fn service_types_empty_accepts_any_vehicle() {
-            let r = mk_rule(RuleMode::Route, RuleConditions { origin: "Surabaya DC".into(), destinations: vec!["Denpasar DC".into()], service_types: vec![], ..Default::default() });
+            let r = mk_rule(
+                RuleMode::Route,
+                RuleConditions {
+                    origin: "Surabaya DC".into(),
+                    destinations: vec!["Denpasar DC".into()],
+                    service_types: vec![],
+                    ..Default::default()
+                },
+            );
             let mut b = mk_booking(&["Surabaya DC", "Denpasar DC"]);
             b.vehicle_type = "BLINDVAN (4WH)".into();
             assert!(CompiledRule::compile(&r).matches(&b, &mk_state()));
@@ -919,7 +1198,15 @@ mod tests {
 
         #[test]
         fn service_types_filled_rejects_unlisted_vehicle() {
-            let r = mk_rule(RuleMode::Route, RuleConditions { origin: "Surabaya DC".into(), destinations: vec!["Denpasar DC".into()], service_types: vec!["TRONTON".into()], ..Default::default() });
+            let r = mk_rule(
+                RuleMode::Route,
+                RuleConditions {
+                    origin: "Surabaya DC".into(),
+                    destinations: vec!["Denpasar DC".into()],
+                    service_types: vec!["TRONTON".into()],
+                    ..Default::default()
+                },
+            );
             let mut b = mk_booking(&["Surabaya DC", "Denpasar DC"]);
             b.vehicle_type = "BLINDVAN (4WH)".into();
             assert!(!CompiledRule::compile(&r).matches(&b, &mk_state()));
@@ -931,7 +1218,13 @@ mod tests {
 
         #[test]
         fn coc_only_treats_spxid_as_coc_even_when_cod_flag_is_false() {
-            let r = mk_rule(RuleMode::Filter, RuleConditions { coc_only: true, ..Default::default() });
+            let r = mk_rule(
+                RuleMode::Filter,
+                RuleConditions {
+                    coc_only: true,
+                    ..Default::default()
+                },
+            );
             let mut b = mk_booking(&[]);
             b.booking_type = BookingType::Spxid;
             assert!(CompiledRule::compile(&r).matches(&b, &mk_state()));
@@ -939,7 +1232,13 @@ mod tests {
 
         #[test]
         fn coc_only_rejects_reguler_even_when_cod_flag_is_true() {
-            let r = mk_rule(RuleMode::Filter, RuleConditions { coc_only: true, ..Default::default() });
+            let r = mk_rule(
+                RuleMode::Filter,
+                RuleConditions {
+                    coc_only: true,
+                    ..Default::default()
+                },
+            );
             let mut b = mk_booking(&[]);
             b.booking_type = BookingType::Reguler;
             b.cod_amount = 1.0; // stand-in for "COD flag true"; matches_filter must not read this as COC
@@ -948,7 +1247,13 @@ mod tests {
 
         #[test]
         fn non_coc_only_rejects_spxid_even_when_cod_flag_is_false() {
-            let r = mk_rule(RuleMode::Filter, RuleConditions { non_coc_only: true, ..Default::default() });
+            let r = mk_rule(
+                RuleMode::Filter,
+                RuleConditions {
+                    non_coc_only: true,
+                    ..Default::default()
+                },
+            );
             let mut b = mk_booking(&[]);
             b.booking_type = BookingType::Spxid;
             assert!(!CompiledRule::compile(&r).matches(&b, &mk_state()));
@@ -960,7 +1265,13 @@ mod tests {
 
         #[test]
         fn max_weight_rejects_heavier_booking_accepts_lighter_or_equal() {
-            let r = mk_rule(RuleMode::Filter, RuleConditions { max_weight: Some(1000.0), ..Default::default() });
+            let r = mk_rule(
+                RuleMode::Filter,
+                RuleConditions {
+                    max_weight: Some(1000.0),
+                    ..Default::default()
+                },
+            );
             let compiled = CompiledRule::compile(&r);
             let mut heavy = mk_booking(&[]);
             heavy.weight = 1000.1;
@@ -976,7 +1287,13 @@ mod tests {
             // routed max_cod_amount through a u32-narrowing helper again, this value would
             // silently clip and this test would start failing (rejecting a booking it should
             // accept, or vice versa).
-            let r = mk_rule(RuleMode::Filter, RuleConditions { max_cod_amount: Some(5_000_000_000.0), ..Default::default() });
+            let r = mk_rule(
+                RuleMode::Filter,
+                RuleConditions {
+                    max_cod_amount: Some(5_000_000_000.0),
+                    ..Default::default()
+                },
+            );
             let compiled = CompiledRule::compile(&r);
             let mut under = mk_booking(&[]);
             under.cod_amount = 4_999_999_999.0;
@@ -999,7 +1316,13 @@ mod tests {
 
         #[test]
         fn filter_rule_with_active_condition_still_matches_correctly() {
-            let r = mk_rule(RuleMode::Filter, RuleConditions { coc_only: true, ..Default::default() });
+            let r = mk_rule(
+                RuleMode::Filter,
+                RuleConditions {
+                    coc_only: true,
+                    ..Default::default()
+                },
+            );
             let compiled = CompiledRule::compile(&r);
             let mut spxid = mk_booking(&["X"]);
             spxid.booking_type = BookingType::Spxid;
@@ -1015,7 +1338,15 @@ mod tests {
         use super::*;
 
         fn rule() -> AcceptRule {
-            mk_rule(RuleMode::Route, RuleConditions { origin: "Jakarta Hub".into(), destinations: vec!["Bandung DC".into(), "Surabaya DC".into()], match_mode: RouteMatchMode::Flexible, ..Default::default() })
+            mk_rule(
+                RuleMode::Route,
+                RuleConditions {
+                    origin: "Jakarta Hub".into(),
+                    destinations: vec!["Bandung DC".into(), "Surabaya DC".into()],
+                    match_mode: RouteMatchMode::Flexible,
+                    ..Default::default()
+                },
+            )
         }
 
         #[test]
@@ -1060,10 +1391,31 @@ mod tests {
                 match_mode: RouteMatchMode::Strict,
                 ..Default::default()
             };
-            let generic = AcceptRule { id: "generic".into(), name: "generic".into(), ..mk_rule(RuleMode::Route, RuleConditions { destinations: vec!["Cileungsi DC".into()], ..base() }) };
-            let specific = AcceptRule { id: "specific".into(), name: "specific".into(), ..mk_rule(RuleMode::Route, RuleConditions { destinations: vec!["Palembang DC".into(), "Cileungsi DC".into()], ..base() }) };
+            let generic = AcceptRule {
+                id: "generic".into(),
+                name: "generic".into(),
+                ..mk_rule(
+                    RuleMode::Route,
+                    RuleConditions {
+                        destinations: vec!["Cileungsi DC".into()],
+                        ..base()
+                    },
+                )
+            };
+            let specific = AcceptRule {
+                id: "specific".into(),
+                name: "specific".into(),
+                ..mk_rule(
+                    RuleMode::Route,
+                    RuleConditions {
+                        destinations: vec!["Palembang DC".into(), "Cileungsi DC".into()],
+                        ..base()
+                    },
+                )
+            };
 
-            let best = find_best_matching_rule(&b, &[generic, specific], &mk_state()).expect("expected a match");
+            let best = find_best_matching_rule(&b, &[generic, specific], &mk_state())
+                .expect("expected a match");
             assert_eq!(best.id, "specific");
         }
 
@@ -1077,18 +1429,31 @@ mod tests {
 
             let route = AcceptRule {
                 id: "route".into(),
-                ..mk_rule(RuleMode::Route, RuleConditions {
-                    origin: "Aceh DC".into(),
-                    destinations: vec!["Cileungsi DC".into()],
-                    booking_type: RuleBookingType::Spxid,
-                    service_types: vec!["TRONTON".into()],
-                    coc_only: true,
-                    ..Default::default()
-                })
+                ..mk_rule(
+                    RuleMode::Route,
+                    RuleConditions {
+                        origin: "Aceh DC".into(),
+                        destinations: vec!["Cileungsi DC".into()],
+                        booking_type: RuleBookingType::Spxid,
+                        service_types: vec!["TRONTON".into()],
+                        coc_only: true,
+                        ..Default::default()
+                    },
+                )
             };
-            let target = AcceptRule { id: "target".into(), ..mk_rule(RuleMode::BookingId, RuleConditions { booking_ids: vec!["SPXID_VM_001397649".into()], ..Default::default() }) };
+            let target = AcceptRule {
+                id: "target".into(),
+                ..mk_rule(
+                    RuleMode::BookingId,
+                    RuleConditions {
+                        booking_ids: vec!["SPXID_VM_001397649".into()],
+                        ..Default::default()
+                    },
+                )
+            };
 
-            let best = find_best_matching_rule(&b, &[route, target], &mk_state()).expect("expected a match");
+            let best = find_best_matching_rule(&b, &[route, target], &mk_state())
+                .expect("expected a match");
             assert_eq!(best.id, "target");
         }
     }
@@ -1098,15 +1463,30 @@ mod tests {
 
         #[test]
         fn separator_beda_spasi_vs_underscore_tetap_mengembalikan_raw_id() {
-            let r = mk_rule(RuleMode::BookingId, RuleConditions { booking_ids: vec!["SPXID VM 001402220".into()], ..Default::default() });
+            let r = mk_rule(
+                RuleMode::BookingId,
+                RuleConditions {
+                    booking_ids: vec!["SPXID VM 001402220".into()],
+                    ..Default::default()
+                },
+            );
             let mut b = mk_booking(&[]);
             b.spx_tx_id = "SPXID_VM_001402220".into();
-            assert_eq!(matched_booking_id_for(&b, &r), Some("SPXID VM 001402220".to_string()));
+            assert_eq!(
+                matched_booking_id_for(&b, &r),
+                Some("SPXID VM 001402220".to_string())
+            );
         }
 
         #[test]
         fn match_via_booking_id_bukan_spx_tx_id() {
-            let r = mk_rule(RuleMode::BookingId, RuleConditions { booking_ids: vec!["6254861".into()], ..Default::default() });
+            let r = mk_rule(
+                RuleMode::BookingId,
+                RuleConditions {
+                    booking_ids: vec!["6254861".into()],
+                    ..Default::default()
+                },
+            );
             let mut b = mk_booking(&[]);
             b.booking_id = "6254861".into();
             assert_eq!(matched_booking_id_for(&b, &r), Some("6254861".to_string()));
@@ -1114,28 +1494,58 @@ mod tests {
 
         #[test]
         fn match_via_request_id() {
-            let r = mk_rule(RuleMode::BookingId, RuleConditions { booking_ids: vec!["REQ-000123".into()], ..Default::default() });
+            let r = mk_rule(
+                RuleMode::BookingId,
+                RuleConditions {
+                    booking_ids: vec!["REQ-000123".into()],
+                    ..Default::default()
+                },
+            );
             let mut b = mk_booking(&[]);
             b.request_id = "REQ_000123".into();
-            assert_eq!(matched_booking_id_for(&b, &r), Some("REQ-000123".to_string()));
+            assert_eq!(
+                matched_booking_id_for(&b, &r),
+                Some("REQ-000123".to_string())
+            );
         }
 
         #[test]
         fn substring_hanya_untuk_id_panjang_9_plus() {
-            let short = mk_rule(RuleMode::BookingId, RuleConditions { booking_ids: vec!["12345".into()], ..Default::default() });
+            let short = mk_rule(
+                RuleMode::BookingId,
+                RuleConditions {
+                    booking_ids: vec!["12345".into()],
+                    ..Default::default()
+                },
+            );
             let mut b_short = mk_booking(&[]);
             b_short.spx_tx_id = "SPXID_12345_VM".into();
             assert_eq!(matched_booking_id_for(&b_short, &short), None);
 
-            let long = mk_rule(RuleMode::BookingId, RuleConditions { booking_ids: vec!["001402220".into()], ..Default::default() });
+            let long = mk_rule(
+                RuleMode::BookingId,
+                RuleConditions {
+                    booking_ids: vec!["001402220".into()],
+                    ..Default::default()
+                },
+            );
             let mut b_long = mk_booking(&[]);
             b_long.spx_tx_id = "SPXID_VM_001402220".into();
-            assert_eq!(matched_booking_id_for(&b_long, &long), Some("001402220".to_string()));
+            assert_eq!(
+                matched_booking_id_for(&b_long, &long),
+                Some("001402220".to_string())
+            );
         }
 
         #[test]
         fn tidak_cocok_null_daftar_kosong_null() {
-            let r = mk_rule(RuleMode::BookingId, RuleConditions { booking_ids: vec!["SPXID_VM_001402220".into()], ..Default::default() });
+            let r = mk_rule(
+                RuleMode::BookingId,
+                RuleConditions {
+                    booking_ids: vec!["SPXID_VM_001402220".into()],
+                    ..Default::default()
+                },
+            );
             let mut b = mk_booking(&[]);
             b.spx_tx_id = "SPXID_VM_9".into();
             assert_eq!(matched_booking_id_for(&b, &r), None);
@@ -1148,11 +1558,20 @@ mod tests {
 
         #[test]
         fn paritas_dengan_matches_rule_pada_kasus_separator_kontrak_anti_drift() {
-            let r = mk_rule(RuleMode::BookingId, RuleConditions { booking_ids: vec!["SPXID_ VM_001397492C".into()], ..Default::default() });
+            let r = mk_rule(
+                RuleMode::BookingId,
+                RuleConditions {
+                    booking_ids: vec!["SPXID_ VM_001397492C".into()],
+                    ..Default::default()
+                },
+            );
             let mut b = mk_booking(&[]);
             b.spx_tx_id = "SPXID_VM_001397492C".into();
             assert!(matches_rule(&b, &r, &mk_state()));
-            assert_eq!(matched_booking_id_for(&b, &r), Some("SPXID_ VM_001397492C".to_string()));
+            assert_eq!(
+                matched_booking_id_for(&b, &r),
+                Some("SPXID_ VM_001397492C".to_string())
+            );
         }
     }
 
@@ -1168,13 +1587,20 @@ mod tests {
             // normalization happens inside `compile`, not inside `matches`/`matches_route`.
             let rule = mk_rule(
                 RuleMode::Route,
-                RuleConditions { origin: "Padang DC".into(), destinations: vec!["Cileungsi DC".into()], ..Default::default() },
+                RuleConditions {
+                    origin: "Padang DC".into(),
+                    destinations: vec!["Cileungsi DC".into()],
+                    ..Default::default()
+                },
             );
             let compiled = CompiledRule::compile(&rule);
 
             assert!(compiled.matches(&mk_booking(&["Padang DC", "Cileungsi DC"]), &mk_state()));
             assert!(!compiled.matches(&mk_booking(&["Padang DC", "Surabaya DC"]), &mk_state()));
-            assert!(compiled.matches(&mk_booking(&["Padang DC", "Jakarta Hub", "Cileungsi DC"]), &mk_state()));
+            assert!(compiled.matches(
+                &mk_booking(&["Padang DC", "Jakarta Hub", "Cileungsi DC"]),
+                &mk_state()
+            ));
             assert!(!compiled.matches(&mk_booking(&["Bandung DC", "Cileungsi DC"]), &mk_state()));
 
             // Precomputed fields are stable across all four calls above — confirm directly.

@@ -129,8 +129,16 @@ mod tests {
     // swallow an agency-dup loss as a self-win. agency_dup MUST win.
     #[test]
     fn agency_dup_checked_before_ok() {
-        let c = classify_accept_response(150399, false, "Your agency already accepted this request before");
-        assert_eq!(c.reason, AcceptReason::AgencyDup, "must NOT be misclassified as Ok");
+        let c = classify_accept_response(
+            150399,
+            false,
+            "Your agency already accepted this request before",
+        );
+        assert_eq!(
+            c.reason,
+            AcceptReason::AgencyDup,
+            "must NOT be misclassified as Ok"
+        );
         assert!(c.success);
     }
 }

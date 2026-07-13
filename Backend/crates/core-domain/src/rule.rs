@@ -104,7 +104,10 @@ pub struct RuleSanitizeResult {
 /// mode and `matched_booking_id_for` so the two can never disagree (see the module-level
 /// warning in Task 7/10's brief about the historical production incident this prevents).
 pub(crate) fn norm_id(s: &str) -> String {
-    s.to_lowercase().chars().filter(char::is_ascii_alphanumeric).collect()
+    s.to_lowercase()
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .collect()
 }
 
 fn uniq_keep_order<F: Fn(&str) -> String>(values: &[String], norm: F) -> Vec<String> {
@@ -160,13 +163,25 @@ pub fn sanitize_accept_rules(rules: &[RawAcceptRule]) -> RuleSanitizeResult {
         };
 
         let id_trimmed = raw.id.as_deref().unwrap_or("").trim().to_string();
-        let id = if id_trimmed.is_empty() { format!("rule_{}", idx + 1) } else { id_trimmed };
+        let id = if id_trimmed.is_empty() {
+            format!("rule_{}", idx + 1)
+        } else {
+            id_trimmed
+        };
 
         let name_trimmed = raw.name.as_deref().unwrap_or("").trim().to_string();
-        let name = if name_trimmed.is_empty() { format!("Rule {}", idx + 1) } else { name_trimmed };
+        let name = if name_trimmed.is_empty() {
+            format!("Rule {}", idx + 1)
+        } else {
+            name_trimmed
+        };
 
-        let raw_destinations: Vec<String> =
-            c.destinations.iter().map(|v| v.trim().to_string()).filter(|s| !s.is_empty()).collect();
+        let raw_destinations: Vec<String> = c
+            .destinations
+            .iter()
+            .map(|v| v.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
 
         let service_types_canon: Vec<String> = c
             .service_types
@@ -176,8 +191,12 @@ pub fn sanitize_accept_rules(rules: &[RawAcceptRule]) -> RuleSanitizeResult {
             .collect();
         let service_types = uniq_keep_order(&service_types_canon, norm_vehicle);
 
-        let booking_ids_trimmed: Vec<String> =
-            c.booking_ids.iter().map(|v| v.trim().to_string()).filter(|s| !s.is_empty()).collect();
+        let booking_ids_trimmed: Vec<String> = c
+            .booking_ids
+            .iter()
+            .map(|v| v.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
         let booking_ids = uniq_keep_order(&booking_ids_trimmed, norm_id);
 
         let destinations_capped: Vec<String> = raw_destinations.iter().take(5).cloned().collect();
@@ -195,8 +214,11 @@ pub fn sanitize_accept_rules(rules: &[RawAcceptRule]) -> RuleSanitizeResult {
             Some("reguler") => RuleBookingType::Reguler,
             _ => RuleBookingType::All,
         };
-        let match_mode =
-            if c.match_mode.as_deref() == Some("flexible") { RouteMatchMode::Flexible } else { RouteMatchMode::Strict };
+        let match_mode = if c.match_mode.as_deref() == Some("flexible") {
+            RouteMatchMode::Flexible
+        } else {
+            RouteMatchMode::Strict
+        };
 
         let max_weight = to_optional_non_neg_f64(c.max_weight);
         let max_cod_amount = to_optional_non_neg_f64(c.max_cod_amount);
@@ -231,28 +253,39 @@ pub fn sanitize_accept_rules(rules: &[RawAcceptRule]) -> RuleSanitizeResult {
         };
 
         if sanitized.mode == RuleMode::BookingId && booking_ids.is_empty() {
-            warnings.push(format!("Rule \"{name}\" kosong: mode booking_id tanpa Booking ID"));
+            warnings.push(format!(
+                "Rule \"{name}\" kosong: mode booking_id tanpa Booking ID"
+            ));
         }
         if sanitized.mode == RuleMode::Route && origin.is_empty() && destinations.is_empty() {
-            warnings.push(format!("Rule \"{name}\" kosong: mode route tanpa origin/destinasi"));
+            warnings.push(format!(
+                "Rule \"{name}\" kosong: mode route tanpa origin/destinasi"
+            ));
         }
         if coc_only && non_coc_only_raw {
             sanitized.conditions.non_coc_only = false;
-            warnings.push(format!("Rule \"{name}\" bentrok: COC dan Non aktif bersamaan, Non dimatikan"));
+            warnings.push(format!(
+                "Rule \"{name}\" bentrok: COC dan Non aktif bersamaan, Non dimatikan"
+            ));
         }
         if raw_destinations.len() > 5 {
             warnings.push(format!("Rule \"{name}\" dipotong ke maksimum 5 destinasi"));
         }
         if let Some(raw_name) = &raw.name {
             if raw_name.trim() != name {
-                warnings.push(format!("Rule \"{name}\" dirapikan: nama mengandung spasi berlebih"));
+                warnings.push(format!(
+                    "Rule \"{name}\" dirapikan: nama mengandung spasi berlebih"
+                ));
             }
         }
 
         out.push(sanitized);
     }
 
-    RuleSanitizeResult { rules: out, warnings }
+    RuleSanitizeResult {
+        rules: out,
+        warnings,
+    }
 }
 
 fn dedup_nonneg_ints(values: &[i64]) -> Vec<i32> {
@@ -313,21 +346,40 @@ pub fn dedupe_rules(rules: &[AcceptRule]) -> Vec<AcceptRule> {
         let c = &r.conditions;
 
         if r.mode == RuleMode::Route {
-            let dests_sig: String =
-                c.destinations.iter().map(|d| norm_loc(d)).filter(|s| !s.is_empty()).collect::<Vec<_>>().join(">");
+            let dests_sig: String = c
+                .destinations
+                .iter()
+                .map(|d| norm_loc(d))
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+                .join(">");
             let service_types_sig: String = {
-                let mut v: Vec<String> =
-                    c.service_types.iter().map(|s| s.to_lowercase().trim().to_string()).filter(|s| !s.is_empty()).collect();
+                let mut v: Vec<String> = c
+                    .service_types
+                    .iter()
+                    .map(|s| s.to_lowercase().trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
                 v.sort();
                 v.join(",")
             };
-            let mode_str = match c.match_mode { RouteMatchMode::Flexible => "flexible", RouteMatchMode::Strict => "strict" };
+            let mode_str = match c.match_mode {
+                RouteMatchMode::Flexible => "flexible",
+                RouteMatchMode::Strict => "strict",
+            };
             let booking_type_str = match c.booking_type {
                 RuleBookingType::Spxid => "spxid",
                 RuleBookingType::Reguler => "reguler",
                 RuleBookingType::All => "all",
             };
-            let sig = format!("{}|{}|{}|{}|{}", norm_loc(&c.origin), dests_sig, mode_str, booking_type_str, service_types_sig);
+            let sig = format!(
+                "{}|{}|{}|{}|{}",
+                norm_loc(&c.origin),
+                dests_sig,
+                mode_str,
+                booking_type_str,
+                service_types_sig
+            );
 
             if let Some(&at) = route_at.get(&sig) {
                 // Same lane already present → MERGE, never silently shrink capacity or lose
@@ -336,7 +388,8 @@ pub fn dedupe_rules(rules: &[AcceptRule]) -> Vec<AcceptRule> {
                 let a = out[at].conditions.max_accept_count;
                 let b = c.max_accept_count;
                 out[at].conditions.max_accept_count = if a == 0 || b == 0 { 0 } else { a.max(b) };
-                out[at].conditions.accepted_count = out[at].conditions.accepted_count.max(c.accepted_count);
+                out[at].conditions.accepted_count =
+                    out[at].conditions.accepted_count.max(c.accepted_count);
                 out[at].enabled = out[at].enabled || r.enabled;
                 continue;
             }
@@ -369,7 +422,14 @@ mod tests {
     use super::*;
 
     fn raw_rule(mode: &str, conditions: RawRuleConditions) -> RawAcceptRule {
-        RawAcceptRule { id: None, name: None, enabled: true, priority: None, mode: Some(mode.to_string()), conditions }
+        RawAcceptRule {
+            id: None,
+            name: None,
+            enabled: true,
+            priority: None,
+            mode: Some(mode.to_string()),
+            conditions,
+        }
     }
 
     mod sanitize_accept_rules_tests {
@@ -385,11 +445,21 @@ mod tests {
                 mode: Some("route".to_string()),
                 conditions: RawRuleConditions {
                     origin: Some("  Pekanbaru DC  ".to_string()),
-                    destinations: vec![" Lampung DC ", "Cileungsi DC", "Cileungsi DC", "A", "B", "C"]
+                    destinations: vec![
+                        " Lampung DC ",
+                        "Cileungsi DC",
+                        "Cileungsi DC",
+                        "A",
+                        "B",
+                        "C",
+                    ]
+                    .into_iter()
+                    .map(String::from)
+                    .collect(),
+                    service_types: vec!["tronton", "TRONTON (10WH)", " fuso std "]
                         .into_iter()
                         .map(String::from)
                         .collect(),
-                    service_types: vec!["tronton", "TRONTON (10WH)", " fuso std "].into_iter().map(String::from).collect(),
                     ..Default::default()
                 },
             };
@@ -401,15 +471,25 @@ mod tests {
                 result.rules[0].conditions.destinations,
                 vec!["Lampung DC", "Cileungsi DC", "A", "B"]
             );
-            assert_eq!(result.rules[0].conditions.service_types, vec!["TRONTON", "FUSO"]);
-            assert!(result.warnings.iter().any(|w| w.contains("maksimum 5 destinasi")));
+            assert_eq!(
+                result.rules[0].conditions.service_types,
+                vec!["TRONTON", "FUSO"]
+            );
+            assert!(result
+                .warnings
+                .iter()
+                .any(|w| w.contains("maksimum 5 destinasi")));
         }
 
         #[test]
         fn conflicting_coc_flags_are_resolved_safely() {
             let rule = raw_rule(
                 "filter",
-                RawRuleConditions { coc_only: true, non_coc_only: true, ..Default::default() },
+                RawRuleConditions {
+                    coc_only: true,
+                    non_coc_only: true,
+                    ..Default::default()
+                },
             );
             let result = sanitize_accept_rules(&[rule]);
             assert!(result.rules[0].conditions.coc_only);
@@ -421,10 +501,16 @@ mod tests {
         fn booking_id_rule_without_ids_emits_warning() {
             let rule = raw_rule(
                 "booking_id",
-                RawRuleConditions { booking_ids: vec!["  ".to_string(), String::new()], ..Default::default() },
+                RawRuleConditions {
+                    booking_ids: vec!["  ".to_string(), String::new()],
+                    ..Default::default()
+                },
             );
             let result = sanitize_accept_rules(&[rule]);
-            assert!(result.warnings.iter().any(|w| w.contains("tanpa Booking ID")));
+            assert!(result
+                .warnings
+                .iter()
+                .any(|w| w.contains("tanpa Booking ID")));
         }
 
         // Money-critical regression guard: `to_optional_non_neg_f64` exists specifically to keep
@@ -444,7 +530,10 @@ mod tests {
                 },
             );
             let result = sanitize_accept_rules(&[rule]);
-            assert_eq!(result.rules[0].conditions.max_cod_amount, Some(5_000_000_000.0));
+            assert_eq!(
+                result.rules[0].conditions.max_cod_amount,
+                Some(5_000_000_000.0)
+            );
             assert_eq!(result.rules[0].conditions.max_weight, Some(4_500_000_000.0));
         }
     }
@@ -467,7 +556,13 @@ mod tests {
             }
         }
 
-        fn route_rule_capped(id: &str, origin: &str, dests: &[&str], max_accept_count: u32, accepted_count: u32) -> AcceptRule {
+        fn route_rule_capped(
+            id: &str,
+            origin: &str,
+            dests: &[&str],
+            max_accept_count: u32,
+            accepted_count: u32,
+        ) -> AcceptRule {
             let mut r = route_rule(id, origin, dests);
             r.conditions.max_accept_count = max_accept_count;
             r.conditions.accepted_count = accepted_count;
@@ -568,7 +663,13 @@ mod tests {
 
         #[test]
         fn sanitize_then_dedupe_chain_drops_empty_booking_id_rule() {
-            let raw = raw_rule("booking_id", RawRuleConditions { booking_ids: vec![], ..Default::default() });
+            let raw = raw_rule(
+                "booking_id",
+                RawRuleConditions {
+                    booking_ids: vec![],
+                    ..Default::default()
+                },
+            );
             let sanitized = sanitize_accept_rules(&[raw]);
             assert_eq!(dedupe_rules(&sanitized.rules).len(), 0);
         }

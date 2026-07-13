@@ -44,7 +44,11 @@ mod tests {
     fn tokens_are_unique_and_hash_matches() {
         let (t1, h1) = generate_session_token().unwrap();
         let (t2, _h2) = generate_session_token().unwrap();
-        assert_ne!(t1.expose_secret(), t2.expose_secret(), "256-bit tokens must be unique");
+        assert_ne!(
+            t1.expose_secret(),
+            t2.expose_secret(),
+            "256-bit tokens must be unique"
+        );
         assert_eq!(hash_session_token(t1.expose_secret()), h1);
     }
 

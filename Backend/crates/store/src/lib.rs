@@ -55,8 +55,13 @@ mod tests {
         conn: &mut sqlx::pool::PoolConnection<sqlx::Postgres>,
         tenant_id: uuid::Uuid,
     ) -> sqlx::Transaction<'_, sqlx::Postgres> {
-        sqlx::query("SET ROLE app_role").execute(&mut **conn).await.expect("set role app_role");
-        let mut tx = sqlx::Acquire::begin(conn).await.expect("begin tx as app_role");
+        sqlx::query("SET ROLE app_role")
+            .execute(&mut **conn)
+            .await
+            .expect("set role app_role");
+        let mut tx = sqlx::Acquire::begin(conn)
+            .await
+            .expect("begin tx as app_role");
         sqlx::query("SELECT set_config('app.tenant_id', $1, true)")
             .bind(tenant_id.to_string())
             .execute(&mut *tx)
@@ -86,7 +91,11 @@ mod tests {
             .expect("fetch tenant");
         assert_eq!(fetched.name, "Test Tenant");
 
-        sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_id).execute(&pool).await.ok();
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_id)
+            .execute(&pool)
+            .await
+            .ok();
     }
 
     /// Round-trips an `accept_rules` row and verifies two things about the
@@ -133,7 +142,10 @@ mod tests {
         .await
         .expect("insert first accept_rule");
 
-        assert_eq!(first.route_signature.as_deref(), Some("padang dc|cileungsi dc|strict|all|"));
+        assert_eq!(
+            first.route_signature.as_deref(),
+            Some("padang dc|cileungsi dc|strict|all|")
+        );
 
         let dup_result = sqlx::query(
             "INSERT INTO accept_rules (tenant_id, name, mode, origin, destinations)
@@ -149,9 +161,17 @@ mod tests {
         assert!(dup_result.is_err(), "second insert with same tenant/mode/origin/destinations should hit the dedup unique index");
         let err = dup_result.unwrap_err();
         let db_err = err.as_database_error().expect("expected a database error");
-        assert_eq!(db_err.code().as_deref(), Some("23505"), "expected a unique_violation (23505), got: {db_err}");
+        assert_eq!(
+            db_err.code().as_deref(),
+            Some("23505"),
+            "expected a unique_violation (23505), got: {db_err}"
+        );
 
-        sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_id).execute(&pool).await.ok();
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_id)
+            .execute(&pool)
+            .await
+            .ok();
     }
 
     /// Proves the `service_types_sig` fix: two `accept_rules` rows sharing
@@ -207,10 +227,20 @@ mod tests {
             tronton.route_signature, fuso.route_signature,
             "route_signature must differ when service_types differ"
         );
-        assert_eq!(tronton.route_signature.as_deref(), Some("padang dc|cileungsi dc|strict|all|tronton"));
-        assert_eq!(fuso.route_signature.as_deref(), Some("padang dc|cileungsi dc|strict|all|fuso"));
+        assert_eq!(
+            tronton.route_signature.as_deref(),
+            Some("padang dc|cileungsi dc|strict|all|tronton")
+        );
+        assert_eq!(
+            fuso.route_signature.as_deref(),
+            Some("padang dc|cileungsi dc|strict|all|fuso")
+        );
 
-        sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_id).execute(&pool).await.ok();
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_id)
+            .execute(&pool)
+            .await
+            .ok();
     }
 
     /// Cross-checks the `bookings.is_coc` generated column against Fase 1's
@@ -259,10 +289,17 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap_or_else(|e| panic!("case {i} ({spx_id:?}, {booking_name:?}) insert failed: {e}"));
-            assert_eq!(row.0, *expected, "case {i}: spx_id={spx_id:?} booking_name={booking_name:?}");
+            assert_eq!(
+                row.0, *expected,
+                "case {i}: spx_id={spx_id:?} booking_name={booking_name:?}"
+            );
         }
 
-        sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_id).execute(&pool).await.ok();
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_id)
+            .execute(&pool)
+            .await
+            .ok();
     }
 
     /// Round-trips a `bookings` row through its typed `FromRow` struct
@@ -304,13 +341,23 @@ mod tests {
         assert_eq!(fetched.spx_id, "BK-ROUNDTRIP-1");
         assert_eq!(fetched.raw_data, raw_data);
         assert_eq!(fetched.status, "pending");
-        assert!(!fetched.is_coc, "spx_id/booking_name here do not start with SPXID");
-        assert!(fetched.needs_enrichment, "no route_detail_list/route_stops supplied");
+        assert!(
+            !fetched.is_coc,
+            "spx_id/booking_name here do not start with SPXID"
+        );
+        assert!(
+            fetched.needs_enrichment,
+            "no route_detail_list/route_stops supplied"
+        );
         assert_eq!(fetched.weight, 12.5);
         assert_eq!(fetched.cod_amount, 50000.0);
         assert!(!fetched.auto_accepted);
 
-        sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_id).execute(&pool).await.ok();
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_id)
+            .execute(&pool)
+            .await
+            .ok();
     }
 
     /// Proves `accept_events` is append-only at the DB permission level, not
@@ -335,15 +382,24 @@ mod tests {
         .expect("insert event");
 
         let mut conn = pool.acquire().await.expect("acquire");
-        sqlx::query("SET ROLE app_role").execute(&mut *conn).await.expect("set role");
-
-        let update_result = sqlx::query("UPDATE accept_events SET outcome = 'rejected' WHERE id = $1")
-            .bind(event_id.0)
+        sqlx::query("SET ROLE app_role")
             .execute(&mut *conn)
-            .await;
-        assert!(update_result.is_err(), "app_role must not be able to UPDATE accept_events");
+            .await
+            .expect("set role");
+
+        let update_result =
+            sqlx::query("UPDATE accept_events SET outcome = 'rejected' WHERE id = $1")
+                .bind(event_id.0)
+                .execute(&mut *conn)
+                .await;
+        assert!(
+            update_result.is_err(),
+            "app_role must not be able to UPDATE accept_events"
+        );
         let update_err = update_result.unwrap_err();
-        let update_db_err = update_err.as_database_error().expect("expected a database error");
+        let update_db_err = update_err
+            .as_database_error()
+            .expect("expected a database error");
         assert_eq!(
             update_db_err.code().as_deref(),
             Some("42501"),
@@ -354,9 +410,14 @@ mod tests {
             .bind(event_id.0)
             .execute(&mut *conn)
             .await;
-        assert!(delete_result.is_err(), "app_role must not be able to DELETE accept_events");
+        assert!(
+            delete_result.is_err(),
+            "app_role must not be able to DELETE accept_events"
+        );
         let delete_err = delete_result.unwrap_err();
-        let delete_db_err = delete_err.as_database_error().expect("expected a database error");
+        let delete_db_err = delete_err
+            .as_database_error()
+            .expect("expected a database error");
         assert_eq!(
             delete_db_err.code().as_deref(),
             Some("42501"),
@@ -366,7 +427,11 @@ mod tests {
         sqlx::query("RESET ROLE").execute(&mut *conn).await.ok();
         drop(conn);
 
-        sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_id).execute(&pool).await.ok();
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_id)
+            .execute(&pool)
+            .await
+            .ok();
     }
 
     /// Round-trips an `accept_events` row through its typed `FromRow` struct
@@ -394,11 +459,12 @@ mod tests {
         .await
         .expect("insert accept_event");
 
-        let fetched: models::AcceptEvent = sqlx::query_as("SELECT * FROM accept_events WHERE id = $1")
-            .bind(inserted.id)
-            .fetch_one(&pool)
-            .await
-            .expect("fetch accept_event");
+        let fetched: models::AcceptEvent =
+            sqlx::query_as("SELECT * FROM accept_events WHERE id = $1")
+                .bind(inserted.id)
+                .fetch_one(&pool)
+                .await
+                .expect("fetch accept_event");
 
         assert_eq!(fetched.tenant_id, tenant_id);
         assert_eq!(fetched.outcome, "accepted");
@@ -408,7 +474,11 @@ mod tests {
         assert!(fetched.booking_id.is_none());
         assert!(fetched.rule_id.is_none());
 
-        sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_id).execute(&pool).await.ok();
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_id)
+            .execute(&pool)
+            .await
+            .ok();
     }
 
     /// Aturan Keras #2 — `automation_settings.auto_accept_enabled` is a
@@ -435,9 +505,16 @@ mod tests {
                 .fetch_one(&pool)
                 .await
                 .expect("fetch");
-        assert!(!row.auto_accept_enabled, "kill switch must default to false with zero explicit input");
+        assert!(
+            !row.auto_accept_enabled,
+            "kill switch must default to false with zero explicit input"
+        );
 
-        sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_id).execute(&pool).await.ok();
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_id)
+            .execute(&pool)
+            .await
+            .ok();
     }
 
     #[tokio::test]
@@ -457,11 +534,12 @@ mod tests {
         .await
         .expect("insert notification");
 
-        let fetched: models::Notification = sqlx::query_as("SELECT * FROM notifications WHERE id = $1")
-            .bind(inserted.id)
-            .fetch_one(&pool)
-            .await
-            .expect("fetch notification");
+        let fetched: models::Notification =
+            sqlx::query_as("SELECT * FROM notifications WHERE id = $1")
+                .bind(inserted.id)
+                .fetch_one(&pool)
+                .await
+                .expect("fetch notification");
 
         assert_eq!(fetched.tenant_id, tenant_id);
         assert_eq!(fetched.channel, "whatsapp");
@@ -470,7 +548,11 @@ mod tests {
         assert_eq!(fetched.attempts, 0);
         assert!(fetched.sent_at.is_none());
 
-        sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_id).execute(&pool).await.ok();
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_id)
+            .execute(&pool)
+            .await
+            .ok();
     }
 
     /// Round-trips a `portal_sessions` row through its typed `FromRow` struct
@@ -520,9 +602,16 @@ mod tests {
         assert_eq!(fetched.portal_user_id, portal_user_id.0);
         assert_eq!(fetched.token_hash, b"session-token-hash-bytes".to_vec());
         assert_eq!(fetched.ip.as_deref(), Some("203.0.113.7"));
-        assert_eq!(fetched.user_agent.as_deref(), Some("Mozilla/5.0 (test agent)"));
+        assert_eq!(
+            fetched.user_agent.as_deref(),
+            Some("Mozilla/5.0 (test agent)")
+        );
 
-        sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_id).execute(&pool).await.ok();
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_id)
+            .execute(&pool)
+            .await
+            .ok();
     }
 
     /// Round-trips an `agency_credentials` row through its typed `FromRow`
@@ -539,7 +628,9 @@ mod tests {
         let tenant_id = insert_test_tenant(&pool).await;
 
         let ciphertext: Vec<u8> = vec![0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01];
-        let nonce: Vec<u8> = vec![0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C];
+        let nonce: Vec<u8> = vec![
+            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C,
+        ];
         let inserted: models::AgencyCredential = sqlx::query_as(
             "INSERT INTO agency_credentials (tenant_id, label, username, ciphertext, nonce, key_version)
              VALUES ($1, $2, $3, $4, $5, $6) RETURNING *",
@@ -568,7 +659,11 @@ mod tests {
         assert_eq!(fetched.nonce, nonce);
         assert_eq!(fetched.key_version, 1);
 
-        sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_id).execute(&pool).await.ok();
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_id)
+            .execute(&pool)
+            .await
+            .ok();
     }
 
     /// Round-trips a `rule_booking_targets` row through its typed `FromRow`
@@ -616,7 +711,11 @@ mod tests {
         assert_eq!(fetched.booking_id_raw, "BK-778899");
         assert_eq!(fetched.booking_id_norm, "bk-778899");
 
-        sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_id).execute(&pool).await.ok();
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_id)
+            .execute(&pool)
+            .await
+            .ok();
     }
 
     /// Round-trips a `portal_users` row through its typed `FromRow` struct
@@ -643,11 +742,12 @@ mod tests {
         .await
         .expect("insert portal_user");
 
-        let fetched: models::PortalUser = sqlx::query_as("SELECT * FROM portal_users WHERE id = $1")
-            .bind(inserted.id)
-            .fetch_one(&pool)
-            .await
-            .expect("fetch portal_user");
+        let fetched: models::PortalUser =
+            sqlx::query_as("SELECT * FROM portal_users WHERE id = $1")
+                .bind(inserted.id)
+                .fetch_one(&pool)
+                .await
+                .expect("fetch portal_user");
 
         assert_eq!(fetched.tenant_id, tenant_id);
         assert_eq!(fetched.username, "main-agent");
@@ -656,7 +756,11 @@ mod tests {
         assert!(fetched.is_main_account);
         assert!(fetched.enabled, "enabled must default to true");
 
-        sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_id).execute(&pool).await.ok();
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_id)
+            .execute(&pool)
+            .await
+            .ok();
     }
 
     #[tokio::test]
@@ -702,7 +806,11 @@ mod tests {
         assert_eq!(fetched.p256dh, "p256dh-key");
         assert_eq!(fetched.auth, "auth-secret");
 
-        sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_id).execute(&pool).await.ok();
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_id)
+            .execute(&pool)
+            .await
+            .ok();
     }
 
     #[tokio::test]
@@ -734,7 +842,11 @@ mod tests {
         assert_eq!(fetched.key, inserted.key);
         assert_eq!(fetched.value, value);
 
-        sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_id).execute(&pool).await.ok();
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_id)
+            .execute(&pool)
+            .await
+            .ok();
     }
 
     /// Proves the `route_prices_destinations_1to5` CHECK constraint: 0
@@ -761,13 +873,23 @@ mod tests {
             }
         };
 
-        assert!(insert(serde_json::json!([]), "zero".into()).await.is_err(), "0 destinations must fail");
         assert!(
-            insert(serde_json::json!(["A", "B", "C", "D", "E", "F"]), "six".into()).await.is_err(),
+            insert(serde_json::json!([]), "zero".into()).await.is_err(),
+            "0 destinations must fail"
+        );
+        assert!(
+            insert(
+                serde_json::json!(["A", "B", "C", "D", "E", "F"]),
+                "six".into()
+            )
+            .await
+            .is_err(),
             "6 destinations must fail"
         );
         assert!(
-            insert(serde_json::json!(["A", "B", "C"]), "three".into()).await.is_ok(),
+            insert(serde_json::json!(["A", "B", "C"]), "three".into())
+                .await
+                .is_ok(),
             "3 destinations must succeed"
         );
         assert!(
@@ -775,11 +897,17 @@ mod tests {
             "1 destination must succeed"
         );
         assert!(
-            insert(serde_json::json!(["A", "B", "C", "D", "E"]), "five".into()).await.is_ok(),
+            insert(serde_json::json!(["A", "B", "C", "D", "E"]), "five".into())
+                .await
+                .is_ok(),
             "5 destinations must succeed"
         );
 
-        sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_id).execute(&pool).await.ok();
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_id)
+            .execute(&pool)
+            .await
+            .ok();
     }
 
     /// Round-trips a `route_prices` row through its typed `FromRow` struct
@@ -810,11 +938,12 @@ mod tests {
         .await
         .expect("insert route_price");
 
-        let fetched: models::RoutePrice = sqlx::query_as("SELECT * FROM route_prices WHERE id = $1")
-            .bind(inserted.id)
-            .fetch_one(&pool)
-            .await
-            .expect("fetch route_price");
+        let fetched: models::RoutePrice =
+            sqlx::query_as("SELECT * FROM route_prices WHERE id = $1")
+                .bind(inserted.id)
+                .fetch_one(&pool)
+                .await
+                .expect("fetch route_price");
 
         assert_eq!(fetched.tenant_id, tenant_id);
         assert_eq!(fetched.route_code, "PDG-CLE-01");
@@ -824,7 +953,11 @@ mod tests {
         assert_eq!(fetched.price, 150000);
         assert_eq!(fetched.vehicle_type, "TRONTON");
 
-        sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_id).execute(&pool).await.ok();
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_id)
+            .execute(&pool)
+            .await
+            .ok();
     }
 
     #[tokio::test]
@@ -852,14 +985,22 @@ mod tests {
         assert_eq!(fetched.tenant_id, tenant_id);
         assert_eq!(fetched.name, "Padang DC");
 
-        let dup_result = sqlx::query("INSERT INTO route_locations (tenant_id, name) VALUES ($1, $2)")
-            .bind(tenant_id)
-            .bind("Padang DC")
-            .execute(&pool)
-            .await;
-        assert!(dup_result.is_err(), "duplicate (tenant_id, name) must violate the unique constraint");
+        let dup_result =
+            sqlx::query("INSERT INTO route_locations (tenant_id, name) VALUES ($1, $2)")
+                .bind(tenant_id)
+                .bind("Padang DC")
+                .execute(&pool)
+                .await;
+        assert!(
+            dup_result.is_err(),
+            "duplicate (tenant_id, name) must violate the unique constraint"
+        );
 
-        sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_id).execute(&pool).await.ok();
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_id)
+            .execute(&pool)
+            .await
+            .ok();
     }
 
     #[tokio::test]
@@ -879,16 +1020,20 @@ mod tests {
         .await
         .expect("insert archive_run");
 
-        assert_eq!(inserted.status, "running", "status must default to 'running'");
+        assert_eq!(
+            inserted.status, "running",
+            "status must default to 'running'"
+        );
         assert!(!inserted.dry_run, "dry_run must default to false");
         assert!(inserted.archive_path.is_none());
         assert!(inserted.sha256.is_none());
 
-        let fetched: models::ArchiveRun = sqlx::query_as("SELECT * FROM archive_runs WHERE id = $1")
-            .bind(inserted.id)
-            .fetch_one(&pool)
-            .await
-            .expect("fetch archive_run");
+        let fetched: models::ArchiveRun =
+            sqlx::query_as("SELECT * FROM archive_runs WHERE id = $1")
+                .bind(inserted.id)
+                .fetch_one(&pool)
+                .await
+                .expect("fetch archive_run");
 
         assert_eq!(fetched.table_name, "bookings");
         assert_eq!(fetched.captured_count, 1000);
@@ -905,9 +1050,16 @@ mod tests {
         .bind(0_i64)
         .execute(&pool)
         .await;
-        assert!(bad_status.is_err(), "status must be constrained to running/completed/failed");
+        assert!(
+            bad_status.is_err(),
+            "status must be constrained to running/completed/failed"
+        );
 
-        sqlx::query("DELETE FROM archive_runs WHERE id = $1").bind(inserted.id).execute(&pool).await.ok();
+        sqlx::query("DELETE FROM archive_runs WHERE id = $1")
+            .bind(inserted.id)
+            .execute(&pool)
+            .await
+            .ok();
     }
 
     /// Proves RLS actually isolates tenants on `bookings`: tenant A can see
@@ -971,7 +1123,11 @@ mod tests {
                     .fetch_all(&mut *tx_b)
                     .await
                     .expect("select as tenant b");
-            assert_eq!(seen_by_b.len(), 0, "tenant B must NOT see tenant A's booking — RLS leak");
+            assert_eq!(
+                seen_by_b.len(),
+                0,
+                "tenant B must NOT see tenant A's booking — RLS leak"
+            );
             tx_b.commit().await.ok();
         }
         sqlx::query("RESET ROLE").execute(&mut *conn_b).await.ok();
@@ -980,18 +1136,36 @@ mod tests {
         // No tenant context at all, still as app_role (a role RLS actually
         // restricts): must also see nothing, not error.
         let mut conn_bare = pool.acquire().await.expect("acquire bare");
-        sqlx::query("SET ROLE app_role").execute(&mut *conn_bare).await.expect("set role bare");
+        sqlx::query("SET ROLE app_role")
+            .execute(&mut *conn_bare)
+            .await
+            .expect("set role bare");
         let seen_bare: Vec<(uuid::Uuid,)> =
             sqlx::query_as("SELECT id FROM bookings WHERE spx_id = 'SPX-CROSS-TENANT-TEST'")
                 .fetch_all(&mut *conn_bare)
                 .await
                 .expect("select with no tenant context");
-        assert_eq!(seen_bare.len(), 0, "queries with no tenant context set must see nothing, not error or leak");
-        sqlx::query("RESET ROLE").execute(&mut *conn_bare).await.ok();
+        assert_eq!(
+            seen_bare.len(),
+            0,
+            "queries with no tenant context set must see nothing, not error or leak"
+        );
+        sqlx::query("RESET ROLE")
+            .execute(&mut *conn_bare)
+            .await
+            .ok();
         drop(conn_bare);
 
-        sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_a).execute(&pool).await.ok();
-        sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_b).execute(&pool).await.ok();
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_a)
+            .execute(&pool)
+            .await
+            .ok();
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_b)
+            .execute(&pool)
+            .await
+            .ok();
     }
 
     /// Second cross-tenant probe on a distinct table shape: `site_settings`
@@ -1033,25 +1207,47 @@ mod tests {
                     .fetch_all(&mut *tx_b)
                     .await
                     .expect("select as tenant b");
-            assert_eq!(seen_by_b.len(), 0, "tenant B must NOT see tenant A's site_settings row — RLS leak");
+            assert_eq!(
+                seen_by_b.len(),
+                0,
+                "tenant B must NOT see tenant A's site_settings row — RLS leak"
+            );
             tx_b.commit().await.ok();
         }
         sqlx::query("RESET ROLE").execute(&mut *conn_b).await.ok();
         drop(conn_b);
 
         let mut conn_bare = pool.acquire().await.expect("acquire bare");
-        sqlx::query("SET ROLE app_role").execute(&mut *conn_bare).await.expect("set role bare");
+        sqlx::query("SET ROLE app_role")
+            .execute(&mut *conn_bare)
+            .await
+            .expect("set role bare");
         let seen_bare: Vec<(uuid::Uuid,)> =
             sqlx::query_as("SELECT tenant_id FROM site_settings WHERE key = 'secret_key'")
                 .fetch_all(&mut *conn_bare)
                 .await
                 .expect("select with no tenant context");
-        assert_eq!(seen_bare.len(), 0, "queries with no tenant context set must see nothing, not error or leak");
-        sqlx::query("RESET ROLE").execute(&mut *conn_bare).await.ok();
+        assert_eq!(
+            seen_bare.len(),
+            0,
+            "queries with no tenant context set must see nothing, not error or leak"
+        );
+        sqlx::query("RESET ROLE")
+            .execute(&mut *conn_bare)
+            .await
+            .ok();
         drop(conn_bare);
 
-        sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_a).execute(&pool).await.ok();
-        sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_b).execute(&pool).await.ok();
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_a)
+            .execute(&pool)
+            .await
+            .ok();
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_b)
+            .execute(&pool)
+            .await
+            .ok();
     }
 
     /// Write-path counterpart to `rls_blocks_cross_tenant_reads_on_bookings`.
@@ -1100,14 +1296,18 @@ mod tests {
                 "app_role in tenant A's context must not be able to INSERT a row tagged tenant_id = B"
             );
             let insert_err = insert_result.unwrap_err();
-            let insert_db_err = insert_err.as_database_error().expect("expected a database error");
+            let insert_db_err = insert_err
+                .as_database_error()
+                .expect("expected a database error");
             assert_eq!(
                 insert_db_err.code().as_deref(),
                 Some("42501"),
                 "expected insufficient_privilege (42501) row-security-policy violation, got: {insert_db_err}"
             );
             assert!(
-                insert_db_err.message().contains("row-level security policy"),
+                insert_db_err
+                    .message()
+                    .contains("row-level security policy"),
                 "expected a row-level security policy violation message, got: {}",
                 insert_db_err.message()
             );
@@ -1134,8 +1334,16 @@ mod tests {
         sqlx::query("RESET ROLE").execute(&mut *conn_a2).await.ok();
         drop(conn_a2);
 
-        sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_a).execute(&pool).await.ok();
-        sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_b).execute(&pool).await.ok();
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_a)
+            .execute(&pool)
+            .await
+            .ok();
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_b)
+            .execute(&pool)
+            .await
+            .ok();
     }
 
     /// Regression guard for the `FORCE ROW LEVEL SECURITY` requirement
@@ -1152,15 +1360,22 @@ mod tests {
         let pool = connect(&test_database_url()).await.expect("connect");
         run_migrations(&pool).await.expect("migrate");
 
-        for table in ["bookings", "accept_rules", "portal_users", "agency_credentials"] {
-            let (forced,): (bool,) = sqlx::query_as(
-                "SELECT relforcerowsecurity FROM pg_class WHERE relname = $1",
-            )
-            .bind(table)
-            .fetch_one(&pool)
-            .await
-            .unwrap_or_else(|e| panic!("checking relforcerowsecurity for {table}: {e}"));
-            assert!(forced, "{table} must have FORCE ROW LEVEL SECURITY set, not just ENABLE");
+        for table in [
+            "bookings",
+            "accept_rules",
+            "portal_users",
+            "agency_credentials",
+        ] {
+            let (forced,): (bool,) =
+                sqlx::query_as("SELECT relforcerowsecurity FROM pg_class WHERE relname = $1")
+                    .bind(table)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap_or_else(|e| panic!("checking relforcerowsecurity for {table}: {e}"));
+            assert!(
+                forced,
+                "{table} must have FORCE ROW LEVEL SECURITY set, not just ENABLE"
+            );
         }
     }
 
