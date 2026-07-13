@@ -25,4 +25,7 @@ Frontend/.env.*
 !.env.example
 secrets/
 
+# Docker file-secrets (master key etc.) — never commit these
+Docker/secrets/
+
 # sqlx offline cache is committed intentionally (Fase 2+): .sqlx/
