@@ -123,6 +123,20 @@ services:
     image: redis:7
     container_name: tower-redis
     restart: unless-stopped
+    # TEMPORARY (dev-time convenience, mirrors tower-postgres's 15432 publish
+    # from Fase 2): publishes Redis to localhost only, for the executor crate's
+    # real-Redis tests (`cargo test -p executor`) run from the host outside any
+    # container — this project's testing standard uses a real Redis, not mocks.
+    # Scoped to 127.0.0.1 so it is not reachable off-box; Fase 8's VPS overlay
+    # treats Redis as internal-only, so this does not violate Fase 0's "no
+    # published ports except edge" intent. Port 6379 is often taken by a
+    # pre-existing Redis on the dev host, so this maps to 16379 instead —
+    # executor's tests and every later fase's local dev docs must use 16379.
+    # Fase 4 needs this (host-run tests) and so will Fase 5-6 as their crates
+    # grow Redis-backed tests — remove only alongside Fase 8's real deployment
+    # tooling, not before.
+    ports:
+      - "127.0.0.1:16379:6379"
     volumes:
       - tower-redis-data:/data
     networks:
