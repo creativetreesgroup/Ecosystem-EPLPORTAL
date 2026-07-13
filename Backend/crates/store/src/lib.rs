@@ -457,6 +457,14 @@ mod tests {
             insert(serde_json::json!(["A", "B", "C"]), "three".into()).await.is_ok(),
             "3 destinations must succeed"
         );
+        assert!(
+            insert(serde_json::json!(["A"]), "one".into()).await.is_ok(),
+            "1 destination must succeed"
+        );
+        assert!(
+            insert(serde_json::json!(["A", "B", "C", "D", "E"]), "five".into()).await.is_ok(),
+            "5 destinations must succeed"
+        );
 
         sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_id).execute(&pool).await.ok();
     }
