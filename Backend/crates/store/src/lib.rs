@@ -283,4 +283,144 @@ mod tests {
 
         sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_id).execute(&pool).await.ok();
     }
+
+    /// Aturan Keras #2 — `automation_settings.auto_accept_enabled` is a
+    /// GLOBAL kill switch that must default to `false` at the schema level
+    /// with zero application input. This inserts a row supplying ONLY
+    /// `tenant_id` (every other column, including `auto_accept_enabled`, is
+    /// left to its column default) and proves the fetched row can never come
+    /// up `true`.
+    #[tokio::test]
+    async fn automation_settings_auto_accept_defaults_to_false() {
+        let pool = connect(&test_database_url()).await.expect("connect");
+        run_migrations(&pool).await.expect("migrate");
+        let tenant_id = insert_test_tenant(&pool).await;
+
+        sqlx::query("INSERT INTO automation_settings (tenant_id) VALUES ($1)")
+            .bind(tenant_id)
+            .execute(&pool)
+            .await
+            .expect("insert with only tenant_id, everything else default");
+
+        let row: models::AutomationSettings =
+            sqlx::query_as("SELECT * FROM automation_settings WHERE tenant_id = $1")
+                .bind(tenant_id)
+                .fetch_one(&pool)
+                .await
+                .expect("fetch");
+        assert!(!row.auto_accept_enabled, "kill switch must default to false with zero explicit input");
+
+        sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_id).execute(&pool).await.ok();
+    }
+
+    #[tokio::test]
+    async fn notification_round_trips() {
+        let pool = connect(&test_database_url()).await.expect("connect");
+        run_migrations(&pool).await.expect("migrate");
+        let tenant_id = insert_test_tenant(&pool).await;
+
+        let payload = serde_json::json!({ "title": "Booking accepted", "booking_id": "BK-1" });
+        let inserted: models::Notification = sqlx::query_as(
+            "INSERT INTO notifications (tenant_id, channel, payload) VALUES ($1, $2, $3) RETURNING *",
+        )
+        .bind(tenant_id)
+        .bind("whatsapp")
+        .bind(&payload)
+        .fetch_one(&pool)
+        .await
+        .expect("insert notification");
+
+        let fetched: models::Notification = sqlx::query_as("SELECT * FROM notifications WHERE id = $1")
+            .bind(inserted.id)
+            .fetch_one(&pool)
+            .await
+            .expect("fetch notification");
+
+        assert_eq!(fetched.tenant_id, tenant_id);
+        assert_eq!(fetched.channel, "whatsapp");
+        assert_eq!(fetched.payload, payload);
+        assert_eq!(fetched.status, "pending");
+        assert_eq!(fetched.attempts, 0);
+        assert!(fetched.sent_at.is_none());
+
+        sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_id).execute(&pool).await.ok();
+    }
+
+    #[tokio::test]
+    async fn push_subscription_round_trips() {
+        let pool = connect(&test_database_url()).await.expect("connect");
+        run_migrations(&pool).await.expect("migrate");
+        let tenant_id = insert_test_tenant(&pool).await;
+
+        let portal_user_id: (uuid::Uuid,) = sqlx::query_as(
+            "INSERT INTO portal_users (tenant_id, username, password_hash, display_name)
+             VALUES ($1, 'agent1', 'hash', 'Agent One') RETURNING id",
+        )
+        .bind(tenant_id)
+        .fetch_one(&pool)
+        .await
+        .expect("insert portal_user");
+
+        let expires_at = chrono::Utc::now() + chrono::Duration::days(30);
+        let inserted: models::PushSubscription = sqlx::query_as(
+            "INSERT INTO push_subscriptions (tenant_id, portal_user_id, endpoint, p256dh, auth, expires_at)
+             VALUES ($1, $2, $3, $4, $5, $6) RETURNING *",
+        )
+        .bind(tenant_id)
+        .bind(portal_user_id.0)
+        .bind("https://push.example.com/endpoint-1")
+        .bind("p256dh-key")
+        .bind("auth-secret")
+        .bind(expires_at)
+        .fetch_one(&pool)
+        .await
+        .expect("insert push_subscription");
+
+        let fetched: models::PushSubscription =
+            sqlx::query_as("SELECT * FROM push_subscriptions WHERE id = $1")
+                .bind(inserted.id)
+                .fetch_one(&pool)
+                .await
+                .expect("fetch push_subscription");
+
+        assert_eq!(fetched.tenant_id, tenant_id);
+        assert_eq!(fetched.portal_user_id, portal_user_id.0);
+        assert_eq!(fetched.endpoint, "https://push.example.com/endpoint-1");
+        assert_eq!(fetched.p256dh, "p256dh-key");
+        assert_eq!(fetched.auth, "auth-secret");
+
+        sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_id).execute(&pool).await.ok();
+    }
+
+    #[tokio::test]
+    async fn site_setting_round_trips() {
+        let pool = connect(&test_database_url()).await.expect("connect");
+        run_migrations(&pool).await.expect("migrate");
+        let tenant_id = insert_test_tenant(&pool).await;
+
+        let value = serde_json::json!({ "theme": "dark", "notify_sound": true });
+        let inserted: models::SiteSetting = sqlx::query_as(
+            "INSERT INTO site_settings (tenant_id, key, value) VALUES ($1, $2, $3) RETURNING *",
+        )
+        .bind(tenant_id)
+        .bind("ui_preferences")
+        .bind(&value)
+        .fetch_one(&pool)
+        .await
+        .expect("insert site_setting");
+
+        let fetched: models::SiteSetting =
+            sqlx::query_as("SELECT * FROM site_settings WHERE tenant_id = $1 AND key = $2")
+                .bind(tenant_id)
+                .bind("ui_preferences")
+                .fetch_one(&pool)
+                .await
+                .expect("fetch site_setting");
+
+        assert_eq!(fetched.tenant_id, inserted.tenant_id);
+        assert_eq!(fetched.key, inserted.key);
+        assert_eq!(fetched.value, value);
+
+        sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_id).execute(&pool).await.ok();
+    }
 }

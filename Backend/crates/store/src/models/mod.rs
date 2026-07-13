@@ -1,17 +1,25 @@
 pub mod accept_event;
 pub mod accept_rule;
 pub mod agency_credential;
+pub mod automation_settings;
 pub mod booking;
+pub mod notification;
 pub mod portal_session;
 pub mod portal_user;
+pub mod push_subscription;
 pub mod rule_booking_target;
+pub mod site_settings;
 pub mod tenant;
 
 pub use accept_event::AcceptEvent;
 pub use accept_rule::AcceptRule;
 pub use agency_credential::AgencyCredential;
+pub use automation_settings::AutomationSettings;
 pub use booking::Booking;
+pub use notification::Notification;
 pub use portal_session::PortalSession;
 pub use portal_user::PortalUser;
+pub use push_subscription::PushSubscription;
 pub use rule_booking_target::RuleBookingTarget;
+pub use site_settings::SiteSetting;
 pub use tenant::Tenant;
