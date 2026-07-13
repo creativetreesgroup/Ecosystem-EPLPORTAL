@@ -76,7 +76,7 @@ Full context: [`Docs/tower-master-spec.md`](../../tower-master-spec.md) and [`Do
   - Label consts `LABEL_AGENCY_CREDENTIAL`, `LABEL_WAHA_KEY`, `LABEL_QUICK_ACCEPT_HMAC`; `KEY_VERSION: i32 = 1`; `CryptoError`.
   - `pub(crate) fn derive_subkey(master: &MasterKey, label: &str) -> Result<SecretBox<[u8;32]>, CryptoError>` (used by the DoD #3/#4b byte-comparison tests).
 
-- [ ] **Step 1: Add the crypto dependencies**
+- [x] **Step 1: Add the crypto dependencies**
 
 ```bash
 cd Backend
@@ -87,7 +87,7 @@ cd ..
 
 Note: `uuid` is a normal (not dev) dep — `aad_for` and the Task 3/4 wrappers take a `Uuid`. `zeroize` is added directly (used to wipe the transient master-key file buffer) even though `secrecy` also pulls it transitively — this is intentional, not redundant. All of these are `MIT OR Apache-2.0` (verified) → no `cargo deny` action.
 
-- [ ] **Step 2: Write `crypto::secret`**
+- [x] **Step 2: Write `crypto::secret`**
 
 ```rust
 // Backend/crates/spx-client/src/crypto/secret.rs
@@ -102,7 +102,7 @@ pub use secrecy::{ExposeSecret, SecretBox, SecretString};
 pub type SecretKeyBytes = SecretBox<[u8; 32]>;
 ```
 
-- [ ] **Step 3: Write `crypto::envelope`**
+- [x] **Step 3: Write `crypto::envelope`**
 
 This is the compile-verified core. Reproduce the API shape exactly (see Global Constraints for why each choice is what it is).
 
@@ -322,7 +322,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 4: Write `crypto::mod.rs` and `lib.rs`**
+- [x] **Step 4: Write `crypto::mod.rs` and `lib.rs`**
 
 ```rust
 // Backend/crates/spx-client/src/crypto/mod.rs
@@ -345,7 +345,7 @@ pub mod crypto;
 
 (Later tasks add `pub mod password;`/`session_token`/`booking`/`accept`/`cookies`/`client` to `crypto/mod.rs` and `lib.rs` respectively — do not remove this line.)
 
-- [ ] **Step 5: Build, test, clippy**
+- [x] **Step 5: Build, test, clippy**
 
 ```bash
 cd Backend
@@ -356,7 +356,7 @@ cd ..
 
 Expected: all `envelope` tests pass (round-trip, wrong-AAD fails, fresh nonce, distinct subkey bytes, full-32-byte subkey), clippy clean. If the compiler rejects any aes-gcm call, re-read Global Constraints' aes-gcm note — the shape (`new_from_slice`, `Nonce::<U12>::try_from`, `Payload`) was verified against 0.11.0; a rejection means a version drift you must reconcile against the installed version before proceeding, not a reason to revert to `from_slice`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add Backend/crates/spx-client Backend/Cargo.toml Backend/Cargo.lock
@@ -383,7 +383,7 @@ git commit -m "feat(spx-client): crypto::envelope — master key/HKDF/AES-256-GC
 
 Reuses `CryptoError` from `crypto::envelope`.
 
-- [ ] **Step 1: Add `argon2`**
+- [x] **Step 1: Add `argon2`**
 
 ```bash
 cd Backend && cargo add --package spx-client argon2@0.5 && cd ..
@@ -391,7 +391,7 @@ cd Backend && cargo add --package spx-client argon2@0.5 && cd ..
 
 `argon2 0.5.3` default features (`alloc`, `password-hash`) are sufficient — no `getrandom`/`rand` feature is needed because the salt is generated via `getrandom` + `SaltString::encode_b64` (see Global Constraints). `MIT OR Apache-2.0` → no deny action.
 
-- [ ] **Step 2: Write `crypto::password`**
+- [x] **Step 2: Write `crypto::password`**
 
 ```rust
 // Backend/crates/spx-client/src/crypto/password.rs
@@ -467,7 +467,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Write `crypto::session_token`**
+- [x] **Step 3: Write `crypto::session_token`**
 
 ```rust
 // Backend/crates/spx-client/src/crypto/session_token.rs
@@ -535,7 +535,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 4: Wire into `crypto::mod.rs`**
+- [x] **Step 4: Wire into `crypto::mod.rs`**
 
 Add to `Backend/crates/spx-client/src/crypto/mod.rs`:
 
@@ -547,7 +547,7 @@ pub use password::{hash_password, verify_password};
 pub use session_token::{generate_session_token, hash_session_token};
 ```
 
-- [ ] **Step 5: Test + clippy + commit**
+- [x] **Step 5: Test + clippy + commit**
 
 ```bash
 cd Backend
@@ -576,7 +576,7 @@ Expected: all password + session_token tests pass; clippy clean.
 
 **Design note (read before coding):** Fase 2's `agency_credentials` has a plaintext `username TEXT` column PLUS `ciphertext`/`nonce`/`key_version`. The reference stored username plaintext and encrypted only the password; this integration does the same — the plaintext `username` column is the surface-safe display value (mirrors the reference's `getStoredSpxUsername`), and **`ciphertext` holds the encrypted password**. The design doc's phrase "enkripsi username+password" refers to protecting the SPX credential *pair*; the password is the secret placed in `ciphertext`, and the username is bound into the ciphertext's context by the tenant-scoped AAD + its own row. `key_version` is written as `KEY_VERSION` (1).
 
-- [ ] **Step 1: Add dev-dependencies (same pattern as Fase 2's store tests)**
+- [x] **Step 1: Add dev-dependencies (same pattern as Fase 2's store tests)**
 
 ```bash
 cd Backend
@@ -588,7 +588,7 @@ cd ..
 
 (`store` is a dev-dependency only — `spx-client`'s production code must not depend on `store`; these are for the Postgres round-trip test. `cargo add --path crates/store` resolves the workspace member.)
 
-- [ ] **Step 2: Add the agency-credential wrappers to `crypto::envelope`**
+- [x] **Step 2: Add the agency-credential wrappers to `crypto::envelope`**
 
 Append to `Backend/crates/spx-client/src/crypto/envelope.rs` (before the `#[cfg(test)]` module), reusing `SecretString`:
 
@@ -623,7 +623,7 @@ pub fn decrypt_agency_password(
 
 (If `SecretString` is already imported at the top of the file from Task 1's edits, do not duplicate the `use`. Keep a single import.)
 
-- [ ] **Step 3: Write the Postgres round-trip integration test**
+- [x] **Step 3: Write the Postgres round-trip integration test**
 
 Create `Backend/crates/spx-client/tests/agency_credentials_pg.rs` (an integration test crate so it can pull the `store` dev-dep cleanly):
 
@@ -719,7 +719,7 @@ async fn agency_credential_encrypt_store_fetch_decrypt() {
 
 (`getrandom` is already a normal dependency of `spx-client` from Task 1, so it is usable from the integration test without a separate add.)
 
-- [ ] **Step 4: Bring up Postgres, run the test**
+- [x] **Step 4: Bring up Postgres, run the test**
 
 ```bash
 cd Docker && docker compose up -d tower-postgres && cd ..
@@ -731,7 +731,7 @@ cd ..
 
 Expected: `test result: ok. 1 passed`. If it cannot connect, confirm the container is healthy and that the temporary `127.0.0.1:15432` publish from Fase 2 is present in `Docker/docker-compose.yml` (it is; do not remove it).
 
-- [ ] **Step 5: Clippy + commit**
+- [x] **Step 5: Clippy + commit**
 
 ```bash
 cd Backend && cargo clippy -p spx-client --all-targets -- -D warnings && cd ..
@@ -756,7 +756,7 @@ git commit -m "feat(spx-client): agency-credential envelope encryption + Postgre
   - `pub fn encrypt_waha_key(master, tenant_id, key) -> Result<Ciphertext, CryptoError>` / `pub fn decrypt_waha_key(...) -> Result<SecretString, CryptoError>`.
   - `waha_settings::WahaSettings` — the JSONB value: non-sensitive `waha_url`/`waha_session` stay plaintext; only the API key is stored as base64 ciphertext+nonce+key_version. `to_json_value()` / `from_json_value()` helpers.
 
-- [ ] **Step 1: Add serde deps**
+- [x] **Step 1: Add serde deps**
 
 ```bash
 cd Backend
@@ -765,7 +765,7 @@ cargo add --package spx-client serde_json
 cd ..
 ```
 
-- [ ] **Step 2: Add the WAHA-key wrappers to `crypto::envelope`**
+- [x] **Step 2: Add the WAHA-key wrappers to `crypto::envelope`**
 
 Append to `envelope.rs` (before the test module):
 
@@ -794,7 +794,7 @@ pub fn decrypt_waha_key(
 }
 ```
 
-- [ ] **Step 3: Write `waha_settings`**
+- [x] **Step 3: Write `waha_settings`**
 
 ```rust
 // Backend/crates/spx-client/src/waha_settings.rs
@@ -908,7 +908,7 @@ mod tests {
 
 Add `pub mod waha_settings;` to `Backend/crates/spx-client/src/lib.rs`.
 
-- [ ] **Step 4: Write the Postgres round-trip + plaintext-absence test**
+- [x] **Step 4: Write the Postgres round-trip + plaintext-absence test**
 
 ```rust
 // Backend/crates/spx-client/tests/waha_settings_pg.rs
@@ -986,7 +986,7 @@ async fn waha_key_encrypted_in_site_settings_jsonb() {
 
 The `tests/` crate needs `serde_json` and `tokio` — already available (`serde_json` is a normal dep from Step 1; `tokio` + `store` + `sqlx` are dev-deps from Task 3). If `cargo` reports `serde_json` unavailable to the test target, it is a normal dep so it is already in scope; no extra add.
 
-- [ ] **Step 5: Run + clippy + commit**
+- [x] **Step 5: Run + clippy + commit**
 
 ```bash
 cd Docker && docker compose up -d tower-postgres && cd ..
@@ -1016,7 +1016,7 @@ Expected: the in-memory `waha_settings` test + both Postgres round-trip tests (T
 
 **Scope note (explicit, per design doc):** The loader is tested at the **filesystem level against a temp file** — this needs NO live container. A running-container test of the Compose mount is out of scope for Fase 3 (it belongs to Fase 8 deployment verification). The unit test below is sufficient and is stated as such.
 
-- [ ] **Step 1: Add the `secrets:` stanza to `Docker/docker-compose.yml`**
+- [x] **Step 1: Add the `secrets:` stanza to `Docker/docker-compose.yml`**
 
 Add a top-level `secrets:` block (a sibling of `services:`/`networks:`/`volumes:`) pointing at a gitignored local file, and mount it into the two Rust services that load the master key. Do NOT touch the `tower-postgres` `ports: 127.0.0.1:15432` publish (Fase 2's temporary dev convenience).
 
@@ -1050,7 +1050,7 @@ Then add a `secrets:` list to `tower-reactor-core` and `tower-auth-sidecar` (Com
 
 Rationale (design doc): a file secret at 0400 is not exposed via `docker inspect` / `/proc/<pid>/environ`, unlike an env var. The env var here carries only the *path*, not the key.
 
-- [ ] **Step 2: Update `Docker/.env.example`'s comment**
+- [x] **Step 2: Update `Docker/.env.example`'s comment**
 
 Replace the Postgres-line comment `# Postgres (Fase 0 placeholder — real secrets management arrives Fase 3)` and the trailing "This file grows..." block with a concrete instruction that the master key is a Docker **file secret**, not an env var:
 
@@ -1070,7 +1070,7 @@ POSTGRES_PASSWORD=tower_dev_only
 RUST_LOG=info
 ```
 
-- [ ] **Step 3: Ensure the secrets dir is gitignored**
+- [x] **Step 3: Ensure the secrets dir is gitignored**
 
 The root `.gitignore` already has a `secrets/` entry (matches any `secrets/` dir). Add an explicit, unambiguous entry so a future reader is not surprised:
 
@@ -1081,7 +1081,7 @@ Docker/secrets/
 
 Verify nothing under `Docker/secrets/` is tracked: `git status --porcelain Docker/secrets/ 2>/dev/null` should show nothing (the dir may not even exist yet — that's fine).
 
-- [ ] **Step 4: Write the loader unit test (temp file, no container)**
+- [x] **Step 4: Write the loader unit test (temp file, no container)**
 
 ```rust
 // Backend/crates/spx-client/tests/master_key_loader.rs
@@ -1127,7 +1127,7 @@ fn missing_file_is_io_error() {
 }
 ```
 
-- [ ] **Step 5: Run + validate compose + commit**
+- [x] **Step 5: Run + validate compose + commit**
 
 ```bash
 cd Backend && cargo test -p spx-client --test master_key_loader && cd ..
@@ -1155,7 +1155,7 @@ Expected: loader tests pass; `docker compose config` validates; `git status` con
 
 **Fidelity source:** `normalizeBooking` (`spx.ts:116-195`) and `parseProvinces` (`spx.ts:92-114`). The multi-key `pick`, `to_ms`, numeric-vehicle discard, status map, and WIB time formatting below were **compile+run verified** against `serde_json` 1 + `chrono` 0.4 in a scratch crate. `to_core_booking` maps into `core_domain::Booking`'s exact 11 fields.
 
-- [ ] **Step 1: Add deps**
+- [x] **Step 1: Add deps**
 
 ```bash
 cd Backend
@@ -1164,7 +1164,7 @@ cargo add --package spx-client --path crates/core-domain core-domain
 cd ..
 ```
 
-- [ ] **Step 2: Write `booking.rs`**
+- [x] **Step 2: Write `booking.rs`**
 
 ```rust
 // Backend/crates/spx-client/src/booking.rs
@@ -1567,7 +1567,7 @@ mod tests {
 
 Add `pub mod booking;` to `lib.rs`.
 
-- [ ] **Step 3: Test + clippy + commit**
+- [x] **Step 3: Test + clippy + commit**
 
 ```bash
 cd Backend
@@ -1594,13 +1594,13 @@ Expected: all booking tests pass (multi-key fallback, numeric-vehicle discard, s
 
 **Fidelity source:** `classifyAcceptResponse` (`spx.ts:922-944`). The regex port + all 8 real message cases + the `agency_dup`-before-`ok` ordering were **compile+run verified** in a scratch crate against `regex` 1. The 8 cases are the ones in `spx-accept.test.ts` (the only real SPX message corpus that exists). **Check-order is load-bearing:** `agency_dup` is matched BEFORE the idempotent-`ok` pattern, so "your agency already accepted" is not swallowed as a self-win.
 
-- [ ] **Step 1: Add `regex`**
+- [x] **Step 1: Add `regex`**
 
 ```bash
 cd Backend && cargo add --package spx-client regex@1 && cd ..
 ```
 
-- [ ] **Step 2: Write `accept.rs`**
+- [x] **Step 2: Write `accept.rs`**
 
 ```rust
 // Backend/crates/spx-client/src/accept.rs
@@ -1743,7 +1743,7 @@ mod tests {
 
 Add `pub mod accept;` to `lib.rs`.
 
-- [ ] **Step 3: Test + clippy + commit**
+- [x] **Step 3: Test + clippy + commit**
 
 ```bash
 cd Backend
@@ -1777,7 +1777,7 @@ Either way: **do NOT add `wreq-util` 2.x (GPL) and do NOT add GPL-3.0 to `deny.t
 
 **API-confidence note:** `wreq`/`wreq-util` are large, fast-moving crates and were NOT compile-verified here (BoringSSL build + pre-release churn). The confirmed API surface (from docs.rs) is: `wreq::Client::builder()` → `ClientBuilder`; `ClientBuilder::emulation<P: EmulationProviderFactory>(self, factory)` (Path A); `ClientBuilder::default_headers(HeaderMap)`, `.cookie_store(bool)`, `.timeout(Duration)`, `.build() -> Result<Client>`; requests via `client.post(url).body(...).header(...).send().await` then `res.json().await`; `wreq_util::Emulation::Chrome137` implements `EmulationProviderFactory`. **Verify these signatures against the installed version before proceeding** — if `emulation`/`Emulation` differ, adjust to the installed API; the header/cookie logic below does not depend on wreq internals and is safe.
 
-- [ ] **Step 1: Add `wreq` (and `wreq-util` per your chosen path)**
+- [x] **Step 1: Add `wreq` (and `wreq-util` per your chosen path)**
 
 ```bash
 cd Backend
@@ -1787,7 +1787,7 @@ cd ..
 
 For Path A additionally add the pinned `wreq-util` (Apache-2.0 pre-release) and re-run `cargo deny check` immediately to confirm licenses. For Path B, stop after `wreq`.
 
-- [ ] **Step 2: Write `cookies.rs`**
+- [x] **Step 2: Write `cookies.rs`**
 
 The header names/values below are copied from the reference (`spx.ts:52-76`), with the client-hints set to match **whatever Chrome preset you actually use** (137 for Path A; keep them consistent for Path B too — do not claim 148).
 
@@ -1942,7 +1942,7 @@ mod tests {
 
 Add `pub mod cookies;` to `lib.rs`.
 
-- [ ] **Step 3: Test + clippy + deny + commit**
+- [x] **Step 3: Test + clippy + deny + commit**
 
 ```bash
 cd Backend
@@ -1985,7 +1985,7 @@ Expected: cookie/header tests pass; `cargo deny check` clean (if it flags a GPL 
 
 **API-confidence note (repeat):** `wreq`'s request/response API was not compile-verified here. Build against the confirmed surface (`Client::builder()...build()`, `client.post(url).json(&body).headers(hmap).send().await?`, `res.status()`, `res.json::<serde_json::Value>().await?`) and **verify method names against the installed `wreq` version before proceeding.** If `wreq` exposes `headers(HeaderMap)` vs per-header `.header()`, adjust; the design does not hinge on which.
 
-- [ ] **Step 1: Write `client.rs`**
+- [x] **Step 1: Write `client.rs`**
 
 Keep the surface focused: a constructor that builds the emulating client, plus one thin async method per endpoint. The HTTP-status → `Auth`/`Transient` short-circuit for `accept` (before body classification) is ported from `acceptBooking` (spx.ts:978-984).
 
@@ -2216,7 +2216,7 @@ pub use client::SpxClient;
 pub use cookies::{build_cookie_string, build_headers, SpxCookies};
 ```
 
-- [ ] **Step 2: Add `wiremock` dev-dep and write a request-construction test**
+- [x] **Step 2: Add `wiremock` dev-dep and write a request-construction test**
 
 `wiremock` (MIT, `cargo add --dry-run` → 0.6.5 — in the allow-list) spins a real localhost HTTP server; `SpxClient` (pointed at its `http://127.0.0.1:PORT` base) hits it, letting us assert method/path/body without a real SPX server. For Path B (no emulation), this works as-is over plain HTTP; for Path A, verify wreq's emulated client will talk plain HTTP to a localhost mock (it does — emulation affects TLS/HTTP2 fingerprint, not plaintext HTTP). If wreq's emulation rejects plaintext localhost, gate the mock test behind Path B's plain client or construct the client without `.emulation()` in tests.
 
@@ -2288,7 +2288,7 @@ async fn accept_maps_401_to_auth() {
 }
 ```
 
-- [ ] **Step 3: Test + clippy + deny + commit**
+- [x] **Step 3: Test + clippy + deny + commit**
 
 ```bash
 cd Backend
@@ -2312,7 +2312,7 @@ Expected: the `extract_booking_list` unit test + the three wiremock request-cons
 - Consumes: everything from Tasks 1-9.
 - Produces: recorded evidence the Fase 3 Definition of Done (design doc) is met.
 
-- [ ] **Step 1: Full crate test suite from a clean database**
+- [x] **Step 1: Full crate test suite from a clean database**
 
 ```bash
 cd Docker && docker compose up -d tower-postgres && cd ..
@@ -2322,7 +2322,7 @@ cd Backend && cargo test -p spx-client -- --test-threads=1 && cd ..
 
 Expected: every `spx-client` test passes — the crypto unit tests, password/session tests, booking/accept tests, cookie/header tests, `extract_booking_list`, the wiremock request tests, the master-key loader tests, and the two Postgres round-trips (agency credential + WAHA `site_settings`).
 
-- [ ] **Step 2: Full workspace build/test/clippy**
+- [x] **Step 2: Full workspace build/test/clippy**
 
 ```bash
 cd Backend
@@ -2334,7 +2334,7 @@ cd ..
 
 Expected: all clean — `core-domain`'s existing tests, `store`'s suite, `spx-client`'s full suite, and the other crates' runs, all green; clippy clean workspace-wide.
 
-- [ ] **Step 3: `cargo deny check` — licenses stay clean (the `wreq-util` gate)**
+- [x] **Step 3: `cargo deny check` — licenses stay clean (the `wreq-util` gate)**
 
 ```bash
 cd Backend && cargo deny check && cd ..
@@ -2342,7 +2342,7 @@ cd Backend && cargo deny check && cd ..
 
 Expected: `advisories ok, bans ok, licenses ok, sources ok`. If licenses fail, it is almost certainly a GPL-3.0 `wreq-util` (Task 8) — you are on the wrong version; fix per Task 8's license decision (Apache-2.0 pin or Path B), do NOT add GPL-3.0 to `deny.toml`. Record the resolved `wreq`/`wreq-util` versions + licenses in your report.
 
-- [ ] **Step 4: Confirm `spx-client`'s production dep footprint is intentional**
+- [x] **Step 4: Confirm `spx-client`'s production dep footprint is intentional**
 
 ```bash
 cd Backend && cargo tree -p spx-client --edges normal && cd ..
@@ -2350,7 +2350,7 @@ cd Backend && cargo tree -p spx-client --edges normal && cd ..
 
 Expected: `wreq` (+ `wreq-util` if Path A), `aes-gcm`, `hkdf`, `sha2`, `argon2`, `secrecy`, `zeroize`, `getrandom`, `base64`, `thiserror`, `regex`, `serde`, `serde_json`, `chrono`, `uuid`, `core-domain`. Confirm `store`/`sqlx`/`tokio`/`wiremock` appear ONLY under dev-dependencies (`cargo tree -p spx-client --edges dev` to see them) — production `spx-client` must NOT depend on `store`. Also confirm no stray `rand` (randomness is via `getrandom`).
 
-- [ ] **Step 5: Cross-check every DoD item in the design doc**
+- [x] **Step 5: Cross-check every DoD item in the design doc**
 
 Read `Docs/superpowers/specs/2026-07-13-fase-3-spx-client-crypto-design.md`'s "Definition of Done — Fase 3" (9 items) and cite the concrete evidence for each — do not just assert:
 1. `normalize_booking` 29-field + `to_core_booking` → `booking.rs` + its tests (Task 6).
@@ -2363,11 +2363,11 @@ Read `Docs/superpowers/specs/2026-07-13-fase-3-spx-client-crypto-design.md`'s "D
 8. Session token 256-bit, only SHA-256 hash to DB → `session_token.rs` tests + the `portal_sessions.token_hash` usage note (Task 2).
 9. Fixture limitation documented in code → the `NOTE (DoD #9)` comment in `booking.rs` tests + the `spx-accept.test.ts`-verbatim comment in `accept.rs` (Tasks 6, 7).
 
-- [ ] **Step 6: Mark this plan complete**
+- [x] **Step 6: Mark this plan complete**
 
 Check every remaining `- [ ]` box in this file to `- [x]` by hand or with a targeted script — verify afterward (grep) that no non-checkbox prose containing the literal `- [ ]` substring got corrupted (this exact mistake happened during Fase 0's sign-off and was caught during Fase 1's; do not repeat it a third time).
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add Backend Docs/superpowers/plans/2026-07-13-fase-3-spx-client-crypto.md
