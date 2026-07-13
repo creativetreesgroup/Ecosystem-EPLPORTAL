@@ -11,6 +11,25 @@ env:
 jobs:
   rust:
     runs-on: ubuntu-latest
+    # Mirrors Docker/docker-compose.yml's tower-postgres: same credentials,
+    # same 15432 host-port mapping store/spx-client's test_database_url()
+    # fallbacks already assume (Fase 2 Task 8) — no DATABASE_URL override
+    # needed for the DB-backed tests (store, spx-client's agency_credentials_pg
+    # / waha_settings_pg) to find it.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: tower
+          POSTGRES_PASSWORD: tower_dev_only
+          POSTGRES_DB: tower
+        ports:
+          - 15432:5432
+        options: >-
+          --health-cmd "pg_isready -U tower -d tower"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     defaults:
       run:
         working-directory: Backend
@@ -22,6 +41,14 @@ jobs:
         with:
           components: clippy, rustfmt
 
+      # cmake: build-time requirement of btls-sys (vendored BoringSSL fork
+      # pulled in transitively by spx-client's wreq dependency, Fase 3 Task
+      # 8) — ubuntu-latest ships it today, but installing explicitly (as
+      # both Dockerfiles already do) avoids a silent break if the runner
+      # image ever changes.
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake
+
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: Backend -> target
@@ -30,7 +57,7 @@ jobs:
         run: cargo build --workspace --all-targets
 
       - name: Test
-        run: cargo test --workspace
+        run: cargo test --workspace -- --test-threads=1
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
