@@ -6,12 +6,14 @@
 //! and, deliberately, on NO browser-automation crate (tier-1 login is HTTP to
 //! `auth-sidecar`, so a Chromium crash can never take down this hot-path
 //! process — design correction #2 / DoD #10).
+pub mod fetch;
 pub mod schedule;
 pub mod state;
 
+pub use fetch::{fast_detect, should_full_sweep, sweep, window_pages, FetchOutcome};
 pub use schedule::{poll_once, spawn_account_loop};
 pub use state::{AccountHandle, PollerConfig, PollerShared, PollerState};
 
-// Later tasks add: pub mod fetch; (Task 2) pub mod hedge; (Task 3)
+// Later tasks add: pub mod hedge; (Task 3)
 // pub mod notif_watch; (Task 4) pub mod antidrift; (Task 5) pub mod dispatch;
 // (Task 6) pub mod login; (Task 7) pub mod watchdog; (Task 8)

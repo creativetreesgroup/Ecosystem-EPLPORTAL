@@ -1680,6 +1680,7 @@ dependencies = [
  "core-domain",
  "dashmap",
  "executor",
+ "futures",
  "redis",
  "serde",
  "serde_json",
