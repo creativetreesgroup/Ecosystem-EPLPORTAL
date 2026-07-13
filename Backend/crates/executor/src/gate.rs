@@ -76,10 +76,6 @@ impl RedisPool {
 /// The long-lived executor handle: one Redis pool, the compiled claim `Script`
 /// (its SHA1 is computed once here), and the per-account async lock registry.
 /// Clone-free; share via `Arc` in the caller (Fase 5/6).
-// Task 1 only builds the skeleton: `redis`/`gate`/`account_locks` are wired
-// into `try_claim_*` (Task 3) and the per-account lock helpers (Task 4), so
-// nothing reads them yet. Drop this once those tasks land.
-#[allow(dead_code)]
 pub struct ExecutorHandle {
     pub(crate) redis: RedisPool,
     pub(crate) gate: Script,
