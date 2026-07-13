@@ -19,9 +19,16 @@ serde_json = "1.0.150"
 sha2 = "0.11"
 thiserror = "2"
 uuid = { version = "1", features = ["v4"] }
+# default-features = false drops the "webpki-roots" default (pulls in
+# webpki-root-certs, licensed CDLA-Permissive-2.0 — a data license `deny.toml`
+# doesn't allow-list). Without it, wreq falls back to the OS-native trust
+# store (SslConnectorBuilder::set_default_verify_paths) for TLS verification,
+# which is Apache-2.0-clean and has no functional downside for our use case.
+wreq = { version = "=6.0.0-rc.29", default-features = false, features = ["json", "cookies", "tokio-rt"] }
+wreq-util = { version = "=3.0.0-rc.14", features = ["emulation"] }
 zeroize = "1"
 
 [dev-dependencies]
 sqlx = { version = "0.9.0", features = ["postgres", "runtime-tokio", "tls-rustls-ring-native-roots", "macros", "uuid", "chrono"] }
-store = { path = "../store" }
+store = { version = "0.1.0", path = "../store" }
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros"] }
