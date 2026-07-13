@@ -44,6 +44,28 @@
   `.dockerignore` root (bukan lagi `web/.dockerignore`, yang dihapus) berlaku untuk
   ketiga build. Perilaku runtime, nama service, network, port binding, dan healthcheck
   tidak berubah — hanya lokasi file dan path referensinya.
+- **Fase 1 selesai (2026-07-13).** Rule engine (`matching.ts` + `coc.ts`) di-port 1:1
+  ke crate `Backend/crates/core-domain/` — 127 test, semua hijau, 0 I/O dependency
+  (`serde_json` saja). 6 bug nyata ketemu & diperbaiki selama proses (bukan cuma
+  translasi mekanis — lihat `Docs/superpowers/plans/2026-07-13-fase-1-core-domain.md`
+  untuk detail per-task): paren-stripping `norm_vehicle` yang salah pada input
+  unbalanced/nested, fallback `route_list ?? routes ?? route` yang salah tipe-cek,
+  `max_weight`/`max_cod_amount` yang nyaris ke-narrow lewat helper `u32` (fixed dengan
+  `to_optional_non_neg_f64`), dan origin `matches_route` yang salah gate (normalized
+  vs raw-trimmed emptiness — origin isi tanda baca doang jadi ke-skip alih-alih
+  correctly unsatisfiable). **Catatan untuk Fase 4 (executor)** dari review akhir
+  whole-branch: `find_best_matching_rule(booking, rules: &[AcceptRule], state)` yang
+  ada sekarang **meng-compile ulang setiap rule per panggilan** — bukan bentuk hot-path
+  precomputed yang dimaksud master spec (`bukan evaluasi field-by-field per tiket`).
+  Ini BUKAN bug korektnes (semua test hijau, `CompiledRule::compile`/`matches`/`rank`
+  publik jadi Fase 4 bisa pegang `Vec<CompiledRule>` sendiri), tapi kalau Fase 4/5
+  memanggil fungsi ini langsung di hot path, itu mengalahkan tujuan precompute-nya —
+  Fase 4 wajib entah (a) pakai varian `find_best_matching_rule(&[CompiledRule], ...)`
+  yang baru (belum ada, perlu ditambah), atau (b) loop sendiri di atas
+  `Vec<CompiledRule>` yang sudah di-compile sekali saat rule disimpan. **Kalau opsi
+  (b): tie-break WAJIB first-wins (rank sama → rule yang duluan ketemu menang), BUKAN
+  `Iterator::max_by_key` (yang last-wins) — beda perilaku pada rule overlap ber-rank
+  sama, akan menyimpang dari acuan TS.**
 
 ---
 
