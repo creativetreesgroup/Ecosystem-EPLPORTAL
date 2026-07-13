@@ -24,8 +24,13 @@ fn sec_ch_ua() -> String {
     )
 }
 
-/// 11-field SPX cookie set (spx.ts / session.ts EMPTY_COOKIES).
-#[derive(Debug, Clone, Default)]
+/// 11-field SPX cookie set (spx.ts / session.ts EMPTY_COOKIES). These are the
+/// ACTUAL live SPX portal session cookies — possessing them lets someone act
+/// as the logged-in SPX agency account, so they are as sensitive as the
+/// session tokens handled via `SecretString` in `crypto::session_token`.
+/// `Debug` is implemented manually below (not derived) to redact every field
+/// value, following the same pattern as `crypto::envelope::MasterKey`.
+#[derive(Clone, Default)]
 pub struct SpxCookies {
     pub fms_user_skey: String,
     pub fms_user_id: String,
@@ -38,6 +43,28 @@ pub struct SpxCookies {
     pub spx_st: String,
     pub ds: String,
     pub spx_admin_device_id: String, // cookie name: "spx-admin-device-id"
+}
+
+/// Redacted `Debug`: field names are shown (they aren't secret) but every
+/// value is replaced with a fixed marker, so an accidental `{:?}`/`dbg!()`
+/// of a live cookie jar never leaks session credentials into logs.
+impl std::fmt::Debug for SpxCookies {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        const REDACTED: &str = "[REDACTED]";
+        f.debug_struct("SpxCookies")
+            .field("fms_user_skey", &REDACTED)
+            .field("fms_user_id", &REDACTED)
+            .field("fms_user_agency_id", &REDACTED)
+            .field("csrftoken", &REDACTED)
+            .field("spx_uk", &REDACTED)
+            .field("spx_cid", &REDACTED)
+            .field("spx_uid", &REDACTED)
+            .field("spx_agid", &REDACTED)
+            .field("spx_st", &REDACTED)
+            .field("ds", &REDACTED)
+            .field("spx_admin_device_id", &REDACTED)
+            .finish()
+    }
 }
 
 impl SpxCookies {
@@ -164,5 +191,54 @@ mod tests {
         let h = build_headers(&SpxCookies::default(), "https://x");
         assert!(h.get("x-csrftoken").is_none());
         assert!(h.get("device-id").is_none());
+    }
+
+    // Closes the Fase 3 sign-off gap: SpxCookies holds live SPX session
+    // credentials, so its Debug impl must never print real field values —
+    // only the struct/field names, which aren't secret.
+    #[test]
+    fn debug_redacts_all_secret_values_but_keeps_struct_and_field_names() {
+        let fake = SpxCookies {
+            fms_user_skey: "FAKE-SKEY-VALUE-111".into(),
+            fms_user_id: "FAKE-USERID-222".into(),
+            fms_user_agency_id: "FAKE-AGENCYID-333".into(),
+            csrftoken: "FAKE-CSRFTOKEN-444".into(),
+            spx_uk: "FAKE-SPXUK-555".into(),
+            spx_cid: "FAKE-SPXCID-666".into(),
+            spx_uid: "FAKE-SPXUID-777".into(),
+            spx_agid: "FAKE-SPXAGID-888".into(),
+            spx_st: "FAKE-SPXST-999".into(),
+            ds: "FAKE-DS-000".into(),
+            spx_admin_device_id: "FAKE-DEVICEID-AAA".into(),
+        };
+
+        let debug_output = format!("{fake:?}");
+
+        for secret_value in [
+            "FAKE-SKEY-VALUE-111",
+            "FAKE-USERID-222",
+            "FAKE-AGENCYID-333",
+            "FAKE-CSRFTOKEN-444",
+            "FAKE-SPXUK-555",
+            "FAKE-SPXCID-666",
+            "FAKE-SPXUID-777",
+            "FAKE-SPXAGID-888",
+            "FAKE-SPXST-999",
+            "FAKE-DS-000",
+            "FAKE-DEVICEID-AAA",
+        ] {
+            assert!(
+                !debug_output.contains(secret_value),
+                "Debug output must not leak secret value {secret_value:?}, got: {debug_output}"
+            );
+        }
+
+        // Proves this is a real field-by-field redaction, not e.g. hiding the
+        // whole struct or breaking Debug entirely.
+        assert!(debug_output.contains("SpxCookies"));
+        assert!(debug_output.contains("fms_user_skey"));
+        assert!(debug_output.contains("csrftoken"));
+        assert!(debug_output.contains("spx_admin_device_id"));
+        assert_eq!(debug_output.matches("[REDACTED]").count(), 11);
     }
 }
