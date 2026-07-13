@@ -2,8 +2,10 @@
 //! and per-rule quota consumption. A pure library called by Fase 5 (poller) and
 //! Fase 6 (api-gateway, manual accept); it owns the shared Redis keyspace so the
 //! two callers cannot diverge.
+pub mod account_lock;
 pub mod dedup;
 pub mod gate;
+pub mod quota;
 pub mod restore;
 
 pub use dedup::AccountDedupState;
@@ -12,4 +14,4 @@ pub use gate::{
 };
 
 // Later tasks add:
-// pub mod account_lock; pub mod quota; (Task 5) pub mod agency_dup; (Task 6)
+// pub mod agency_dup; (Task 6)

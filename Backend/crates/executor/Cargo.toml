@@ -16,5 +16,6 @@ tokio = { version = "1.52.3", features = ["sync", "time"] }
 uuid = { version = "1.23.5", features = ["v4"] }
 
 [dev-dependencies]
+sqlx = { version = "0.9.0", features = ["postgres", "runtime-tokio", "tls-rustls-ring-native-roots", "macros", "uuid", "chrono"] }
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "time", "sync"] }
 wiremock = "0.6.5"
