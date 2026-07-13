@@ -1675,6 +1675,23 @@ checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
 [[package]]
 name = "poller"
 version = "0.1.0"
+dependencies = [
+ "chrono",
+ "core-domain",
+ "dashmap",
+ "executor",
+ "redis",
+ "serde",
+ "serde_json",
+ "spx-client",
+ "store",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "uuid",
+ "wiremock",
+ "wreq",
+]
 
 [[package]]
 name = "polyval"
