@@ -227,4 +227,60 @@ mod tests {
 
         sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_id).execute(&pool).await.ok();
     }
+
+    /// Proves `accept_events` is append-only at the DB permission level, not
+    /// just by application convention. Table owners bypass GRANT/REVOKE
+    /// entirely, so this test `SET ROLE app_role` before attempting the
+    /// forbidden writes — otherwise it would pass for the wrong reason (as
+    /// the table owner, not as the restricted role the app actually runs
+    /// under once Task 7 wires up RLS + app_role for every tenant-scoped
+    /// table).
+    #[tokio::test]
+    async fn accept_events_is_append_only_for_app_role() {
+        let pool = connect(&test_database_url()).await.expect("connect");
+        run_migrations(&pool).await.expect("migrate");
+        let tenant_id = insert_test_tenant(&pool).await;
+
+        let event_id: (uuid::Uuid,) = sqlx::query_as(
+            "INSERT INTO accept_events (tenant_id, outcome) VALUES ($1, 'accepted') RETURNING id",
+        )
+        .bind(tenant_id)
+        .fetch_one(&pool)
+        .await
+        .expect("insert event");
+
+        let mut conn = pool.acquire().await.expect("acquire");
+        sqlx::query("SET ROLE app_role").execute(&mut *conn).await.expect("set role");
+
+        let update_result = sqlx::query("UPDATE accept_events SET outcome = 'rejected' WHERE id = $1")
+            .bind(event_id.0)
+            .execute(&mut *conn)
+            .await;
+        assert!(update_result.is_err(), "app_role must not be able to UPDATE accept_events");
+        let update_err = update_result.unwrap_err();
+        let update_db_err = update_err.as_database_error().expect("expected a database error");
+        assert_eq!(
+            update_db_err.code().as_deref(),
+            Some("42501"),
+            "expected insufficient_privilege (42501) on UPDATE, got: {update_db_err}"
+        );
+
+        let delete_result = sqlx::query("DELETE FROM accept_events WHERE id = $1")
+            .bind(event_id.0)
+            .execute(&mut *conn)
+            .await;
+        assert!(delete_result.is_err(), "app_role must not be able to DELETE accept_events");
+        let delete_err = delete_result.unwrap_err();
+        let delete_db_err = delete_err.as_database_error().expect("expected a database error");
+        assert_eq!(
+            delete_db_err.code().as_deref(),
+            Some("42501"),
+            "expected insufficient_privilege (42501) on DELETE, got: {delete_db_err}"
+        );
+
+        sqlx::query("RESET ROLE").execute(&mut *conn).await.ok();
+        drop(conn);
+
+        sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_id).execute(&pool).await.ok();
+    }
 }
