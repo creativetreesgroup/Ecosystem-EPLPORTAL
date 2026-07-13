@@ -4,7 +4,10 @@
 //! handler yet — only its HTTP contract, mirrored here) and SPX itself.
 //! Also covers the reactive (3×401) and proactive (WIB-day) relogin trigger
 //! predicates.
-use poller::{auto_login, should_daily_relogin, should_reactive_relogin, wib_day, LoginTier, SidecarClient};
+use poller::{
+    auto_login, should_daily_relogin, should_reactive_relogin, wib_day, LoginTier, SidecarClient,
+};
+use secrecy::SecretString;
 use spx_client::SpxClient;
 use wiremock::matchers::{body_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -57,7 +60,9 @@ async fn sidecar_down_falls_through_to_api() {
     let spx = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/api/basicserver/agency/account/login"))
-        .respond_with(ResponseTemplate::new(200).insert_header("set-cookie", "fms_user_skey=APIWIN; Path=/"))
+        .respond_with(
+            ResponseTemplate::new(200).insert_header("set-cookie", "fms_user_skey=APIWIN; Path=/"),
+        )
         .mount(&spx)
         .await;
 
@@ -85,7 +90,9 @@ async fn sidecar_connection_refused_falls_through_to_api() {
     let spx = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/api/basicserver/agency/account/login"))
-        .respond_with(ResponseTemplate::new(200).insert_header("set-cookie", "fms_user_skey=APIWIN2; Path=/"))
+        .respond_with(
+            ResponseTemplate::new(200).insert_header("set-cookie", "fms_user_skey=APIWIN2; Path=/"),
+        )
         .mount(&spx)
         .await;
 
@@ -137,7 +144,9 @@ async fn sidecar_and_api_both_down_falls_through_to_form() {
         .await;
     Mock::given(method("GET"))
         .and(path("/dashboard"))
-        .respond_with(ResponseTemplate::new(200).insert_header("set-cookie", "fms_user_skey=FORMWIN; Path=/"))
+        .respond_with(
+            ResponseTemplate::new(200).insert_header("set-cookie", "fms_user_skey=FORMWIN; Path=/"),
+        )
         .mount(&spx)
         .await;
 
@@ -189,6 +198,8 @@ fn reactive_relogin_uses_pollerstate_consecutive_401s_field_task6_writes() {
         uuid::Uuid::new_v4(),
         42,
         spx_client::SpxCookies::default(),
+        SecretString::from("u"),
+        SecretString::from("p"),
     );
     assert!(!should_reactive_relogin(st.consecutive_401s));
 
@@ -216,7 +227,9 @@ fn daily_relogin_fires_on_new_wib_day_only() {
 #[test]
 fn wib_day_crosses_over_at_the_exact_utc_offset_boundary() {
     use chrono::TimeZone;
-    let just_before = chrono::Utc.with_ymd_and_hms(2026, 7, 13, 16, 59, 59).unwrap();
+    let just_before = chrono::Utc
+        .with_ymd_and_hms(2026, 7, 13, 16, 59, 59)
+        .unwrap();
     let just_after = chrono::Utc.with_ymd_and_hms(2026, 7, 13, 17, 0, 0).unwrap();
     assert_eq!(wib_day(just_before), "2026-07-13");
     assert_eq!(wib_day(just_after), "2026-07-14");
@@ -239,7 +252,9 @@ async fn daily_relogin_flips_true_after_paused_clock_advances_past_wib_midnight(
 
     // Anchor: 2026-07-13 23:58:00 WIB == 16:58:00 UTC (2 minutes before WIB
     // midnight).
-    let anchor_utc = chrono::Utc.with_ymd_and_hms(2026, 7, 13, 16, 58, 0).unwrap();
+    let anchor_utc = chrono::Utc
+        .with_ymd_and_hms(2026, 7, 13, 16, 58, 0)
+        .unwrap();
     let anchor_instant = tokio::time::Instant::now();
 
     let day0 = wib_day(anchor_utc);
@@ -257,7 +272,10 @@ async fn daily_relogin_flips_true_after_paused_clock_advances_past_wib_midnight(
     let simulated_now = anchor_utc + chrono::Duration::milliseconds(elapsed.as_millis() as i64);
 
     let day1 = wib_day(simulated_now);
-    assert_eq!(day1, "2026-07-14", "5 min after 23:58 WIB must be the next WIB day");
+    assert_eq!(
+        day1, "2026-07-14",
+        "5 min after 23:58 WIB must be the next WIB day"
+    );
     assert!(
         should_daily_relogin(&day0, &day1),
         "crossing WIB midnight via the paused/advanced tokio clock must trigger proactive relogin"

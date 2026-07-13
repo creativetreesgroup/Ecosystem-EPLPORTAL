@@ -1682,6 +1682,7 @@ dependencies = [
  "executor",
  "futures",
  "redis",
+ "secrecy",
  "serde",
  "serde_json",
  "spx-client",

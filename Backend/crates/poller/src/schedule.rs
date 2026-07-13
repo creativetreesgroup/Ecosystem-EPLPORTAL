@@ -18,8 +18,11 @@ use std::time::Duration;
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 
+use secrecy::ExposeSecret;
+
 use crate::dispatch::dispatch_booking;
 use crate::fetch::{fast_detect, should_full_sweep, sweep};
+use crate::login::{auto_login, should_daily_relogin, should_reactive_relogin, wib_day};
 use crate::state::{AccountHandle, PollerShared, PollerState};
 
 /// Spawn the account's poll loop. Returns the `JoinHandle`; the caller stores it
@@ -113,6 +116,43 @@ pub async fn poll_once(shared: &PollerShared, st: &mut PollerState, woken_by_pok
     let _ = crate::antidrift::run_anti_drift(&shared.pool, st.tenant_id, &outcome).await;
 
     st.last_pending_count = outcome.spx_id_set.len() as i64;
+
+    // Relogin check (Task 7b — wires Task 7's already-tested `login` module
+    // into the live loop). Runs on the SAME task/cycle as the rest of
+    // `poll_once`, not spawned: a relogin-in-progress naturally blocks this
+    // account's NEXT accept dispatch, which is correct — dispatching accepts
+    // with a session already known to be stale would just produce more `Auth`
+    // outcomes.
+    let now = chrono::Utc::now();
+    let today_wib = wib_day(now);
+    if should_reactive_relogin(st.consecutive_401s)
+        || should_daily_relogin(&st.last_daily_relogin_day, &today_wib)
+    {
+        st.last_relogin_attempt_ms = now.timestamp_millis();
+        match auto_login(
+            &shared.sidecar,
+            &shared.client,
+            &st.account_id,
+            st.username.expose_secret(),
+            st.password.expose_secret(),
+        )
+        .await
+        {
+            Some((cookies, tier)) => {
+                st.cookies = cookies;
+                st.consecutive_401s = 0;
+                st.last_daily_relogin_day = today_wib;
+                tracing::info!(account = %st.account_id, tier = ?tier, "relogin succeeded");
+            }
+            None => {
+                // Do NOT panic, do NOT stop the loop, do NOT touch
+                // `st.cookies`/`st.consecutive_401s` — a failed relogin just
+                // means the next cycle's accepts keep hitting Auth until a
+                // future cycle's relogin succeeds.
+                tracing::warn!(account = %st.account_id, "relogin attempt failed, will retry next cycle");
+            }
+        }
+    }
 }
 
 /// CP-7 CONTRACT: await the Layer-3 durable restore to completion BEFORE the

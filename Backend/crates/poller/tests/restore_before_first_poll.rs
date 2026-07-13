@@ -23,7 +23,8 @@ use std::time::Duration;
 
 use dashmap::DashMap;
 use executor::ExecutorHandle;
-use poller::{ensure_restored_then_spawn, PollerConfig, PollerShared, PollerState};
+use poller::{ensure_restored_then_spawn, PollerConfig, PollerShared, PollerState, SidecarClient};
+use secrecy::SecretString;
 use spx_client::{SpxClient, SpxCookies};
 use uuid::Uuid;
 use wiremock::matchers::{method, path};
@@ -143,13 +144,27 @@ async fn a_booking_accepted_before_restart_is_never_re_accepted_after_restore() 
         accounts: Arc::new(DashMap::new()),
         notifier: None,
         redis: None,
+        sidecar: Arc::new(SidecarClient::new("http://127.0.0.1:0")),
     });
 
     // A BRAND NEW PollerState: empty in-proc dedup (`AccountDedupState::new()`
     // inside `PollerState::new`), the coc_only rule wired, agency_id > 0 (so
     // `accept_booking` actually issues HTTP rather than short-circuiting to
     // Auth on a zero agency id).
-    let mut st = PollerState::new(account_id.clone(), tenant_id, 1, SpxCookies::default());
+    let mut st = PollerState::new(
+        account_id.clone(),
+        tenant_id,
+        1,
+        SpxCookies::default(),
+        SecretString::from("u"),
+        SecretString::from("p"),
+    );
+    // This test proves the restore-before-first-poll contract, not Task 7b's
+    // relogin trigger — seed `last_daily_relogin_day` to TODAY so the
+    // empty-sentinel daily trigger doesn't add an unrelated relogin attempt
+    // (against an unreachable sidecar + this test's SPX mock, which only has
+    // the list/accept endpoints mounted) on cycle 1.
+    st.last_daily_relogin_day = poller::wib_day(chrono::Utc::now());
     let compiled = core_domain::CompiledRule::compile(&core_domain::AcceptRule {
         id: rule_uuid.to_string(),
         name: "COC catch-all".into(),

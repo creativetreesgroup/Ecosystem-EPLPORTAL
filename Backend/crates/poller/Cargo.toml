@@ -11,6 +11,10 @@ dashmap = "6.2.1"
 executor = { version = "0.1.0", path = "../executor" }
 futures = "0.3.32"
 redis = { version = "1.3.0", features = ["tokio-comp", "connection-manager"] }
+# Pinned to the SAME minor version already used by spx-client's Cargo.toml
+# (Fase 3, `crypto::secret`) — reused, not a second/parallel secrecy dep in
+# the workspace graph.
+secrecy = "0.10"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 spx-client = { version = "0.1.0", path = "../spx-client" }

@@ -28,7 +28,8 @@ use std::time::Duration;
 
 use dashmap::DashMap;
 use executor::ExecutorHandle;
-use poller::{ensure_restored_then_spawn, PollerConfig, PollerShared, PollerState};
+use poller::{ensure_restored_then_spawn, PollerConfig, PollerShared, PollerState, SidecarClient};
+use secrecy::SecretString;
 use spx_client::{SpxClient, SpxCookies};
 use uuid::Uuid;
 use wiremock::matchers::{method, path};
@@ -128,10 +129,26 @@ async fn poke_during_sleep_forces_a_full_sweep_on_the_next_cycle() {
         accounts: Arc::new(DashMap::new()),
         notifier: None,
         redis: None,
+        sidecar: Arc::new(SidecarClient::new("http://127.0.0.1:0")),
     });
 
     let account_id = format!("t{}", Uuid::new_v4().simple());
-    let st = PollerState::new(account_id, tenant_id, 42, cookies());
+    let mut st = PollerState::new(
+        account_id,
+        tenant_id,
+        42,
+        cookies(),
+        SecretString::from("u"),
+        SecretString::from("p"),
+    );
+    // This test exercises the poke -> full-sweep wiring, not Task 7b's
+    // relogin trigger — seed `last_daily_relogin_day` to TODAY so the
+    // empty-sentinel daily trigger doesn't fire on cycle 1 and add
+    // unrelated HTTP noise (a real relogin attempt against an
+    // unreachable/unmounted sidecar+SPX) that would otherwise inflate the
+    // raw request count this test's `wait_for_request_count` budget relies
+    // on and starve cycle 2 of its window.
+    st.last_daily_relogin_day = poller::wib_day(chrono::Utc::now());
 
     let handle = ensure_restored_then_spawn(shared.clone(), st).await;
 

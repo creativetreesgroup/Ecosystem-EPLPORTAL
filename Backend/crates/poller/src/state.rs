@@ -10,6 +10,7 @@ use std::sync::Arc;
 use core_domain::{CompiledRule, MatchState};
 use dashmap::DashMap;
 use executor::{AccountDedupState, ExecutorHandle};
+use secrecy::SecretString;
 use spx_client::{SpxClient, SpxCookies};
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
@@ -93,9 +94,20 @@ pub struct PollerState {
     pub last_pending_count: i64,
     pub self_email: Option<String>,
     pub dedup: Arc<AccountDedupState>,
-    // Relogin bookkeeping (used by Task 7).
+    // Relogin bookkeeping (used by Task 7, wired into poll_once by Task 7b).
     pub last_relogin_attempt_ms: i64,
     pub last_daily_relogin_day: String,
+    /// Credentials for `login::auto_login` (Task 7b). `SecretString` (not a
+    /// bare `String`) so a stray `Debug`/log of `PollerState` — or of these
+    /// fields directly — never prints the plaintext password/username;
+    /// `secrecy` redacts `Debug`/`Display` and zeroizes the backing memory on
+    /// drop. Populated once at account construction from already-decrypted
+    /// credentials — decrypting from `store::agency_credentials` is a
+    /// bootstrap-layer concern for whichever later fase constructs a real
+    /// `PollerState`, NOT this task's job (same division Task 6 established
+    /// for `rules`/`rule_meta`).
+    pub username: SecretString,
+    pub password: SecretString,
     /// Compiled accept rules for this account, index-aligned with `rule_meta`
     /// (`rule_meta[i]` is the DB identity — `Uuid`/cap/accepted_count — for
     /// `rules[i]`). Empty until the account bootstrap loads them from `store`
@@ -106,7 +118,14 @@ pub struct PollerState {
 }
 
 impl PollerState {
-    pub fn new(account_id: String, tenant_id: Uuid, agency_id: i64, cookies: SpxCookies) -> Self {
+    pub fn new(
+        account_id: String,
+        tenant_id: Uuid,
+        agency_id: i64,
+        cookies: SpxCookies,
+        username: SecretString,
+        password: SecretString,
+    ) -> Self {
         Self {
             account_id,
             tenant_id,
@@ -119,6 +138,8 @@ impl PollerState {
             dedup: Arc::new(AccountDedupState::new()),
             last_relogin_attempt_ms: 0,
             last_daily_relogin_day: String::new(),
+            username,
+            password,
             rules: Arc::new(Vec::new()),
             rule_meta: Arc::new(Vec::new()),
             match_state: MatchState::default(),
@@ -141,6 +162,11 @@ pub struct PollerShared {
     pub pool: store::PgPool,
     pub config: PollerConfig,
     pub accounts: Arc<DashMap<String, AccountHandle>>,
+    /// Tier-1 login HTTP client (`auth-sidecar`, Task 9) — used by
+    /// `login::auto_login`'s relogin wiring in `schedule::poll_once` (Task
+    /// 7b). Shared (not per-account) since it is a stateless internal-HTTP
+    /// client keyed by `account_id` per call, same reuse pattern as `client`.
+    pub sidecar: Arc<crate::login::SidecarClient>,
     /// Placeholder for Task 10's `notifier` hook (fire-and-forget "accepted"/
     /// "agency-loss" WhatsApp notifications). `None` until that task wires a
     /// real handle in; `dispatch_booking` only ever fire-and-forgets through

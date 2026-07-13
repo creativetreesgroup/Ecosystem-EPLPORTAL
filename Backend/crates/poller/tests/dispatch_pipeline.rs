@@ -14,11 +14,18 @@ use std::sync::Arc;
 use core_domain::{CompiledRule, RuleBookingType, RuleConditions, RuleMode};
 use dashmap::DashMap;
 use executor::ExecutorHandle;
-use poller::{dispatch_booking, DispatchResult, PollerShared, PollerState, RuleMeta};
+use poller::{
+    dispatch_booking, DispatchResult, PollerShared, PollerState, RuleMeta, SidecarClient,
+};
+use secrecy::SecretString;
 use spx_client::{normalize_booking, SpxClient, SpxCookies};
 use uuid::Uuid;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
+
+fn creds() -> (SecretString, SecretString) {
+    (SecretString::from("u"), SecretString::from("p"))
+}
 
 fn database_url() -> String {
     std::env::var("DATABASE_URL")
@@ -103,10 +110,19 @@ async fn accept_then_duplicate_and_booking_row_flips_to_accepted() {
         accounts: Arc::new(DashMap::new()),
         notifier: None,
         redis: None,
+        sidecar: Arc::new(SidecarClient::new("http://127.0.0.1:0")),
     };
 
     let account_id = format!("t{}", Uuid::new_v4().simple());
-    let mut st = PollerState::new(account_id, tenant_id, 42, SpxCookies::default());
+    let (username, password) = creds();
+    let mut st = PollerState::new(
+        account_id,
+        tenant_id,
+        42,
+        SpxCookies::default(),
+        username,
+        password,
+    );
 
     let compiled = CompiledRule::compile(&core_domain::AcceptRule {
         id: rule_uuid.to_string(),
@@ -167,7 +183,15 @@ async fn accept_then_duplicate_and_booking_row_flips_to_accepted() {
     // dedup here is what actually exercises "claim shared": Layer 1 permits
     // the attempt (empty), but the durable Redis claim key from the first
     // accept (never released on a win) makes Layer 2 reject it.
-    let mut st2 = PollerState::new(st.account_id.clone(), tenant_id, 42, SpxCookies::default());
+    let (username2, password2) = creds();
+    let mut st2 = PollerState::new(
+        st.account_id.clone(),
+        tenant_id,
+        42,
+        SpxCookies::default(),
+        username2,
+        password2,
+    );
     st2.rules = st.rules.clone();
     st2.rule_meta = st.rule_meta.clone();
     let second = dispatch_booking(&shared, &mut st2, &normalized).await;
@@ -236,9 +260,18 @@ async fn taken_outcome_leaves_rule_matched_null_and_stamps_accept_reason() {
         accounts: Arc::new(DashMap::new()),
         notifier: None,
         redis: None,
+        sidecar: Arc::new(SidecarClient::new("http://127.0.0.1:0")),
     };
     let account_id = format!("t{}", Uuid::new_v4().simple());
-    let mut st = PollerState::new(account_id, tenant_id, 42, SpxCookies::default());
+    let (username, password) = creds();
+    let mut st = PollerState::new(
+        account_id,
+        tenant_id,
+        42,
+        SpxCookies::default(),
+        username,
+        password,
+    );
     let compiled = CompiledRule::compile(&core_domain::AcceptRule {
         id: rule_uuid.to_string(),
         name: "COC catch-all".into(),
@@ -352,9 +385,18 @@ async fn auth_outcome_releases_claim_and_leaves_booking_pending() {
         accounts: Arc::new(DashMap::new()),
         notifier: None,
         redis: None,
+        sidecar: Arc::new(SidecarClient::new("http://127.0.0.1:0")),
     };
     let account_id = format!("t{}", Uuid::new_v4().simple());
-    let mut st = PollerState::new(account_id.clone(), tenant_id, 42, SpxCookies::default());
+    let (username, password) = creds();
+    let mut st = PollerState::new(
+        account_id.clone(),
+        tenant_id,
+        42,
+        SpxCookies::default(),
+        username,
+        password,
+    );
     let compiled = CompiledRule::compile(&core_domain::AcceptRule {
         id: rule_uuid.to_string(),
         name: "COC catch-all capped".into(),
