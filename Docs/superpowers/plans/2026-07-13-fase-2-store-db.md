@@ -589,6 +589,8 @@ git commit -m "feat(store): agency_credentials/accept_rules/rule_booking_targets
 
 **Money-critical detail:** `is_coc`'s predicate must be `^\s*SPXID` (case-insensitive via `~*`), NOT the reference repo's own `^SPXID` (missing `\s*`) — see this plan's Global Constraints. This task's verification step explicitly cross-checks this against Fase 1's Rust `is_coc_name` on the same inputs.
 
+**Money-critical detail (corrected before this task was dispatched, same bug class Task 2's review caught in `accept_rules`):** `weight`/`cod_amount` must be `DOUBLE PRECISION`/`f64`, NOT `REAL`/`f32`. `core_domain::Booking` (`Backend/crates/core-domain/src/booking.rs:22-23`, Fase 1, already shipped) declares both `f64` specifically — `REAL` silently loses precision above ~16.7M, and `cod_amount` in particular is exactly the field Fase 1's `to_optional_non_neg_f64` bug fix was about. Do not use `REAL` here.
+
 - [ ] **Step 1: Write the `bookings` migration**
 
 ```sql
@@ -606,8 +608,8 @@ CREATE TABLE bookings (
         (raw_data->>'route_detail_list' IS NULL) AND (raw_data->>'route_stops' IS NULL)
     ) STORED,
     service_type TEXT,
-    weight REAL NOT NULL DEFAULT 0,
-    cod_amount REAL NOT NULL DEFAULT 0,
+    weight DOUBLE PRECISION NOT NULL DEFAULT 0,
+    cod_amount DOUBLE PRECISION NOT NULL DEFAULT 0,
     auto_accepted BOOLEAN NOT NULL DEFAULT false,
     accept_latency_ms INT,
     rule_matched UUID REFERENCES accept_rules(id) ON DELETE SET NULL,
@@ -646,8 +648,8 @@ pub struct Booking {
     /// Read-only — computed by Postgres, never set on INSERT/UPDATE.
     pub needs_enrichment: bool,
     pub service_type: Option<String>,
-    pub weight: f32,
-    pub cod_amount: f32,
+    pub weight: f64,
+    pub cod_amount: f64,
     pub auto_accepted: bool,
     pub accept_latency_ms: Option<i32>,
     pub rule_matched: Option<Uuid>,
