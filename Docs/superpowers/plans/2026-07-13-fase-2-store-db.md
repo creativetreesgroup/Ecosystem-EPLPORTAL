@@ -43,11 +43,11 @@ Full context: [`Docs/tower-master-spec.md`](../../tower-master-spec.md) and [`Do
 - Consumes: nothing new (first task in this crate).
 - Produces: `pub async fn connect(database_url: &str) -> Result<PgPool, sqlx::Error>`, `pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::migrate::MigrateError>`, `pub async fn begin_tenant_tx(pool: &PgPool, tenant_id: Uuid) -> Result<Transaction<'_, Postgres>, sqlx::Error>` — every later task's tests use `begin_tenant_tx` to scope queries under RLS. `Tenant`, `PortalUser`, `PortalSession` row structs (all `#[derive(Debug, Clone, sqlx::FromRow)]`).
 
-- [ ] **Step 1: Register the crate in the workspace**
+- [x] **Step 1: Register the crate in the workspace**
 
 Edit `Backend/Cargo.toml`, add `"crates/store"` to the `members` array (alongside the existing 8 crates + 2 bins).
 
-- [ ] **Step 2: Scaffold the crate**
+- [x] **Step 2: Scaffold the crate**
 
 ```bash
 mkdir -p Backend/crates/store/src/models Backend/crates/store/migrations
@@ -70,7 +70,7 @@ cargo add --package store --dev tokio --features rt-multi-thread,macros,test-uti
 cd ..
 ```
 
-- [ ] **Step 3: Write the `tenants` migration**
+- [x] **Step 3: Write the `tenants` migration**
 
 ```sql
 -- Backend/crates/store/migrations/0001_tenants.sql
@@ -83,7 +83,7 @@ CREATE TABLE tenants (
 );
 ```
 
-- [ ] **Step 4: Write the `portal_users` migration**
+- [x] **Step 4: Write the `portal_users` migration**
 
 ```sql
 -- Backend/crates/store/migrations/0002_portal_users.sql
@@ -103,7 +103,7 @@ CREATE TABLE portal_users (
 CREATE INDEX idx_portal_users_tenant ON portal_users (tenant_id);
 ```
 
-- [ ] **Step 5: Write the `portal_sessions` migration**
+- [x] **Step 5: Write the `portal_sessions` migration**
 
 ```sql
 -- Backend/crates/store/migrations/0003_portal_sessions.sql
@@ -127,7 +127,7 @@ CREATE INDEX idx_portal_sessions_user ON portal_sessions (portal_user_id);
 CREATE INDEX idx_portal_sessions_tenant_expires ON portal_sessions (tenant_id, expires_at);
 ```
 
-- [ ] **Step 6: Write `pool.rs`**
+- [x] **Step 6: Write `pool.rs`**
 
 ```rust
 use sqlx::postgres::{PgPool, PgPoolOptions};
@@ -164,7 +164,7 @@ pub async fn begin_tenant_tx(
 
 Note: `Transaction<'static, Postgres>` requires `sqlx`'s pool-owned transaction (via `PgPool::begin`, which returns an owned transaction, not one borrowed from a `&PgPool` reference) — this is already what `PgPool::begin()` returns, so no lifetime issue in practice; if the compiler disagrees, adjust the signature to `Transaction<'_, Postgres>` bound to the pool's lifetime and propagate that generic parameter instead.
 
-- [ ] **Step 7: Write the row structs**
+- [x] **Step 7: Write the row structs**
 
 ```rust
 // Backend/crates/store/src/models/mod.rs
@@ -229,7 +229,7 @@ pub struct PortalSession {
 }
 ```
 
-- [ ] **Step 8: Write `lib.rs`**
+- [x] **Step 8: Write `lib.rs`**
 
 ```rust
 pub mod models;
@@ -238,7 +238,7 @@ pub mod pool;
 pub use pool::{begin_tenant_tx, connect, run_migrations};
 ```
 
-- [ ] **Step 9: Verify migrations apply and the crate compiles**
+- [x] **Step 9: Verify migrations apply and the crate compiles**
 
 Bring up just Postgres (the rest of the stack isn't needed for this task): `cd Docker && docker compose up -d tower-postgres && cd ..`. Wait for healthy (`docker compose ps`), then:
 
@@ -249,7 +249,7 @@ cargo build -p store
 
 Expected: clean build. (No automated test yet in this task — Step 10 is the first one that actually connects and runs migrations; do that as this task's verification.)
 
-- [ ] **Step 10: Write and run a migration-smoke integration test**
+- [x] **Step 10: Write and run a migration-smoke integration test**
 
 Add to `Backend/crates/store/src/lib.rs` (or a new `tests/` file — either is fine, keep it simple as an inline `#[cfg(test)]` module in `lib.rs` for this first task):
 
@@ -294,11 +294,11 @@ This test connects to the REAL `tower-postgres` container from Fase 0 — it is 
 Run: `cargo test -p store -- --test-threads=1` (single-threaded: migrations + shared tenant table means concurrent test runs could race on first-run migration application).
 Expected: `test result: ok. 1 passed; 0 failed`.
 
-- [ ] **Step 11: Clippy**
+- [x] **Step 11: Clippy**
 
 Run: `cargo clippy -p store -- -D warnings` — expected clean.
 
-- [ ] **Step 12: Commit**
+- [x] **Step 12: Commit**
 
 ```bash
 git add Backend/Cargo.toml Backend/crates/store
@@ -324,7 +324,7 @@ git commit -m "feat(store): scaffold crate + tenants/portal_users/portal_session
 
 **Column-naming note:** `accept_rules`'s columns are named to match `core-domain::RuleConditions`'s field names 1:1 (Fase 1, `Backend/crates/core-domain/src/rule.rs`) so a future mapping layer (Fase 3+) is a straight field-for-field copy, not a renaming exercise.
 
-- [ ] **Step 1: Write the `agency_credentials` migration**
+- [x] **Step 1: Write the `agency_credentials` migration**
 
 ```sql
 -- Backend/crates/store/migrations/0004_agency_credentials.sql
@@ -344,7 +344,7 @@ CREATE TABLE agency_credentials (
 CREATE INDEX idx_agency_credentials_tenant ON agency_credentials (tenant_id);
 ```
 
-- [ ] **Step 2: Write the `accept_rules` migration**
+- [x] **Step 2: Write the `accept_rules` migration**
 
 **Correction (post-Task-2-review, applied before Task 2 was marked complete):** the original draft below used `REAL`/`array_to_string(destinations, '>')` directly. Real Postgres 16 rejected the generated column outright (`array_to_string` is catalogued `STABLE`, not `IMMUTABLE` — `GENERATED ALWAYS AS (...) STORED` requires every function used to be `IMMUTABLE`), and a design review found two further issues before any production data existed: (1) `REAL` (`f32`) loses precision on money-critical values above ~16.7M — `core_domain::RuleConditions::max_weight`/`max_cod_amount` are `f64` specifically to survive amounts like `4_500_000_000.0` intact (see `core-domain/src/rule.rs`'s test at that magnitude) — a `REAL` column would silently perturb such values by up to ±256 on a write-then-read round trip; (2) the generated `route_signature` must mirror `core_domain::dedupe_rules`'s actual 5-part signature (`norm_loc(origin)|dests_sig|mode|booking_type|service_types_sig`) — the original 4-part version (missing `service_types_sig`, and not normalizing `destinations` the same way as `origin`) would make the DB's dedup unique index **reject legitimate, Rust-validated distinct rules** that share a lane but differ only by `service_types` (a false-positive collision, not merely a weaker backstop). The corrected SQL below fixes all three; use this version, not a literal reading of `REAL`/plain `array_to_string` from any older description of this task.
 
@@ -463,7 +463,7 @@ CREATE UNIQUE INDEX idx_accept_rules_route_dedup ON accept_rules (tenant_id, rou
     WHERE mode = 'route';
 ```
 
-- [ ] **Step 3: Write the `rule_booking_targets` migration**
+- [x] **Step 3: Write the `rule_booking_targets` migration**
 
 ```sql
 -- Backend/crates/store/migrations/0006_rule_booking_targets.sql
@@ -480,7 +480,7 @@ CREATE TABLE rule_booking_targets (
 CREATE INDEX idx_rule_booking_targets_rule ON rule_booking_targets (rule_id);
 ```
 
-- [ ] **Step 4: Write the row structs**
+- [x] **Step 4: Write the row structs**
 
 ```rust
 // Backend/crates/store/src/models/agency_credential.rs
@@ -550,11 +550,11 @@ pub struct RuleBookingTarget {
 }
 ```
 
-- [ ] **Step 5: Wire into `models/mod.rs`**
+- [x] **Step 5: Wire into `models/mod.rs`**
 
 Add `pub mod accept_rule; pub mod agency_credential; pub mod rule_booking_target;` and the corresponding `pub use` lines.
 
-- [ ] **Step 6: Run migrations and verify with a round-trip test**
+- [x] **Step 6: Run migrations and verify with a round-trip test**
 
 Add a test (same pattern as Task 1's Step 10) that: creates a tenant, inserts an `accept_rules` row with `mode='route', origin='Padang DC', destinations=['Cileungsi DC']` (default `match_mode='strict'`, `booking_type='all'`, `service_types='{}'`), fetches it back, and asserts `route_signature` was computed by Postgres as `"padang dc|cileungsi dc|strict|all|"` (trace this by hand against the corrected generated-column SQL above before writing the assertion — normalized origin, normalized destinations joined by `>`, `match_mode`, `booking_type`, then a trailing `|` before the empty `service_types_sig`). Also insert a second `accept_rules` row with the SAME origin/destinations/mode/service_types and assert the insert **fails** (unique violation) — this proves the dedup index actually fires.
 
@@ -563,11 +563,11 @@ Add a second test proving the `service_types_sig` fix: insert two `accept_rules`
 Run: `cargo test -p store -- --test-threads=1`
 Expected: all tests pass, including the dedup-collision test (same key → `Err`) and the service-types-distinctness test (different key → both `Ok`).
 
-- [ ] **Step 7: Clippy**
+- [x] **Step 7: Clippy**
 
 Run: `cargo clippy -p store -- -D warnings` — expected clean.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add Backend/crates/store
@@ -591,7 +591,7 @@ git commit -m "feat(store): agency_credentials/accept_rules/rule_booking_targets
 
 **Money-critical detail (corrected before this task was dispatched, same bug class Task 2's review caught in `accept_rules`):** `weight`/`cod_amount` must be `DOUBLE PRECISION`/`f64`, NOT `REAL`/`f32`. `core_domain::Booking` (`Backend/crates/core-domain/src/booking.rs:22-23`, Fase 1, already shipped) declares both `f64` specifically — `REAL` silently loses precision above ~16.7M, and `cod_amount` in particular is exactly the field Fase 1's `to_optional_non_neg_f64` bug fix was about. Do not use `REAL` here.
 
-- [ ] **Step 1: Write the `bookings` migration**
+- [x] **Step 1: Write the `bookings` migration**
 
 ```sql
 -- Backend/crates/store/migrations/0007_bookings.sql
@@ -628,7 +628,7 @@ CREATE INDEX idx_bookings_live_covering ON bookings (tenant_id, status, created_
 CREATE INDEX idx_bookings_created_brin ON bookings USING BRIN (created_at);
 ```
 
-- [ ] **Step 2: Write the row struct**
+- [x] **Step 2: Write the row struct**
 
 ```rust
 // Backend/crates/store/src/models/booking.rs
@@ -660,11 +660,11 @@ pub struct Booking {
 
 `store` needs `serde_json` for the `Value` type — add it: `cd Backend && cargo add --package store serde_json && cd ..`.
 
-- [ ] **Step 3: Wire into `models/mod.rs`**
+- [x] **Step 3: Wire into `models/mod.rs`**
 
 Add `pub mod booking;` and `pub use booking::Booking;`.
 
-- [ ] **Step 4: Cross-check `is_coc` against Fase 1's Rust logic**
+- [x] **Step 4: Cross-check `is_coc` against Fase 1's Rust logic**
 
 Add a test that inserts several `bookings` rows exercising the SAME cases Fase 1's `core-domain::coc` tests already cover (`Backend/crates/core-domain/src/coc.rs`'s test module — read it again for the exact input/expected pairs), and asserts the DB-computed `is_coc` matches:
 
@@ -711,11 +711,11 @@ async fn is_coc_generated_column_matches_core_domain_is_coc_name() {
 Run: `cargo test -p store -- --test-threads=1`
 Expected: all pass, including every case in the table above matching Fase 1's `is_coc_name`/`is_coc` truth table exactly.
 
-- [ ] **Step 5: Clippy**
+- [x] **Step 5: Clippy**
 
 Run: `cargo clippy -p store -- -D warnings` — expected clean.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add Backend/crates/store Backend/Cargo.toml Backend/Cargo.lock
@@ -735,7 +735,7 @@ git commit -m "feat(store): bookings schema with is_coc/needs_enrichment generat
 - Consumes: `tenants`, `bookings` (Task 3), `accept_rules` (Task 2).
 - Produces: `AcceptEvent` row struct. The `app_role` Postgres role this task creates is reused by Task 7's RLS setup (every tenant-scoped table's app-facing grants should eventually run as `app_role`, but wiring that up for all 13 tables is Task 7's job — this task only proves the append-only mechanism works for `accept_events` itself).
 
-- [ ] **Step 1: Write the migration**
+- [x] **Step 1: Write the migration**
 
 ```sql
 -- Backend/crates/store/migrations/0008_accept_events.sql
@@ -776,7 +776,7 @@ GRANT SELECT, INSERT ON accept_events TO app_role;
 REVOKE UPDATE, DELETE ON accept_events FROM app_role;
 ```
 
-- [ ] **Step 2: Write the row struct**
+- [x] **Step 2: Write the row struct**
 
 ```rust
 // Backend/crates/store/src/models/accept_event.rs
@@ -798,11 +798,11 @@ pub struct AcceptEvent {
 }
 ```
 
-- [ ] **Step 3: Wire into `models/mod.rs`**
+- [x] **Step 3: Wire into `models/mod.rs`**
 
 Add `pub mod accept_event;` and `pub use accept_event::AcceptEvent;`.
 
-- [ ] **Step 4: Write the immutability test**
+- [x] **Step 4: Write the immutability test**
 
 ```rust
 #[tokio::test]
@@ -841,11 +841,11 @@ async fn accept_events_is_append_only_for_app_role() {
 Run: `cargo test -p store -- --test-threads=1`
 Expected: all pass, including both `is_err()` assertions genuinely observing a Postgres permission-denied error (paste the actual error text in your report — don't just check `is_err()` blindly; confirm it's a permission error, not some unrelated failure like a bad connection).
 
-- [ ] **Step 5: Clippy**
+- [x] **Step 5: Clippy**
 
 Run: `cargo clippy -p store -- -D warnings` — expected clean.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add Backend/crates/store
@@ -873,7 +873,7 @@ git commit -m "feat(store): accept_events append-only audit trail (app_role REVO
 
 **Money-critical detail:** `automation_settings.auto_accept_enabled DEFAULT false` is Aturan Keras #2 (global kill switch) enforced at the schema level — this task's verification step explicitly proves a freshly-inserted row can never come up `true` without an explicit `UPDATE`/insert value.
 
-- [ ] **Step 1: Write the `notifications` migration**
+- [x] **Step 1: Write the `notifications` migration**
 
 ```sql
 -- Backend/crates/store/migrations/0009_notifications.sql
@@ -894,7 +894,7 @@ CREATE TABLE notifications (
 CREATE INDEX idx_notifications_pending ON notifications (created_at) WHERE status = 'pending';
 ```
 
-- [ ] **Step 2: Write the `push_subscriptions` migration**
+- [x] **Step 2: Write the `push_subscriptions` migration**
 
 ```sql
 -- Backend/crates/store/migrations/0010_push_subscriptions.sql
@@ -913,7 +913,7 @@ CREATE TABLE push_subscriptions (
 CREATE INDEX idx_push_subscriptions_user ON push_subscriptions (portal_user_id);
 ```
 
-- [ ] **Step 3: Write the `automation_settings` migration**
+- [x] **Step 3: Write the `automation_settings` migration**
 
 ```sql
 -- Backend/crates/store/migrations/0011_automation_settings.sql
@@ -932,7 +932,7 @@ CREATE TABLE automation_settings (
 );
 ```
 
-- [ ] **Step 4: Write the `site_settings` migration**
+- [x] **Step 4: Write the `site_settings` migration**
 
 ```sql
 -- Backend/crates/store/migrations/0012_site_settings.sql
@@ -945,7 +945,7 @@ CREATE TABLE site_settings (
 );
 ```
 
-- [ ] **Step 5: Write the row structs**
+- [x] **Step 5: Write the row structs**
 
 ```rust
 // Backend/crates/store/src/models/notification.rs
@@ -1023,11 +1023,11 @@ pub struct SiteSetting {
 }
 ```
 
-- [ ] **Step 6: Wire into `models/mod.rs`**
+- [x] **Step 6: Wire into `models/mod.rs`**
 
 Add all four `pub mod`/`pub use` pairs.
 
-- [ ] **Step 7: Write the kill-switch-default test + round-trip tests**
+- [x] **Step 7: Write the kill-switch-default test + round-trip tests**
 
 ```rust
 #[tokio::test]
@@ -1057,11 +1057,11 @@ Add straightforward insert/select round-trip tests for `notifications`, `push_su
 Run: `cargo test -p store -- --test-threads=1`
 Expected: all pass.
 
-- [ ] **Step 8: Clippy**
+- [x] **Step 8: Clippy**
 
 Run: `cargo clippy -p store -- -D warnings` — expected clean.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add Backend/crates/store
@@ -1085,7 +1085,7 @@ git commit -m "feat(store): notifications/push_subscriptions/automation_settings
 - Consumes: `tenants` (Task 1).
 - Produces: `RoutePrice`, `RouteLocation`, `ArchiveRun` row structs. `archive_runs` is the only table in this plan that is deliberately NOT tenant-scoped (retention is a system-wide maintenance operation, per the design doc) — Task 7 must not add RLS to it.
 
-- [ ] **Step 1: Write the `route_prices` migration**
+- [x] **Step 1: Write the `route_prices` migration**
 
 ```sql
 -- Backend/crates/store/migrations/0013_route_prices.sql
@@ -1110,7 +1110,7 @@ CREATE TABLE route_prices (
 CREATE INDEX idx_route_prices_tenant ON route_prices (tenant_id);
 ```
 
-- [ ] **Step 2: Write the `route_locations` migration**
+- [x] **Step 2: Write the `route_locations` migration**
 
 ```sql
 -- Backend/crates/store/migrations/0014_route_locations.sql
@@ -1123,7 +1123,7 @@ CREATE TABLE route_locations (
 );
 ```
 
-- [ ] **Step 3: Write the `archive_runs` migration**
+- [x] **Step 3: Write the `archive_runs` migration**
 
 ```sql
 -- Backend/crates/store/migrations/0015_archive_runs.sql
@@ -1143,7 +1143,7 @@ CREATE TABLE archive_runs (
 );
 ```
 
-- [ ] **Step 4: Write the row structs**
+- [x] **Step 4: Write the row structs**
 
 ```rust
 // Backend/crates/store/src/models/route_price.rs
@@ -1200,11 +1200,11 @@ pub struct ArchiveRun {
 }
 ```
 
-- [ ] **Step 5: Wire into `models/mod.rs`**
+- [x] **Step 5: Wire into `models/mod.rs`**
 
 Add all three `pub mod`/`pub use` pairs.
 
-- [ ] **Step 6: Write tests**
+- [x] **Step 6: Write tests**
 
 Add: (a) a `route_prices` test proving the CHECK constraint — attempt an insert with `destinations = '[]'::jsonb` (0 items) and assert it fails, attempt one with 6 items and assert it fails, attempt one with 1-5 items and assert it succeeds; (b) straightforward round-trip tests for `route_locations` and `archive_runs`.
 
@@ -1245,11 +1245,11 @@ async fn route_prices_destinations_check_enforces_1_to_5() {
 Run: `cargo test -p store -- --test-threads=1`
 Expected: all pass.
 
-- [ ] **Step 7: Clippy**
+- [x] **Step 7: Clippy**
 
 Run: `cargo clippy -p store -- -D warnings` — expected clean.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add Backend/crates/store
@@ -1269,11 +1269,11 @@ git commit -m "feat(store): route_prices/route_locations/archive_runs schema"
 
 **The single most important correctness detail in this task:** `ALTER TABLE ... ENABLE ROW LEVEL SECURITY` alone does **not** restrict the table owner — only `FORCE ROW LEVEL SECURITY` does. Since local/dev Postgres connections are very often the table owner (simple single-role setups), a migration that only does `ENABLE` will pass every test trivially (because the test connection bypasses RLS as owner) while providing **zero actual protection** in exactly the same simple-single-role production topology this project is likely to run. Do not skip `FORCE`.
 
-- [ ] **Step 1: Read `pool.rs`'s `begin_tenant_tx` again**
+- [x] **Step 1: Read `pool.rs`'s `begin_tenant_tx` again**
 
 Confirm you understand `set_config('app.tenant_id', $1, true)` sets a transaction-local setting only visible for the duration of that transaction — every test in this task must open a fresh transaction (or `SET`/`RESET` explicitly) per tenant context, not reuse one connection's leftover setting across assertions.
 
-- [ ] **Step 2: Write the RLS migration**
+- [x] **Step 2: Write the RLS migration**
 
 ```sql
 -- Backend/crates/store/migrations/0016_rls_policies.sql
@@ -1301,7 +1301,7 @@ $$;
 
 Note: `current_setting('app.tenant_id', true)` — the second argument `true` means "missing_ok": if no transaction has set `app.tenant_id`, this returns `NULL` rather than raising an error, so `tenant_id = NULL` is simply never true (the query returns zero rows) instead of the whole query erroring out. This is the safer default (an availability/DoS concern: a code path that forgets to set the tenant context should silently see nothing, not crash).
 
-- [ ] **Step 3: Write the cross-tenant isolation test**
+- [x] **Step 3: Write the cross-tenant isolation test**
 
 ```rust
 #[tokio::test]
@@ -1377,11 +1377,11 @@ async fn rls_actually_forces_for_table_owner_not_just_enabled() {
 Run: `cargo test -p store -- --test-threads=1`
 Expected: both new tests pass — the cross-tenant test proving actual data isolation, and the metadata test proving `FORCE` specifically (not just `ENABLE`) is set, so a regression can't silently slip back in.
 
-- [ ] **Step 4: Clippy**
+- [x] **Step 4: Clippy**
 
 Run: `cargo clippy -p store -- -D warnings` — expected clean.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add Backend/crates/store
@@ -1398,7 +1398,7 @@ git commit -m "feat(store): RLS (ENABLE+FORCE) tenant isolation across 13 busine
 - Consumes: everything from Tasks 1-7.
 - Produces: recorded evidence the Fase 2 Definition of Done (design doc) is met.
 
-- [ ] **Step 1: Full crate test suite from a clean database**
+- [x] **Step 1: Full crate test suite from a clean database**
 
 ```bash
 cd Docker && docker compose down -v tower-postgres 2>/dev/null; docker compose up -d tower-postgres && cd ..
@@ -1408,7 +1408,7 @@ cd Backend && cargo test -p store -- --test-threads=1 && cd ..
 
 Expected: every test across all 7 prior tasks passes against a genuinely fresh database (proves migrations apply cleanly from zero, not just incrementally on a DB that already had earlier test runs' side effects).
 
-- [ ] **Step 2: `cargo sqlx prepare` — turn the Fase 0 CI placeholder into a real gate**
+- [x] **Step 2: `cargo sqlx prepare` — turn the Fase 0 CI placeholder into a real gate**
 
 ```bash
 cd Backend
@@ -1419,11 +1419,11 @@ cd ..
 
 Expected: succeeds, writes/updates a `.sqlx/` directory at the workspace root with query metadata for every `sqlx::query!`/`query_as!` macro invocation in the codebase (if this plan's tasks only used the runtime `sqlx::query`/`query_as` — non-macro, no compile-time verification — rather than the `!` macro variants, note that explicitly: it means there's nothing yet for `cargo sqlx prepare` to capture, and the Fase 0 CI step's `continue-on-error: true` should be removed only once at least one real `query!`/`query_as!` macro call exists somewhere in the workspace. Check which pattern Tasks 1-7 actually used and report the true state — don't assume).
 
-- [ ] **Step 3: Remove Fase 0's `continue-on-error` on the sqlx-prepare CI step, IF applicable**
+- [x] **Step 3: Remove Fase 0's `continue-on-error` on the sqlx-prepare CI step, IF applicable**
 
 If Step 2 produced real `.sqlx/` metadata (i.e. the codebase does use `query!`/`query_as!` macros somewhere), edit `.github/workflows/ci.yml`: remove the `continue-on-error: true` line and its explanatory comment from the "sqlx prepare check" step (added in Fase 0, always intended to become a hard gate "once Fase 2 adds real query! macros" — see that step's existing comment). Commit `.sqlx/` alongside this change. If Tasks 1-7 only used non-macro `sqlx::query`/`query_as` (runtime-checked, not compile-time), leave the CI step as-is and note in your report that this remains deferred to whichever fase first uses the macro form.
 
-- [ ] **Step 4: Full workspace build/test/clippy**
+- [x] **Step 4: Full workspace build/test/clippy**
 
 ```bash
 cd Backend
@@ -1435,20 +1435,20 @@ cd ..
 
 Expected: all clean — `core-domain`'s 127 tests, `store`'s full test suite, `reactor-core`/`auth-sidecar`'s 2 tests, remaining empty crates' 0-test runs.
 
-- [ ] **Step 5: Confirm `store` has no unintended I/O dependencies**
+- [x] **Step 5: Confirm `store` has no unintended I/O dependencies**
 
 Run: `cd Backend && cargo tree -p store && cd ..`
 Expected: `sqlx` (postgres/runtime-tokio-rustls/etc.), `uuid`, `chrono`, `serde_json`, `tokio` — all expected for a DB-access crate. No `reqwest`/`rquest`/`redis` (those belong to `spx-client`/`executor` in later fases, not `store`).
 
-- [ ] **Step 6: Cross-check every DoD item in the design doc**
+- [x] **Step 6: Cross-check every DoD item in the design doc**
 
 Read `Docs/superpowers/specs/2026-07-13-fase-2-store-db-design.md`'s "Definition of Done — Fase 2" section and confirm each of its 7 items against the actual repo state (migration files, test results, `pg_class.relforcerowsecurity`, etc.) — don't just assert they're done, cite the actual evidence for each (which migration file, which test, which command output).
 
-- [ ] **Step 7: Mark this plan complete**
+- [x] **Step 7: Mark this plan complete**
 
 Check every remaining `- [ ]` box in this file to `- [x]` by hand or with a targeted script — verify afterward (grep) that no non-checkbox prose containing the literal `- [ ]` substring got corrupted (this exact mistake happened during Fase 0's sign-off and was caught during Fase 1's; do not repeat it a third time).
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add Backend/crates/store Docs/superpowers/plans/2026-07-13-fase-2-store-db.md .github/workflows/ci.yml
