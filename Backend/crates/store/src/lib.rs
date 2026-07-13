@@ -12,6 +12,22 @@ mod tests {
             .unwrap_or_else(|_| "postgres://tower:tower_dev_only@127.0.0.1:5432/tower".to_string())
     }
 
+    /// Inserts a throwaway tenant and returns its id. Callers are responsible
+    /// for their own cleanup (existing tests `DELETE FROM tenants WHERE id =
+    /// ...` at the end; `ON DELETE CASCADE` on tenant-scoped FKs means that
+    /// also cleans up any dependent rows, e.g. bookings).
+    async fn insert_test_tenant(pool: &sqlx::PgPool) -> uuid::Uuid {
+        let tenant_id = uuid::Uuid::new_v4();
+        sqlx::query("INSERT INTO tenants (id, name, slug) VALUES ($1, $2, $3)")
+            .bind(tenant_id)
+            .bind("Test Tenant")
+            .bind(format!("test-{tenant_id}"))
+            .execute(pool)
+            .await
+            .expect("insert tenant");
+        tenant_id
+    }
+
     #[tokio::test]
     async fn migrations_apply_and_tenant_round_trips() {
         let pool = connect(&test_database_url()).await.expect("connect");
@@ -156,6 +172,58 @@ mod tests {
         );
         assert_eq!(tronton.route_signature.as_deref(), Some("padang dc|cileungsi dc|strict|all|tronton"));
         assert_eq!(fuso.route_signature.as_deref(), Some("padang dc|cileungsi dc|strict|all|fuso"));
+
+        sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_id).execute(&pool).await.ok();
+    }
+
+    /// Cross-checks the `bookings.is_coc` generated column against Fase 1's
+    /// `core_domain::is_coc_name`/`is_coc` (`crates/core-domain/src/coc.rs`)
+    /// on the exact same inputs its own test module covers, so the DB layer
+    /// and the app layer can never silently diverge on this money-critical
+    /// predicate:
+    /// - `is_coc_name_spxid_prefix_rule`: SPXID-prefixed (upper/lower-case,
+    ///   leading whitespace) -> true; non-SPXID (incl. SPXID mid-string, which
+    ///   must NOT match since the predicate is anchored at the start) -> false.
+    /// - `is_coc_from_either_identifier`: COC via booking_name even when
+    ///   spx_id itself is a plain id -> true; neither identifier is SPXID
+    ///   (including the empty-booking_name variant) -> false.
+    #[tokio::test]
+    async fn is_coc_generated_column_matches_core_domain_is_coc_name() {
+        let pool = connect(&test_database_url()).await.expect("connect");
+        run_migrations(&pool).await.expect("migrate");
+        let tenant_id = insert_test_tenant(&pool).await;
+
+        // (spx_id, booking_name in raw_data, expected is_coc) — mirrors every
+        // case in core-domain's coc.rs test module (spx_id gets a per-case
+        // suffix below for uniqueness, which does not change whether it
+        // starts with SPXID; booking_name is left byte-for-byte identical to
+        // the Rust test's literals).
+        let cases: &[(&str, &str, bool)] = &[
+            ("SPXID12345", "", true),
+            ("spxid-lower", "", true),
+            ("  SPXID-leading-space", "", true),
+            ("BK-778899", "", false),
+            ("REGULER-1", "", false),
+            ("MY-SPXID-suffix", "", false),
+            ("884412771", "SPXID99887766", true), // COC via booking_name, not spx_id
+            ("884412771", "BK-1", false),
+            ("884412771", "", false), // neither identifier is SPXID (coc.rs: reg_when_neither_identifier_is_spxid)
+        ];
+
+        for (i, (spx_id, booking_name, expected)) in cases.iter().enumerate() {
+            let unique_spx_id = format!("{spx_id}-case{i}");
+            let raw_data = serde_json::json!({ "booking_name": booking_name });
+            let row: (bool,) = sqlx::query_as(
+                "INSERT INTO bookings (tenant_id, spx_id, raw_data) VALUES ($1, $2, $3) RETURNING is_coc",
+            )
+            .bind(tenant_id)
+            .bind(&unique_spx_id)
+            .bind(&raw_data)
+            .fetch_one(&pool)
+            .await
+            .unwrap_or_else(|e| panic!("case {i} ({spx_id:?}, {booking_name:?}) insert failed: {e}"));
+            assert_eq!(row.0, *expected, "case {i}: spx_id={spx_id:?} booking_name={booking_name:?}");
+        }
 
         sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_id).execute(&pool).await.ok();
     }
