@@ -28,6 +28,40 @@ mod tests {
         tenant_id
     }
 
+    /// `SET ROLE app_role` then begin a transaction with `app.tenant_id` set
+    /// for its duration — the RLS-observing equivalent of `begin_tenant_tx`.
+    ///
+    /// This is NOT optional plumbing: `tower` (this crate's only configured
+    /// Postgres login, `test_database_url()`'s default and this project's
+    /// `Docker/docker-compose.yml` `POSTGRES_USER`) is a superuser with
+    /// BYPASSRLS, and Postgres unconditionally exempts superusers from row
+    /// security — `FORCE ROW LEVEL SECURITY` has zero effect on them. A test
+    /// that ran tenant-scoped queries directly against `&pool`/`begin_tenant_tx`
+    /// (as every other test in this module correctly does for non-RLS
+    /// assertions) would therefore see ALL rows regardless of tenant,
+    /// no matter how correct the RLS policy is — proving nothing. `app_role`
+    /// (created NOLOGIN, no SUPERUSER/BYPASSRLS, in migration 0008; granted
+    /// CRUD on the 12 non-append-only tenant tables in migration 0016) is
+    /// genuinely subject to RLS, mirroring the discipline already
+    /// established by `accept_events_is_append_only_for_app_role`.
+    ///
+    /// Caller must `RESET ROLE` on `conn` (then drop it) once done, so no
+    /// role state bleeds onto whatever test next reuses this pooled
+    /// connection — see call sites.
+    async fn app_role_tenant_tx(
+        conn: &mut sqlx::pool::PoolConnection<sqlx::Postgres>,
+        tenant_id: uuid::Uuid,
+    ) -> sqlx::Transaction<'_, sqlx::Postgres> {
+        sqlx::query("SET ROLE app_role").execute(&mut **conn).await.expect("set role app_role");
+        let mut tx = sqlx::Acquire::begin(conn).await.expect("begin tx as app_role");
+        sqlx::query("SELECT set_config('app.tenant_id', $1, true)")
+            .bind(tenant_id.to_string())
+            .execute(&mut *tx)
+            .await
+            .expect("set tenant context");
+        tx
+    }
+
     #[tokio::test]
     async fn migrations_apply_and_tenant_round_trips() {
         let pool = connect(&test_database_url()).await.expect("connect");
@@ -550,5 +584,198 @@ mod tests {
         assert!(bad_status.is_err(), "status must be constrained to running/completed/failed");
 
         sqlx::query("DELETE FROM archive_runs WHERE id = $1").bind(inserted.id).execute(&pool).await.ok();
+    }
+
+    /// Proves RLS actually isolates tenants on `bookings`: tenant A can see
+    /// its own row, tenant B (different `app.tenant_id`) sees nothing, and a
+    /// query with NO tenant context set at all also sees nothing (not an
+    /// error, not a leak) — matching `current_setting('app.tenant_id',
+    /// true)`'s missing_ok semantics.
+    ///
+    /// Exercised via `app_role` (see `app_role_tenant_tx`), NOT via `&pool`/
+    /// `begin_tenant_tx` directly — `tower` is a superuser and Postgres
+    /// unconditionally exempts superusers from row security, so a version
+    /// of this test that queried through the raw pool connection would
+    /// observe tenant B (and the no-context case) seeing tenant A's row
+    /// regardless of how correct the RLS policy is, proving nothing. (This
+    /// is exactly what an earlier draft of this test did, and it correctly
+    /// failed with `left: 1, right: 0` until switched to `app_role`.)
+    #[tokio::test]
+    async fn rls_blocks_cross_tenant_reads_on_bookings() {
+        let pool = connect(&test_database_url()).await.expect("connect");
+        run_migrations(&pool).await.expect("migrate");
+
+        let tenant_a = insert_test_tenant(&pool).await;
+        let tenant_b = insert_test_tenant(&pool).await;
+
+        // Insert a booking as tenant A.
+        let mut conn_a = pool.acquire().await.expect("acquire a");
+        {
+            let mut tx_a = app_role_tenant_tx(&mut conn_a, tenant_a).await;
+            sqlx::query("INSERT INTO bookings (tenant_id, spx_id, raw_data) VALUES ($1, $2, '{}')")
+                .bind(tenant_a)
+                .bind("SPX-CROSS-TENANT-TEST")
+                .execute(&mut *tx_a)
+                .await
+                .expect("insert as tenant a");
+            tx_a.commit().await.expect("commit a");
+        }
+        sqlx::query("RESET ROLE").execute(&mut *conn_a).await.ok();
+        drop(conn_a);
+
+        // Tenant A can see its own row.
+        let mut conn_a2 = pool.acquire().await.expect("acquire a2");
+        {
+            let mut tx_a2 = app_role_tenant_tx(&mut conn_a2, tenant_a).await;
+            let seen_by_a: Vec<(uuid::Uuid,)> =
+                sqlx::query_as("SELECT id FROM bookings WHERE spx_id = 'SPX-CROSS-TENANT-TEST'")
+                    .fetch_all(&mut *tx_a2)
+                    .await
+                    .expect("select as tenant a");
+            assert_eq!(seen_by_a.len(), 1, "tenant A must see its own booking");
+            tx_a2.commit().await.ok();
+        }
+        sqlx::query("RESET ROLE").execute(&mut *conn_a2).await.ok();
+        drop(conn_a2);
+
+        // Tenant B must NOT see tenant A's row.
+        let mut conn_b = pool.acquire().await.expect("acquire b");
+        {
+            let mut tx_b = app_role_tenant_tx(&mut conn_b, tenant_b).await;
+            let seen_by_b: Vec<(uuid::Uuid,)> =
+                sqlx::query_as("SELECT id FROM bookings WHERE spx_id = 'SPX-CROSS-TENANT-TEST'")
+                    .fetch_all(&mut *tx_b)
+                    .await
+                    .expect("select as tenant b");
+            assert_eq!(seen_by_b.len(), 0, "tenant B must NOT see tenant A's booking — RLS leak");
+            tx_b.commit().await.ok();
+        }
+        sqlx::query("RESET ROLE").execute(&mut *conn_b).await.ok();
+        drop(conn_b);
+
+        // No tenant context at all, still as app_role (a role RLS actually
+        // restricts): must also see nothing, not error.
+        let mut conn_bare = pool.acquire().await.expect("acquire bare");
+        sqlx::query("SET ROLE app_role").execute(&mut *conn_bare).await.expect("set role bare");
+        let seen_bare: Vec<(uuid::Uuid,)> =
+            sqlx::query_as("SELECT id FROM bookings WHERE spx_id = 'SPX-CROSS-TENANT-TEST'")
+                .fetch_all(&mut *conn_bare)
+                .await
+                .expect("select with no tenant context");
+        assert_eq!(seen_bare.len(), 0, "queries with no tenant context set must see nothing, not error or leak");
+        sqlx::query("RESET ROLE").execute(&mut *conn_bare).await.ok();
+        drop(conn_bare);
+
+        sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_a).execute(&pool).await.ok();
+        sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_b).execute(&pool).await.ok();
+    }
+
+    /// Second cross-tenant probe on a distinct table shape: `site_settings`
+    /// is keyed by (tenant_id, key) rather than a synthetic surrogate id, and
+    /// its data (arbitrary JSONB config) is exactly the kind of thing that
+    /// must never leak between tenants. This guards against a scenario where
+    /// `bookings` alone happens to pass while the underlying RLS policy on a
+    /// different table is missing or misconfigured. Same `app_role`
+    /// discipline as `rls_blocks_cross_tenant_reads_on_bookings` and for the
+    /// same reason: `tower` is a superuser and would bypass RLS entirely.
+    #[tokio::test]
+    async fn rls_blocks_cross_tenant_reads_on_site_settings() {
+        let pool = connect(&test_database_url()).await.expect("connect");
+        run_migrations(&pool).await.expect("migrate");
+
+        let tenant_a = insert_test_tenant(&pool).await;
+        let tenant_b = insert_test_tenant(&pool).await;
+
+        let mut conn_a = pool.acquire().await.expect("acquire a");
+        {
+            let mut tx_a = app_role_tenant_tx(&mut conn_a, tenant_a).await;
+            sqlx::query(
+                "INSERT INTO site_settings (tenant_id, key, value) VALUES ($1, 'secret_key', '{\"v\":1}')",
+            )
+            .bind(tenant_a)
+            .execute(&mut *tx_a)
+            .await
+            .expect("insert as tenant a");
+            tx_a.commit().await.expect("commit a");
+        }
+        sqlx::query("RESET ROLE").execute(&mut *conn_a).await.ok();
+        drop(conn_a);
+
+        let mut conn_b = pool.acquire().await.expect("acquire b");
+        {
+            let mut tx_b = app_role_tenant_tx(&mut conn_b, tenant_b).await;
+            let seen_by_b: Vec<(uuid::Uuid,)> =
+                sqlx::query_as("SELECT tenant_id FROM site_settings WHERE key = 'secret_key'")
+                    .fetch_all(&mut *tx_b)
+                    .await
+                    .expect("select as tenant b");
+            assert_eq!(seen_by_b.len(), 0, "tenant B must NOT see tenant A's site_settings row — RLS leak");
+            tx_b.commit().await.ok();
+        }
+        sqlx::query("RESET ROLE").execute(&mut *conn_b).await.ok();
+        drop(conn_b);
+
+        let mut conn_bare = pool.acquire().await.expect("acquire bare");
+        sqlx::query("SET ROLE app_role").execute(&mut *conn_bare).await.expect("set role bare");
+        let seen_bare: Vec<(uuid::Uuid,)> =
+            sqlx::query_as("SELECT tenant_id FROM site_settings WHERE key = 'secret_key'")
+                .fetch_all(&mut *conn_bare)
+                .await
+                .expect("select with no tenant context");
+        assert_eq!(seen_bare.len(), 0, "queries with no tenant context set must see nothing, not error or leak");
+        sqlx::query("RESET ROLE").execute(&mut *conn_bare).await.ok();
+        drop(conn_bare);
+
+        sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_a).execute(&pool).await.ok();
+        sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_b).execute(&pool).await.ok();
+    }
+
+    /// Regression guard for the `FORCE ROW LEVEL SECURITY` requirement
+    /// itself: queries `pg_class.relforcerowsecurity` for a sample of the 13
+    /// tables so a future migration edit that drops `FORCE` (leaving only
+    /// `ENABLE`) fails this test immediately instead of silently
+    /// reintroducing an owner-bypass hole. `ENABLE` alone does not restrict
+    /// the table owner, and the test's own connection IS the owner (it ran
+    /// the migrations), so without this dedicated metadata check a
+    /// FORCE-less migration would pass every other test trivially while
+    /// providing zero real protection.
+    #[tokio::test]
+    async fn rls_actually_forces_for_table_owner_not_just_enabled() {
+        let pool = connect(&test_database_url()).await.expect("connect");
+        run_migrations(&pool).await.expect("migrate");
+
+        for table in ["bookings", "accept_rules", "portal_users", "agency_credentials"] {
+            let (forced,): (bool,) = sqlx::query_as(
+                "SELECT relforcerowsecurity FROM pg_class WHERE relname = $1",
+            )
+            .bind(table)
+            .fetch_one(&pool)
+            .await
+            .unwrap_or_else(|e| panic!("checking relforcerowsecurity for {table}: {e}"));
+            assert!(forced, "{table} must have FORCE ROW LEVEL SECURITY set, not just ENABLE");
+        }
+    }
+
+    /// `tenants` and `archive_runs` are deliberately excluded from RLS
+    /// (`tenants` has no `tenant_id` column to key a policy on;
+    /// `archive_runs` is a system-wide maintenance record, not tenant-scoped
+    /// — see Task 6). Confirms the migration's exclusion list wasn't
+    /// accidentally widened or narrowed.
+    #[tokio::test]
+    async fn rls_excludes_tenants_and_archive_runs() {
+        let pool = connect(&test_database_url()).await.expect("connect");
+        run_migrations(&pool).await.expect("migrate");
+
+        for table in ["tenants", "archive_runs"] {
+            let (enabled, forced): (bool, bool) = sqlx::query_as(
+                "SELECT relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname = $1",
+            )
+            .bind(table)
+            .fetch_one(&pool)
+            .await
+            .unwrap_or_else(|e| panic!("checking relrowsecurity for {table}: {e}"));
+            assert!(!enabled, "{table} must NOT have RLS enabled");
+            assert!(!forced, "{table} must NOT have RLS forced");
+        }
     }
 }
