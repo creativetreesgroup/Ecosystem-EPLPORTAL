@@ -10,7 +10,7 @@ use sha2::Sha256;
 use uuid::Uuid;
 use zeroize::Zeroize;
 
-use crate::crypto::secret::{ExposeSecret, SecretBox};
+use crate::crypto::secret::{ExposeSecret, SecretBox, SecretString};
 
 /// HKDF `info` label: encrypts the SPX agency password (`agency_credentials`).
 pub const LABEL_AGENCY_CREDENTIAL: &str = "tower.agency-credential.v1";
@@ -144,6 +144,31 @@ pub fn decrypt(
     cipher
         .decrypt(&nonce, Payload { msg: ciphertext, aad })
         .map_err(|_| CryptoError::Aead)
+}
+
+/// Encrypt an SPX agency password for storage in `agency_credentials.ciphertext`
+/// / `.nonce`. AAD binds it to `LABEL_AGENCY_CREDENTIAL` + `tenant_id`.
+pub fn encrypt_agency_password(
+    master: &MasterKey,
+    tenant_id: Uuid,
+    password: &str,
+) -> Result<Ciphertext, CryptoError> {
+    let aad = aad_for(LABEL_AGENCY_CREDENTIAL, tenant_id);
+    encrypt(master, LABEL_AGENCY_CREDENTIAL, password.as_bytes(), &aad)
+}
+
+/// Decrypt a password read back from `agency_credentials`. Returned inside a
+/// `SecretString` so it is redacted in logs and zeroized on drop.
+pub fn decrypt_agency_password(
+    master: &MasterKey,
+    tenant_id: Uuid,
+    ciphertext: &[u8],
+    nonce: &[u8; 12],
+) -> Result<SecretString, CryptoError> {
+    let aad = aad_for(LABEL_AGENCY_CREDENTIAL, tenant_id);
+    let plaintext = decrypt(master, LABEL_AGENCY_CREDENTIAL, ciphertext, nonce, &aad)?;
+    let s = String::from_utf8(plaintext).map_err(|_| CryptoError::Aead)?;
+    Ok(SecretString::from(s))
 }
 
 #[cfg(test)]

@@ -1544,7 +1544,10 @@ dependencies = [
  "hkdf",
  "secrecy",
  "sha2 0.11.0",
+ "sqlx",
+ "store",
  "thiserror",
+ "tokio",
  "uuid",
  "zeroize",
 ]
