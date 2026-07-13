@@ -102,7 +102,11 @@ pub async fn expire_stale_bookings(
         }
         let ddl = ddl_raw.unwrap_or(0);
         let ddl_ms = if ddl > 0 {
-            if ddl > 1_000_000_000_000 { ddl } else { ddl * 1000 }
+            if ddl > 1_000_000_000_000 {
+                ddl
+            } else {
+                ddl * 1000
+            }
         } else {
             0
         };
@@ -139,7 +143,88 @@ pub async fn expire_stale_bookings(
         .await?;
     }
     tx.commit().await?;
-    Ok(StaleOutcome { expired: to_expire.len() as u64, taken: to_taken.len() as u64 })
+    Ok(StaleOutcome {
+        expired: to_expire.len() as u64,
+        taken: to_taken.len() as u64,
+    })
+}
+
+/// Record the terminal outcome of an accept attempt on a booking (the accept
+/// dispatch pipeline's write-back — Fase 5 Task 6).
+///
+/// Two type corrections vs. the Task 6 brief's initial transcription (same bug
+/// class Task 5 already hit once on this table — see the module doc above):
+/// 1. `rule_matched` is `UUID REFERENCES accept_rules(id) ON DELETE SET NULL`,
+///    NOT text — `rule_matched` MUST be the winning rule's real `Uuid` (or
+///    `None`), never a rule NAME or a reason string like `"taken_by_other"`.
+/// 2. `accept_latency_ms` is `INT` (Postgres int4 = Rust `i32`), not `i64` — a
+///    booking's own accept latency in milliseconds will never remotely
+///    approach i32's ~2.1 billion range, so the narrower type is safe.
+///
+/// A sub-classification reason that is NOT a rule uuid (e.g. `"taken_by_other"`
+/// for a `Taken`/agency-dup-loss outcome) cannot be squeezed into the
+/// `rule_matched` FK column either, so — mirroring `expire_stale_bookings`'s
+/// `drift_reason` pattern — it is merged additively into
+/// `raw_data->>'accept_reason'` via `||` (never clobbers other `raw_data`
+/// keys) when `accept_reason` is `Some`.
+///
+/// Bundled into a struct (rather than more positional args) both to dodge
+/// `clippy::too_many_arguments` and — more importantly — because several
+/// fields here are same-typed `Option`/`bool` values where a positional
+/// call site is a real transposition hazard (e.g. swapping `auto_accepted`
+/// and an `Option<&str>` would not be caught by the type checker at a couple
+/// of these call sites).
+#[derive(Debug, Clone, Copy)]
+pub struct BookingStatusUpdate<'a> {
+    pub status: &'a str,
+    pub latency_ms: Option<i32>,
+    pub auto_accepted: bool,
+    pub rule_matched: Option<Uuid>,
+    pub accept_reason: Option<&'a str>,
+}
+
+pub async fn update_booking_status(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    spx_id: &str,
+    update: BookingStatusUpdate<'_>,
+) -> Result<(), sqlx::Error> {
+    let mut tx = crate::begin_tenant_tx(pool, tenant_id).await?;
+    match update.accept_reason {
+        Some(reason) => {
+            sqlx::query(
+                "UPDATE bookings SET status=$3, accept_latency_ms=$4, auto_accepted=$5, \
+                 rule_matched=$6, \
+                 raw_data = raw_data || jsonb_build_object('accept_reason', $7::text), \
+                 updated_at=now() WHERE tenant_id=$1 AND spx_id=$2",
+            )
+            .bind(tenant_id)
+            .bind(spx_id)
+            .bind(update.status)
+            .bind(update.latency_ms)
+            .bind(update.auto_accepted)
+            .bind(update.rule_matched)
+            .bind(reason)
+            .execute(&mut *tx)
+            .await?;
+        }
+        None => {
+            sqlx::query(
+                "UPDATE bookings SET status=$3, accept_latency_ms=$4, auto_accepted=$5, \
+                 rule_matched=$6, updated_at=now() WHERE tenant_id=$1 AND spx_id=$2",
+            )
+            .bind(tenant_id)
+            .bind(spx_id)
+            .bind(update.status)
+            .bind(update.latency_ms)
+            .bind(update.auto_accepted)
+            .bind(update.rule_matched)
+            .execute(&mut *tx)
+            .await?;
+        }
+    }
+    tx.commit().await?;
+    Ok(())
 }
 
 /// Inverse of expire: flip 'failed' rows we POSITIVELY see back to 'pending'.

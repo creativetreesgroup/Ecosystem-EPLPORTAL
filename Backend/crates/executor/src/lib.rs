@@ -7,6 +7,7 @@ pub mod agency_dup;
 pub mod dedup;
 pub mod gate;
 pub mod quota;
+pub mod release;
 pub mod restore;
 
 pub use agency_dup::{fetch_self_email, verify_agency_dup, AgencyDupOutcome};

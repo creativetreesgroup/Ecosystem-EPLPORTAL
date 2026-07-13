@@ -7,6 +7,7 @@
 //! `Arc<AccountDedupState>` (restored before first poll).
 use std::sync::Arc;
 
+use core_domain::{CompiledRule, MatchState};
 use dashmap::DashMap;
 use executor::{AccountDedupState, ExecutorHandle};
 use spx_client::{SpxClient, SpxCookies};
@@ -49,10 +50,16 @@ impl Default for PollerConfig {
 impl PollerConfig {
     pub fn from_env() -> Self {
         fn u64v(k: &str, d: u64) -> u64 {
-            std::env::var(k).ok().and_then(|s| s.parse().ok()).unwrap_or(d)
+            std::env::var(k)
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(d)
         }
         fn u32v(k: &str, d: u32) -> u32 {
-            std::env::var(k).ok().and_then(|s| s.parse().ok()).unwrap_or(d)
+            std::env::var(k)
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(d)
         }
         let def = PollerConfig::default();
         PollerConfig {
@@ -63,7 +70,10 @@ impl PollerConfig {
             fast_detect_pages: u32v("SPX_FAST_DETECT_PAGES", def.fast_detect_pages),
             sweep_hedge_ms: u64v("SPX_SWEEP_HEDGE_MS", def.sweep_hedge_ms),
             notif_watch_ms: u64v("SPX_NOTIF_WATCH_MS", def.notif_watch_ms),
-            notif_watch_concurrency: u32v("SPX_NOTIF_WATCH_CONCURRENCY", def.notif_watch_concurrency),
+            notif_watch_concurrency: u32v(
+                "SPX_NOTIF_WATCH_CONCURRENCY",
+                def.notif_watch_concurrency,
+            ),
             primary_account_id: std::env::var("PORTAL_USERNAME")
                 .unwrap_or_default()
                 .trim()
@@ -86,6 +96,13 @@ pub struct PollerState {
     // Relogin bookkeeping (used by Task 7).
     pub last_relogin_attempt_ms: i64,
     pub last_daily_relogin_day: String,
+    /// Compiled accept rules for this account, index-aligned with `rule_meta`
+    /// (`rule_meta[i]` is the DB identity — `Uuid`/cap/accepted_count — for
+    /// `rules[i]`). Empty until the account bootstrap loads them from `store`
+    /// (Task 6 focuses on the dispatch pipeline itself, not that loader).
+    pub rules: Arc<Vec<CompiledRule>>,
+    pub rule_meta: Arc<Vec<crate::dispatch::RuleMeta>>,
+    pub match_state: MatchState,
 }
 
 impl PollerState {
@@ -102,6 +119,9 @@ impl PollerState {
             dedup: Arc::new(AccountDedupState::new()),
             last_relogin_attempt_ms: 0,
             last_daily_relogin_day: String::new(),
+            rules: Arc::new(Vec::new()),
+            rule_meta: Arc::new(Vec::new()),
+            match_state: MatchState::default(),
         }
     }
 }
@@ -113,8 +133,7 @@ pub struct AccountHandle {
 }
 
 /// Global, clone-shared context. `SpxClient`/`ExecutorHandle` are shared via
-/// `Arc`; `PgPool` is itself an `Arc` clone. Later tasks add a `RedisPublisher`
-/// (Task 13) and a `notifier::BotSettings` loader.
+/// `Arc`; `PgPool` is itself an `Arc` clone.
 #[derive(Clone)]
 pub struct PollerShared {
     pub executor: Arc<ExecutorHandle>,
@@ -122,4 +141,13 @@ pub struct PollerShared {
     pub pool: store::PgPool,
     pub config: PollerConfig,
     pub accounts: Arc<DashMap<String, AccountHandle>>,
+    /// Placeholder for Task 10's `notifier` hook (fire-and-forget "accepted"/
+    /// "agency-loss" WhatsApp notifications). `None` until that task wires a
+    /// real handle in; `dispatch_booking` only ever fire-and-forgets through
+    /// this, so a `None` here is a safe, inert no-op today.
+    pub notifier: Option<()>,
+    /// Placeholder for Task 13's ws-hub Redis publish channel (`ticket_accepted`
+    /// etc. published to `acct:<account_id>`). `None` until that task wires a
+    /// real handle in.
+    pub redis: Option<()>,
 }

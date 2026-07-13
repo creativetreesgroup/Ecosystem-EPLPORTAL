@@ -4,7 +4,8 @@ pub mod pool;
 pub mod quota;
 
 pub use bookings::{
-    expire_stale_bookings, resurrect_pending, upsert_booking, BookingUpsert, StaleOutcome,
+    expire_stale_bookings, resurrect_pending, update_booking_status, upsert_booking,
+    BookingStatusUpdate, BookingUpsert, StaleOutcome,
 };
 pub use pool::{begin_tenant_tx, connect, run_migrations};
 pub use quota::{consume_rule_quota, QuotaConsumeOutcome};
