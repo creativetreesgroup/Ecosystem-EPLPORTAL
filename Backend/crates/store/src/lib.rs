@@ -262,6 +262,54 @@ mod tests {
         sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_id).execute(&pool).await.ok();
     }
 
+    /// Round-trips a `bookings` row through its typed `FromRow` struct
+    /// (`models::Booking`). `bookings` already has substantial coverage via
+    /// `is_coc_generated_column_matches_core_domain_is_coc_name` and the RLS
+    /// tests, but none of those fetch a row back through `models::Booking`
+    /// itself — they either check a single generated column via a raw tuple
+    /// or only assert row counts. This is a small, separate test (rather
+    /// than modifying the `is_coc` test, which has a distinct, focused
+    /// purpose) that closes that gap, including the two Postgres-computed
+    /// columns `is_coc`/`needs_enrichment`.
+    #[tokio::test]
+    async fn booking_round_trips() {
+        let pool = connect(&test_database_url()).await.expect("connect");
+        run_migrations(&pool).await.expect("migrate");
+        let tenant_id = insert_test_tenant(&pool).await;
+
+        let raw_data = serde_json::json!({ "booking_name": "BK-ROUNDTRIP-1" });
+        let inserted: models::Booking = sqlx::query_as(
+            "INSERT INTO bookings (tenant_id, spx_id, raw_data, weight, cod_amount)
+             VALUES ($1, $2, $3, $4, $5) RETURNING *",
+        )
+        .bind(tenant_id)
+        .bind("BK-ROUNDTRIP-1")
+        .bind(&raw_data)
+        .bind(12.5_f64)
+        .bind(50000.0_f64)
+        .fetch_one(&pool)
+        .await
+        .expect("insert booking");
+
+        let fetched: models::Booking = sqlx::query_as("SELECT * FROM bookings WHERE id = $1")
+            .bind(inserted.id)
+            .fetch_one(&pool)
+            .await
+            .expect("fetch booking");
+
+        assert_eq!(fetched.tenant_id, tenant_id);
+        assert_eq!(fetched.spx_id, "BK-ROUNDTRIP-1");
+        assert_eq!(fetched.raw_data, raw_data);
+        assert_eq!(fetched.status, "pending");
+        assert!(!fetched.is_coc, "spx_id/booking_name here do not start with SPXID");
+        assert!(fetched.needs_enrichment, "no route_detail_list/route_stops supplied");
+        assert_eq!(fetched.weight, 12.5);
+        assert_eq!(fetched.cod_amount, 50000.0);
+        assert!(!fetched.auto_accepted);
+
+        sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_id).execute(&pool).await.ok();
+    }
+
     /// Proves `accept_events` is append-only at the DB permission level, not
     /// just by application convention. Table owners bypass GRANT/REVOKE
     /// entirely, so this test `SET ROLE app_role` before attempting the
@@ -314,6 +362,48 @@ mod tests {
 
         sqlx::query("RESET ROLE").execute(&mut *conn).await.ok();
         drop(conn);
+
+        sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_id).execute(&pool).await.ok();
+    }
+
+    /// Round-trips an `accept_events` row through its typed `FromRow` struct
+    /// (`models::AcceptEvent`). `accept_events_is_append_only_for_app_role`
+    /// already inserts a row but only ever fetches its `id` back via a raw
+    /// tuple — its focus is proving UPDATE/DELETE are forbidden for
+    /// `app_role`, not struct decoding, so this is a small separate test
+    /// covering the typed-fetch path instead of modifying that one.
+    #[tokio::test]
+    async fn accept_event_round_trips() {
+        let pool = connect(&test_database_url()).await.expect("connect");
+        run_migrations(&pool).await.expect("migrate");
+        let tenant_id = insert_test_tenant(&pool).await;
+
+        let detail = serde_json::json!({ "reason": "auto-accept rule matched" });
+        let inserted: models::AcceptEvent = sqlx::query_as(
+            "INSERT INTO accept_events (tenant_id, outcome, local_dispatch_us, accept_e2e_ms, detail)
+             VALUES ($1, 'accepted', $2, $3, $4) RETURNING *",
+        )
+        .bind(tenant_id)
+        .bind(1500_i64)
+        .bind(42_i64)
+        .bind(&detail)
+        .fetch_one(&pool)
+        .await
+        .expect("insert accept_event");
+
+        let fetched: models::AcceptEvent = sqlx::query_as("SELECT * FROM accept_events WHERE id = $1")
+            .bind(inserted.id)
+            .fetch_one(&pool)
+            .await
+            .expect("fetch accept_event");
+
+        assert_eq!(fetched.tenant_id, tenant_id);
+        assert_eq!(fetched.outcome, "accepted");
+        assert_eq!(fetched.local_dispatch_us, Some(1500));
+        assert_eq!(fetched.accept_e2e_ms, Some(42));
+        assert_eq!(fetched.detail, detail);
+        assert!(fetched.booking_id.is_none());
+        assert!(fetched.rule_id.is_none());
 
         sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_id).execute(&pool).await.ok();
     }
@@ -376,6 +466,192 @@ mod tests {
         assert_eq!(fetched.status, "pending");
         assert_eq!(fetched.attempts, 0);
         assert!(fetched.sent_at.is_none());
+
+        sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_id).execute(&pool).await.ok();
+    }
+
+    /// Round-trips a `portal_sessions` row through its typed `FromRow` struct
+    /// — the "zero test coverage" gap flagged in the Fase 2 sign-off (Task
+    /// 8): before this test, nothing ever fetched a `portal_sessions` row
+    /// back through `models::PortalSession`, so a column-name/type mismatch
+    /// between the migration and the struct (which `#[derive(FromRow)]`
+    /// cannot catch at compile time) would have gone completely undetected.
+    #[tokio::test]
+    async fn portal_session_round_trips() {
+        let pool = connect(&test_database_url()).await.expect("connect");
+        run_migrations(&pool).await.expect("migrate");
+        let tenant_id = insert_test_tenant(&pool).await;
+
+        let portal_user_id: (uuid::Uuid,) = sqlx::query_as(
+            "INSERT INTO portal_users (tenant_id, username, password_hash, display_name)
+             VALUES ($1, 'agent-session', 'hash', 'Agent Session') RETURNING id",
+        )
+        .bind(tenant_id)
+        .fetch_one(&pool)
+        .await
+        .expect("insert portal_user");
+
+        let expires_at = chrono::Utc::now() + chrono::Duration::hours(2);
+        sqlx::query(
+            "INSERT INTO portal_sessions (tenant_id, portal_user_id, token_hash, ip, user_agent, expires_at)
+             VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(tenant_id)
+        .bind(portal_user_id.0)
+        .bind(b"session-token-hash-bytes".to_vec())
+        .bind("203.0.113.7")
+        .bind("Mozilla/5.0 (test agent)")
+        .bind(expires_at)
+        .execute(&pool)
+        .await
+        .expect("insert portal_session");
+
+        let fetched: models::PortalSession =
+            sqlx::query_as("SELECT * FROM portal_sessions WHERE portal_user_id = $1")
+                .bind(portal_user_id.0)
+                .fetch_one(&pool)
+                .await
+                .expect("fetch portal_session");
+
+        assert_eq!(fetched.tenant_id, tenant_id);
+        assert_eq!(fetched.portal_user_id, portal_user_id.0);
+        assert_eq!(fetched.token_hash, b"session-token-hash-bytes".to_vec());
+        assert_eq!(fetched.ip.as_deref(), Some("203.0.113.7"));
+        assert_eq!(fetched.user_agent.as_deref(), Some("Mozilla/5.0 (test agent)"));
+
+        sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_id).execute(&pool).await.ok();
+    }
+
+    /// Round-trips an `agency_credentials` row through its typed `FromRow`
+    /// struct — closes the "zero test coverage" gap from the Fase 2 sign-off.
+    /// This table is what Fase 3 (spx-client + security kripto) builds
+    /// encrypted-credential storage directly on top of, so an unverified
+    /// struct-to-row mapping here (in particular the `ciphertext`/`nonce`
+    /// `BYTEA` columns decoding cleanly into `Vec<u8>`) is a real risk to
+    /// carry into the next phase.
+    #[tokio::test]
+    async fn agency_credential_round_trips() {
+        let pool = connect(&test_database_url()).await.expect("connect");
+        run_migrations(&pool).await.expect("migrate");
+        let tenant_id = insert_test_tenant(&pool).await;
+
+        let ciphertext: Vec<u8> = vec![0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01];
+        let nonce: Vec<u8> = vec![0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C];
+        let inserted: models::AgencyCredential = sqlx::query_as(
+            "INSERT INTO agency_credentials (tenant_id, label, username, ciphertext, nonce, key_version)
+             VALUES ($1, $2, $3, $4, $5, $6) RETURNING *",
+        )
+        .bind(tenant_id)
+        .bind("Main SPX Agency")
+        .bind("agency-user-1")
+        .bind(&ciphertext)
+        .bind(&nonce)
+        .bind(1_i32)
+        .fetch_one(&pool)
+        .await
+        .expect("insert agency_credential");
+
+        let fetched: models::AgencyCredential =
+            sqlx::query_as("SELECT * FROM agency_credentials WHERE id = $1")
+                .bind(inserted.id)
+                .fetch_one(&pool)
+                .await
+                .expect("fetch agency_credential");
+
+        assert_eq!(fetched.tenant_id, tenant_id);
+        assert_eq!(fetched.label, "Main SPX Agency");
+        assert_eq!(fetched.username, "agency-user-1");
+        assert_eq!(fetched.ciphertext, ciphertext);
+        assert_eq!(fetched.nonce, nonce);
+        assert_eq!(fetched.key_version, 1);
+
+        sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_id).execute(&pool).await.ok();
+    }
+
+    /// Round-trips a `rule_booking_targets` row through its typed `FromRow`
+    /// struct — closes the "zero test coverage" gap from the Fase 2 sign-off.
+    /// `rule_booking_targets.rule_id` FKs to `accept_rules(id)`, so this test
+    /// first inserts a minimal parent `accept_rules` row (only its NOT NULL
+    /// columns without defaults: `tenant_id`, `name`, `mode`) to satisfy that
+    /// constraint.
+    #[tokio::test]
+    async fn rule_booking_target_round_trips() {
+        let pool = connect(&test_database_url()).await.expect("connect");
+        run_migrations(&pool).await.expect("migrate");
+        let tenant_id = insert_test_tenant(&pool).await;
+
+        let rule_id: (uuid::Uuid,) = sqlx::query_as(
+            "INSERT INTO accept_rules (tenant_id, name, mode) VALUES ($1, $2, 'booking_id') RETURNING id",
+        )
+        .bind(tenant_id)
+        .bind("Manual booking-id targets")
+        .fetch_one(&pool)
+        .await
+        .expect("insert parent accept_rule");
+
+        let inserted: models::RuleBookingTarget = sqlx::query_as(
+            "INSERT INTO rule_booking_targets (tenant_id, rule_id, booking_id_raw, booking_id_norm)
+             VALUES ($1, $2, $3, $4) RETURNING *",
+        )
+        .bind(tenant_id)
+        .bind(rule_id.0)
+        .bind("BK-778899")
+        .bind("bk-778899")
+        .fetch_one(&pool)
+        .await
+        .expect("insert rule_booking_target");
+
+        let fetched: models::RuleBookingTarget =
+            sqlx::query_as("SELECT * FROM rule_booking_targets WHERE id = $1")
+                .bind(inserted.id)
+                .fetch_one(&pool)
+                .await
+                .expect("fetch rule_booking_target");
+
+        assert_eq!(fetched.tenant_id, tenant_id);
+        assert_eq!(fetched.rule_id, rule_id.0);
+        assert_eq!(fetched.booking_id_raw, "BK-778899");
+        assert_eq!(fetched.booking_id_norm, "bk-778899");
+
+        sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_id).execute(&pool).await.ok();
+    }
+
+    /// Round-trips a `portal_users` row through its typed `FromRow` struct
+    /// (`models::PortalUser`). `portal_users` was previously only ever
+    /// inserted as a throwaway FK parent for other tables (e.g.
+    /// `push_subscription_round_trips`, fetched back as a raw `(Uuid,)`
+    /// tuple), never fetched through its own typed struct.
+    #[tokio::test]
+    async fn portal_user_round_trips() {
+        let pool = connect(&test_database_url()).await.expect("connect");
+        run_migrations(&pool).await.expect("migrate");
+        let tenant_id = insert_test_tenant(&pool).await;
+
+        let inserted: models::PortalUser = sqlx::query_as(
+            "INSERT INTO portal_users (tenant_id, username, password_hash, display_name, is_main_account)
+             VALUES ($1, $2, $3, $4, $5) RETURNING *",
+        )
+        .bind(tenant_id)
+        .bind("main-agent")
+        .bind("bcrypt-hash-value")
+        .bind("Main Agent")
+        .bind(true)
+        .fetch_one(&pool)
+        .await
+        .expect("insert portal_user");
+
+        let fetched: models::PortalUser = sqlx::query_as("SELECT * FROM portal_users WHERE id = $1")
+            .bind(inserted.id)
+            .fetch_one(&pool)
+            .await
+            .expect("fetch portal_user");
+
+        assert_eq!(fetched.tenant_id, tenant_id);
+        assert_eq!(fetched.username, "main-agent");
+        assert_eq!(fetched.password_hash, "bcrypt-hash-value");
+        assert_eq!(fetched.display_name, "Main Agent");
+        assert!(fetched.is_main_account);
+        assert!(fetched.enabled, "enabled must default to true");
 
         sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_id).execute(&pool).await.ok();
     }
@@ -499,6 +775,51 @@ mod tests {
             insert(serde_json::json!(["A", "B", "C", "D", "E"]), "five".into()).await.is_ok(),
             "5 destinations must succeed"
         );
+
+        sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_id).execute(&pool).await.ok();
+    }
+
+    /// Round-trips a `route_prices` row through its typed `FromRow` struct
+    /// (`models::RoutePrice`). `route_prices_destinations_check_enforces_1_to_5`
+    /// already inserts rows but only ever checks whether the INSERT
+    /// succeeds/fails (raw `sqlx::query`, no struct decode) — its purpose is
+    /// the CHECK constraint boundary, not struct decoding, so this is a
+    /// small separate test rather than a modification of that one.
+    #[tokio::test]
+    async fn route_price_round_trips() {
+        let pool = connect(&test_database_url()).await.expect("connect");
+        run_migrations(&pool).await.expect("migrate");
+        let tenant_id = insert_test_tenant(&pool).await;
+
+        let destinations = serde_json::json!(["Cileungsi DC", "Bekasi DC"]);
+        let inserted: models::RoutePrice = sqlx::query_as(
+            "INSERT INTO route_prices (tenant_id, route_code, region, origin, destinations, price, vehicle_type)
+             VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *",
+        )
+        .bind(tenant_id)
+        .bind("PDG-CLE-01")
+        .bind("Sumatra")
+        .bind("Padang DC")
+        .bind(&destinations)
+        .bind(150000_i64)
+        .bind("TRONTON")
+        .fetch_one(&pool)
+        .await
+        .expect("insert route_price");
+
+        let fetched: models::RoutePrice = sqlx::query_as("SELECT * FROM route_prices WHERE id = $1")
+            .bind(inserted.id)
+            .fetch_one(&pool)
+            .await
+            .expect("fetch route_price");
+
+        assert_eq!(fetched.tenant_id, tenant_id);
+        assert_eq!(fetched.route_code, "PDG-CLE-01");
+        assert_eq!(fetched.region, "Sumatra");
+        assert_eq!(fetched.origin, "Padang DC");
+        assert_eq!(fetched.destinations, destinations);
+        assert_eq!(fetched.price, 150000);
+        assert_eq!(fetched.vehicle_type, "TRONTON");
 
         sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_id).execute(&pool).await.ok();
     }
