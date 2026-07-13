@@ -426,6 +426,27 @@ mod tests {
             let result = sanitize_accept_rules(&[rule]);
             assert!(result.warnings.iter().any(|w| w.contains("tanpa Booking ID")));
         }
+
+        // Money-critical regression guard: `to_optional_non_neg_f64` exists specifically to keep
+        // max_weight/max_cod_amount in f64 instead of routing them through the u32-narrowing
+        // `to_optional_non_neg` helper (used for min_deadline_min/max_accept_count). If a future
+        // refactor accidentally swapped the helper back, a cap above u32::MAX (~4.29 billion)
+        // would silently clip/wrap instead of surviving sanitize intact.
+        #[test]
+        fn max_cod_amount_and_max_weight_survive_sanitize_without_u32_precision_loss() {
+            let rule = raw_rule(
+                "filter",
+                RawRuleConditions {
+                    coc_only: true, // keep filter_active satisfied independent of these two fields
+                    max_cod_amount: Some(5_000_000_000.0),
+                    max_weight: Some(4_500_000_000.0),
+                    ..Default::default()
+                },
+            );
+            let result = sanitize_accept_rules(&[rule]);
+            assert_eq!(result.rules[0].conditions.max_cod_amount, Some(5_000_000_000.0));
+            assert_eq!(result.rules[0].conditions.max_weight, Some(4_500_000_000.0));
+        }
     }
 
     mod dedupe_rules_tests {

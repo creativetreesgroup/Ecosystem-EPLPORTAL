@@ -955,6 +955,38 @@ mod tests {
         }
     }
 
+    mod weight_and_cod_gate {
+        use super::*;
+
+        #[test]
+        fn max_weight_rejects_heavier_booking_accepts_lighter_or_equal() {
+            let r = mk_rule(RuleMode::Filter, RuleConditions { max_weight: Some(1000.0), ..Default::default() });
+            let compiled = CompiledRule::compile(&r);
+            let mut heavy = mk_booking(&[]);
+            heavy.weight = 1000.1;
+            assert!(!compiled.matches(&heavy, &mk_state()));
+            let mut ok = mk_booking(&[]);
+            ok.weight = 1000.0;
+            assert!(compiled.matches(&ok, &mk_state()));
+        }
+
+        #[test]
+        fn max_cod_amount_gate_holds_at_a_value_that_would_overflow_u32() {
+            // 5 billion exceeds u32::MAX (~4.29 billion) — if a future refactor accidentally
+            // routed max_cod_amount through a u32-narrowing helper again, this value would
+            // silently clip and this test would start failing (rejecting a booking it should
+            // accept, or vice versa).
+            let r = mk_rule(RuleMode::Filter, RuleConditions { max_cod_amount: Some(5_000_000_000.0), ..Default::default() });
+            let compiled = CompiledRule::compile(&r);
+            let mut under = mk_booking(&[]);
+            under.cod_amount = 4_999_999_999.0;
+            assert!(compiled.matches(&under, &mk_state()));
+            let mut over = mk_booking(&[]);
+            over.cod_amount = 5_000_000_001.0;
+            assert!(!compiled.matches(&over, &mk_state()));
+        }
+    }
+
     mod cp4_empty_filter_safety {
         use super::*;
 
