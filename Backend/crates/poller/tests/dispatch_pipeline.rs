@@ -392,17 +392,56 @@ async fn auth_outcome_releases_claim_and_leaves_booking_pending() {
     assert_eq!(status, "pending", "Auth must not write a terminal status");
     assert_eq!(rule_matched, None, "Auth must not bind a rule uuid");
 
-    // The real proof: the claim (and capped-rule inflight slot) must be gone
-    // from Redis, not just "released.await'd" — a fresh claim attempt for the
-    // exact same account/spx_id/rule must succeed.
-    let reclaim = executor
-        .try_claim_auto(&account_id, &spx_id, Some(rule_uuid), 1, 0)
+    // Proof, via DIRECT (non-claiming) Redis reads — deliberately NOT via a
+    // `try_claim_auto` reclaim of the SAME spx_id: that call is not a
+    // read-only check, it IS a claim, and under cap=1 it would legitimately
+    // re-populate the inflight set as a side effect of successfully claiming
+    // — which would silently sabotage a later "different ticket" check by
+    // consuming the very capacity being tested (this is exactly what an
+    // earlier version of this test got wrong: it chained a same-id reclaim
+    // before the different-id check, so the different-id check's `QuotaFull`
+    // was caused by the test's OWN reclaim, not a real leak). Reading the
+    // raw key/set state instead has no side effects.
+    let mut raw_con = redis::Client::open(redis_url())
+        .expect("redis client")
+        .get_multiplexed_async_connection()
+        .await
+        .expect("redis connection");
+    {
+        use redis::AsyncCommands;
+        let claim_exists: bool = raw_con
+            .exists(format!("spx:claim:{account_id}:{spx_id}"))
+            .await
+            .expect("EXISTS claim key");
+        assert!(
+            !claim_exists,
+            "the claim key must be deleted after an Auth outcome, proving the SAME ticket \
+             can be retried once Task 7's relogin recovers the session"
+        );
+        let inflight_members: Vec<String> = raw_con
+            .smembers(format!("spx:inflight:{account_id}:{rule_uuid}"))
+            .await
+            .expect("SMEMBERS inflight set");
+        assert!(
+            inflight_members.is_empty(),
+            "the capped-rule inflight quota slot must also be released after an Auth outcome \
+             (found leaked members: {inflight_members:?}) — a leaked slot would spuriously \
+             block OTHER, unrelated tickets on the same rule with QuotaFull even though \
+             nothing was ever actually accepted against this rule's cap"
+        );
+    }
+
+    // End-to-end confirmation: with the slot genuinely free, a real claim for
+    // a DIFFERENT, unrelated ticket on the same capped(=1) rule must succeed.
+    let other_spx_id = format!("SPXID-AUTH-OTHER-{}", Uuid::new_v4().simple());
+    let other_claim = executor
+        .try_claim_auto(&account_id, &other_spx_id, Some(rule_uuid), 1, 0)
         .await;
     assert_eq!(
-        reclaim,
+        other_claim,
         executor::ClaimOutcome::Proceed,
-        "claim key and inflight quota slot must both be released after an Auth outcome, \
-         proving the ticket can be retried once Task 7's relogin recovers the session"
+        "a different, unrelated ticket on the same capped rule must not see spurious QuotaFull \
+         after an unrelated Auth outcome"
     );
 
     sqlx::query("DELETE FROM tenants WHERE id = $1")
