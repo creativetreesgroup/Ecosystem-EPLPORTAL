@@ -8,14 +8,16 @@
 //! process — design correction #2 / DoD #10).
 pub mod fetch;
 pub mod hedge;
+pub mod notif_watch;
 pub mod schedule;
 pub mod state;
 
 pub use fetch::{fast_detect, should_full_sweep, sweep, window_pages, FetchOutcome};
 pub use hedge::{hedge_fires_since_reset, hedged_page};
+pub use notif_watch::{next_backoff, spawn_notif_watcher, WatchState};
 pub use schedule::{poll_once, spawn_account_loop};
 pub use state::{AccountHandle, PollerConfig, PollerShared, PollerState};
 
 // Later tasks add:
-// pub mod notif_watch; (Task 4) pub mod antidrift; (Task 5) pub mod dispatch;
-// (Task 6) pub mod login; (Task 7) pub mod watchdog; (Task 8)
+// pub mod antidrift; (Task 5) pub mod dispatch; (Task 6) pub mod login;
+// (Task 7) pub mod watchdog; (Task 8)
