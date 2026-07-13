@@ -72,7 +72,11 @@ async fn concurrent_consume_never_exceeds_cap_no_lost_update() {
     assert_eq!(consumed, 2, "exactly cap (2) consumptions may succeed");
     assert_eq!(cap_reached, 6, "the other 6 must see the cap");
     seen_counts.sort_unstable();
-    assert_eq!(seen_counts, vec![1, 2], "no lost update: counts are 1 and 2");
+    assert_eq!(
+        seen_counts,
+        vec![1, 2],
+        "no lost update: counts are 1 and 2"
+    );
 
     // Final persisted count must be exactly the cap — never exceeded.
     let (final_count,): (i32,) =

@@ -108,7 +108,7 @@ mod tests {
         assert!(s.is_known("A")); // in accepting_now
         s.commit_accept("A");
         assert!(s.is_known("A")); // now in accepted_ids
-        // A second begin on an already-accepted id must fail.
+                                  // A second begin on an already-accepted id must fail.
         assert!(!s.try_begin_accept("A"));
     }
 
@@ -135,7 +135,10 @@ mod tests {
         s.insert_restored("id-newest");
         assert_eq!(s.accepted_len(), MAX_ACCEPTED_IDS);
         assert!(s.is_known("id-newest"));
-        assert!(!s.is_known("id-00000"), "oldest entry must have been evicted");
+        assert!(
+            !s.is_known("id-00000"),
+            "oldest entry must have been evicted"
+        );
     }
 
     // DoD #1: many concurrent Tokio tasks race to claim the SAME new spxId;

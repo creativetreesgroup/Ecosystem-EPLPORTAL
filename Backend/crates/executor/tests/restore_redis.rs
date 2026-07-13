@@ -32,7 +32,9 @@ async fn direct_conn() -> redis::aio::MultiplexedConnection {
 
 #[tokio::test]
 async fn restore_keeps_in_window_and_trims_stale() {
-    let h = ExecutorHandle::connect(&redis_url()).await.expect("connect");
+    let h = ExecutorHandle::connect(&redis_url())
+        .await
+        .expect("connect");
     let account = format!("t{}", Uuid::new_v4().simple());
     let key = format!("spx:accepted:{account}");
 
@@ -72,7 +74,10 @@ async fn restore_keeps_in_window_and_trims_stale() {
         .expect("restore");
 
     // In-proc (Layer 1) assertions.
-    assert_eq!(restored, 2, "only the two in-window entries may be restored");
+    assert_eq!(
+        restored, 2,
+        "only the two in-window entries may be restored"
+    );
     assert!(state.is_known("recent-spx"));
     assert!(state.is_known("boundary-in-spx"));
     assert!(
@@ -117,7 +122,9 @@ async fn restore_is_idempotent_and_survives_repeat_calls() {
     // A second restore call (e.g. a process crash-restart-restart) must not
     // double-count or error; ZADD on the same member/score is a no-op update,
     // and DashMap insert on an existing key is also idempotent.
-    let h = ExecutorHandle::connect(&redis_url()).await.expect("connect");
+    let h = ExecutorHandle::connect(&redis_url())
+        .await
+        .expect("connect");
     let account = format!("t{}", Uuid::new_v4().simple());
     let now = now_epoch_secs();
 

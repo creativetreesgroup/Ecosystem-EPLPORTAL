@@ -15,7 +15,9 @@ fn acct() -> String {
 
 #[tokio::test]
 async fn gate_returns_proceed_already_and_quota_full() {
-    let h = ExecutorHandle::connect(&redis_url()).await.expect("connect");
+    let h = ExecutorHandle::connect(&redis_url())
+        .await
+        .expect("connect");
     let a = acct();
     let rule = Uuid::new_v4();
 
@@ -65,7 +67,9 @@ async fn auto_fails_closed_manual_fails_open_when_redis_unreachable() {
 
 #[tokio::test]
 async fn manual_and_auto_share_the_claim_key() {
-    let h = ExecutorHandle::connect(&redis_url()).await.expect("connect");
+    let h = ExecutorHandle::connect(&redis_url())
+        .await
+        .expect("connect");
     let a = acct();
     let dedup = AccountDedupState::new();
 
@@ -84,7 +88,9 @@ async fn manual_and_auto_share_the_claim_key() {
 
 #[tokio::test]
 async fn manual_rejects_when_layer1_already_known() {
-    let h = ExecutorHandle::connect(&redis_url()).await.expect("connect");
+    let h = ExecutorHandle::connect(&redis_url())
+        .await
+        .expect("connect");
     let a = acct();
     let dedup = AccountDedupState::new();
     dedup.insert_restored("999"); // pretend it was already accepted

@@ -1674,7 +1674,11 @@ mod tests {
 
             // Both match with equal rank → index 0 (the first) must win.
             let idx = find_best_matching_rule_compiled(&compiled, &b, &mk_state());
-            assert_eq!(idx, Some(0), "equal-rank tie must resolve to the FIRST rule");
+            assert_eq!(
+                idx,
+                Some(0),
+                "equal-rank tie must resolve to the FIRST rule"
+            );
             assert_eq!(compiled[idx.unwrap()].id, "first");
         }
 
@@ -1729,8 +1733,7 @@ mod tests {
                     )
                 },
             ];
-            let compiled: Vec<CompiledRule> =
-                rules.iter().map(CompiledRule::compile).collect();
+            let compiled: Vec<CompiledRule> = rules.iter().map(CompiledRule::compile).collect();
 
             // A small corpus of bookings hitting different modes / no-match.
             let mut corpus: Vec<Booking> = Vec::new();

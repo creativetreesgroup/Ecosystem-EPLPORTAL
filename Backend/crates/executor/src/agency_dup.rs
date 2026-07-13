@@ -45,7 +45,10 @@ pub(crate) fn earliest_accept_operator(log: &Value) -> Option<String> {
             return None;
         }
     }
-    let list = log.get("data").and_then(|d| d.get("list")).and_then(Value::as_array)?;
+    let list = log
+        .get("data")
+        .and_then(|d| d.get("list"))
+        .and_then(Value::as_array)?;
     let mut best: Option<(i64, String)> = None; // (create_time, operator)
     for op in list {
         if op.get("booking_operation_type").and_then(as_num) != Some(4) {
@@ -140,7 +143,10 @@ mod tests {
                 { "booking_operation_type": 4, "operator": "system",      "create_time": 10  }
             ]}
         });
-        assert_eq!(earliest_accept_operator(&log).as_deref(), Some("early@x.com"));
+        assert_eq!(
+            earliest_accept_operator(&log).as_deref(),
+            Some("early@x.com")
+        );
     }
 
     #[test]
@@ -176,7 +182,10 @@ mod tests {
                 { "booking_operation_type": 4, "operator": "even-later-op@x.com","create_time": 300 }
             ]}
         });
-        assert_eq!(earliest_accept_operator(&log).as_deref(), Some("earliest-op@x.com"));
+        assert_eq!(
+            earliest_accept_operator(&log).as_deref(),
+            Some("earliest-op@x.com")
+        );
     }
 
     #[test]

@@ -14,7 +14,10 @@ async fn pool_connects_and_round_trips() {
     let pool = RedisPool::open(&redis_url()).expect("open");
     let mut con = pool.conn().await.expect("conn");
 
-    let pong: String = redis::cmd("PING").query_async(&mut con).await.expect("ping");
+    let pong: String = redis::cmd("PING")
+        .query_async(&mut con)
+        .await
+        .expect("ping");
     assert_eq!(pong, "PONG");
 
     let key = format!("executor:test:{}", Uuid::new_v4());
