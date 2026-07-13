@@ -66,6 +66,34 @@
   (b): tie-break WAJIB first-wins (rank sama → rule yang duluan ketemu menang), BUKAN
   `Iterator::max_by_key` (yang last-wins) — beda perilaku pada rule overlap ber-rank
   sama, akan menyimpang dari acuan TS.**
+- **Fase 2 selesai (2026-07-13).** Skema 15 tabel + crate `Backend/crates/store/`
+  dibangun via 8 task SDD (migrations 0001-0016). Karena tidak ada PRD (repo acuan
+  single-tenant, sebagian besar state hanya di Redis — lihat
+  `Docs/superpowers/specs/2026-07-13-fase-2-store-db-design.md`), skema ini desain
+  baru, bukan porting. Beberapa temuan review signifikan yang diperbaiki di-plan
+  sebelum shipped: (1) dua kali field uang (`accept_rules.max_weight`/`max_cod_amount`
+  di Task 2, `bookings.weight`/`cod_amount` di Task 3) awalnya `REAL`/`f32` — sama
+  persis kelas bug presisi yang Fase 1 sudah cegah di Rust (`core_domain` pakai
+  `f64`) — diperbaiki ke `DOUBLE PRECISION`/`f64`; (2) `accept_rules.route_signature`
+  (generated column, dedup lane backstop) awalnya cuma 4 bagian dan tidak menormalkan
+  `destinations` — bikin index unique DB menolak rule yang sah beda hanya di
+  `service_types` (false-positive collision) — diperbaiki jadi cermin persis 5-bagian
+  signature `core_domain::dedupe_rules`.
+  **Temuan Task 7 (RLS) — PENTING untuk Fase 3+:** role Postgres `tower` (satu-satunya
+  login di stack dev ini, `Docker/docker-compose.yml`) adalah **superuser bootstrap**
+  dengan `BYPASSRLS` — `FORCE ROW LEVEL SECURITY` **tidak berlaku sama sekali** untuk
+  superuser, ini perilaku inti Postgres yang tidak bisa di-override lewat SQL apa pun.
+  Migrasi `0016_rls_policies.sql` sudah benar (13 tabel, `ENABLE`+`FORCE`+policy
+  `tenant_isolation` yang menutup baca DAN tulis lintas-tenant, diverifikasi lewat
+  `SET ROLE app_role`), tapi **RLS baru benar-benar melindungi kalau koneksi runtime
+  aplikasi TIDAK memakai kredensial superuser `tower`.** `app_role` (NOLOGIN,
+  dibuat di migrasi 0008) sudah punya grant CRUD yang tepat untuk 12/13 tabel
+  (`accept_events` tetap append-only-only) dan siap dipakai — Fase 3 (secrets/kripto)
+  atau Fase 6 (api-gateway, tempat connection pool aplikasi sungguhan dikonfigurasi)
+  **wajib** memastikan pool koneksi produksi/staging jalan sebagai role non-superuser
+  (mis. `app_role` di-promosikan `LOGIN` dengan password terpisah, atau role baru
+  serupa) — bukan `tower`. Kalau ini terlewat, seluruh RLS di skema ini jadi no-op
+  senyap tanpa ada test yang gagal (superuser bypass tidak terdeteksi oleh query biasa).
 
 ---
 
