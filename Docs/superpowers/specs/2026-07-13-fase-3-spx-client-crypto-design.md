@@ -200,12 +200,23 @@ utuh, hanya dikonsumsi).
 
 ### TLS-impersonation: rquest, best-effort Chrome preset
 
-`rquest` (fork `reqwest` dengan dukungan TLS/JA3 impersonation) dipakai untuk HTTP client.
+> **[KOREKSI — ditemukan saat penulisan plan]** `rquest` sudah **tidak dipublikasikan lagi**
+> (di-rename jadi **`wreq`**, Apache-2.0). Preset impersonation Chrome hidup di crate terpisah
+> `wreq-util`, yang line stabilnya (2.x) ternyata **GPL-3.0** (tidak lolos `deny.toml`) —
+> line Apache-2.0-nya hanya ada di pre-release `3.0.0-rc.x`. Plan
+> (`Docs/superpowers/plans/2026-07-13-fase-3-spx-client-crypto.md`, Task 8) memberi implementer
+> 2 opsi eksplisit: pin `wreq-util` pre-release Apache-2.0 (JA3 preset nyata, direkomendasikan)
+> atau `wreq` saja tanpa preset (fallback license-clean, setara acuan yang cuma spoof header).
+> Preset Chrome tertinggi yang tersedia saat riset: **Chrome137** (bukan 148 seperti target
+> acuan) — konsisten dengan semangat "best-effort" paragraf di bawah, hanya nama crate & versi
+> preset yang berubah dari draf desain awal ini.
+
+`rquest`/`wreq` (fork `reqwest` dengan dukungan TLS/JA3 impersonation) dipakai untuk HTTP client.
 Acuan target Chrome 148 (User-Agent statis) tapi versi persis itu mungkin tidak tersedia
-sebagai preset `rquest` yang sudah dibundel — dipilih preset Chrome terbaru yang tersedia di
-versi `rquest` yang dipakai saat implementasi, DIDOKUMENTASIKAN di kode sebagai best-effort
+sebagai preset yang sudah dibundel — dipilih preset Chrome terbaru yang tersedia di versi yang
+dipakai saat implementasi, DIDOKUMENTASIKAN di kode sebagai best-effort
 (bukan jaminan match JA3/JA4 identik ke Chrome 148 asli), dengan catatan bahwa ini perlu
-di-refresh berkala seiring `rquest` update preset barunya. Header client-hints (`sec-ch-ua`,
+di-refresh berkala seiring cratenya update preset barunya. Header client-hints (`sec-ch-ua`,
 `sec-ch-ua-platform`, dst.) tetap di-set manual mengikuti versi Chrome yang benar-benar
 dipakai preset-nya (bukan hardcode 148 kalau presetnya beda), supaya UA header dan TLS
 fingerprint konsisten satu sama lain.
