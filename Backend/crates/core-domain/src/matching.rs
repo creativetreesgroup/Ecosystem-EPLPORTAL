@@ -365,6 +365,34 @@ pub fn find_best_matching_rule(
     best
 }
 
+/// Hot-path variant of [`find_best_matching_rule`] over ALREADY-compiled rules:
+/// returns the INDEX of the highest-ranked matching rule, or `None`. Tie-break is
+/// **first-wins** — the strict `>` means a later rule that only TIES the current
+/// best does not replace it, so the first rule to reach the top rank wins (never
+/// `Iterator::max_by_key`, which is last-wins on ties and would diverge from the
+/// reference on same-rank overlaps). Behaviorally identical to
+/// `find_best_matching_rule`; it only differs in taking `&[CompiledRule]` (so the
+/// caller reuses one compilation across many bookings) and returning an index.
+pub fn find_best_matching_rule_compiled(
+    rules: &[CompiledRule],
+    booking: &Booking,
+    state: &MatchState,
+) -> Option<usize> {
+    let mut best: Option<(usize, RuleRank)> = None;
+    for (i, rule) in rules.iter().enumerate() {
+        if !rule.matches(booking, state) {
+            continue;
+        }
+        let rank = rule.rank();
+        match best {
+            Some((_, best_rank)) if rank > best_rank => best = Some((i, rank)),
+            None => best = Some((i, rank)),
+            _ => {} // equal or lower rank → keep the earlier (first-wins)
+        }
+    }
+    best.map(|(i, _)| i)
+}
+
 /// Returns the registered booking-ID string (original case/spacing) this booking matches, or
 /// `None`. MUST use the same normalization (`norm_id`) as `CompiledRule::matches_booking_id` —
 /// see this task's brief header for the production incident this invariant prevents: an earlier
@@ -1606,6 +1634,132 @@ mod tests {
             // Precomputed fields are stable across all four calls above — confirm directly.
             assert_eq!(compiled.origin_norm, "padang dc");
             assert_eq!(compiled.destinations_norm, vec!["cileungsi dc".to_string()]);
+        }
+    }
+
+    mod compiled_variant_tests {
+        use super::*; // brings in CompiledRule, AcceptRule, Booking, BookingType,
+                      // RuleMode, RuleConditions, RouteMatchMode, mk_* helpers, etc.
+
+        // First-wins: two filter rules with IDENTICAL rank both match the same
+        // booking; the FIRST index must win (not the last).
+        #[test]
+        fn first_wins_on_equal_rank() {
+            let first = AcceptRule {
+                id: "first".into(),
+                ..mk_rule(
+                    RuleMode::Filter,
+                    RuleConditions {
+                        coc_only: true,
+                        ..Default::default()
+                    },
+                )
+            };
+            let second = AcceptRule {
+                id: "second".into(),
+                ..mk_rule(
+                    RuleMode::Filter,
+                    RuleConditions {
+                        coc_only: true,
+                        ..Default::default()
+                    },
+                )
+            };
+            let compiled = vec![
+                CompiledRule::compile(&first),
+                CompiledRule::compile(&second),
+            ];
+            let mut b = mk_booking(&[]);
+            b.booking_type = BookingType::Spxid;
+
+            // Both match with equal rank → index 0 (the first) must win.
+            let idx = find_best_matching_rule_compiled(&compiled, &b, &mk_state());
+            assert_eq!(idx, Some(0), "equal-rank tie must resolve to the FIRST rule");
+            assert_eq!(compiled[idx.unwrap()].id, "first");
+        }
+
+        // Cross-check: on a shared corpus, the compiled-index variant agrees with
+        // the existing `find_best_matching_rule` (same winning rule id, or both
+        // None) — proving the hot-path variant is not a divergent reimplementation.
+        #[test]
+        fn agrees_with_find_best_matching_rule_on_corpus() {
+            let rules = vec![
+                AcceptRule {
+                    id: "route-generic".into(),
+                    priority: 1,
+                    ..mk_rule(
+                        RuleMode::Route,
+                        RuleConditions {
+                            destinations: vec!["Cileungsi DC".into()],
+                            match_mode: RouteMatchMode::Flexible,
+                            ..Default::default()
+                        },
+                    )
+                },
+                AcceptRule {
+                    id: "route-specific".into(),
+                    priority: 1,
+                    ..mk_rule(
+                        RuleMode::Route,
+                        RuleConditions {
+                            origin: "Padang DC".into(),
+                            destinations: vec!["Cileungsi DC".into()],
+                            ..Default::default()
+                        },
+                    )
+                },
+                AcceptRule {
+                    id: "bkid".into(),
+                    ..mk_rule(
+                        RuleMode::BookingId,
+                        RuleConditions {
+                            booking_ids: vec!["SPXID_VM_001397649".into()],
+                            ..Default::default()
+                        },
+                    )
+                },
+                AcceptRule {
+                    id: "filter-coc".into(),
+                    ..mk_rule(
+                        RuleMode::Filter,
+                        RuleConditions {
+                            coc_only: true,
+                            ..Default::default()
+                        },
+                    )
+                },
+            ];
+            let compiled: Vec<CompiledRule> =
+                rules.iter().map(CompiledRule::compile).collect();
+
+            // A small corpus of bookings hitting different modes / no-match.
+            let mut corpus: Vec<Booking> = Vec::new();
+            corpus.push(mk_booking(&["Padang DC", "Cileungsi DC"])); // route
+            let mut spx = mk_booking(&["Aceh DC", "Cileungsi DC"]);
+            spx.spx_tx_id = "SPXID_VM_001397649".into();
+            spx.booking_type = BookingType::Spxid;
+            corpus.push(spx); // booking-id target should dominate
+            let mut coc = mk_booking(&[]);
+            coc.booking_type = BookingType::Spxid;
+            corpus.push(coc); // filter-coc
+            corpus.push(mk_booking(&["Nowhere DC", "Elsewhere DC"])); // likely no match
+
+            for booking in &corpus {
+                let via_owned = find_best_matching_rule(booking, &rules, &mk_state());
+                let via_index = find_best_matching_rule_compiled(&compiled, booking, &mk_state());
+                match (via_owned, via_index) {
+                    (Some(owned), Some(i)) => assert_eq!(
+                        owned.id, compiled[i].id,
+                        "both variants must pick the same rule"
+                    ),
+                    (None, None) => {}
+                    (owned_opt, idx_opt) => panic!(
+                        "variants disagree: owned={:?} index={:?}",
+                        owned_opt.map(|r| r.id),
+                        idx_opt
+                    ),
+                }
+            }
         }
     }
 }
