@@ -730,6 +730,90 @@ mod tests {
         sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_b).execute(&pool).await.ok();
     }
 
+    /// Write-path counterpart to `rls_blocks_cross_tenant_reads_on_bookings`.
+    ///
+    /// `0016_rls_policies.sql`'s `tenant_isolation` policy has no explicit
+    /// `FOR`/`WITH CHECK` clause. Per Postgres semantics, a policy with no
+    /// `FOR` applies to ALL commands, and an omitted `WITH CHECK` on such a
+    /// policy reuses the `USING` expression for the write-side check too —
+    /// so `INSERT`/`UPDATE` are supposed to be just as constrained as
+    /// `SELECT` is. Every other RLS test in this module only exercises the
+    /// read path; without this test, a future refactor that silently added
+    /// an explicit `WITH CHECK (true)` (or split the policy into a
+    /// `FOR SELECT`-only one) would reopen cross-tenant write tagging with
+    /// zero test failure, on the exact security centerpiece of Task 7.
+    ///
+    /// Exercised via `app_role` (see `app_role_tenant_tx`) for the same
+    /// reason as every other RLS test here: `tower` is a superuser and
+    /// Postgres unconditionally exempts superusers from row security, so a
+    /// version of this test that inserted through the raw pool connection
+    /// would succeed regardless of how correct the policy is, proving
+    /// nothing.
+    #[tokio::test]
+    async fn rls_blocks_cross_tenant_writes_on_bookings() {
+        let pool = connect(&test_database_url()).await.expect("connect");
+        run_migrations(&pool).await.expect("migrate");
+
+        let tenant_a = insert_test_tenant(&pool).await;
+        let tenant_b = insert_test_tenant(&pool).await;
+
+        // Tenant A's session (app.tenant_id = A) attempts to INSERT a row
+        // tagged tenant_id = B — a cross-tenant write-tagging attempt. The
+        // policy's USING expression, reused for the INSERT's WITH CHECK,
+        // must reject it.
+        let mut conn_a = pool.acquire().await.expect("acquire a");
+        {
+            let mut tx_a = app_role_tenant_tx(&mut conn_a, tenant_a).await;
+            let insert_result = sqlx::query(
+                "INSERT INTO bookings (tenant_id, spx_id, raw_data) VALUES ($1, $2, '{}')",
+            )
+            .bind(tenant_b)
+            .bind("SPX-CROSS-TENANT-WRITE-TEST")
+            .execute(&mut *tx_a)
+            .await;
+            assert!(
+                insert_result.is_err(),
+                "app_role in tenant A's context must not be able to INSERT a row tagged tenant_id = B"
+            );
+            let insert_err = insert_result.unwrap_err();
+            let insert_db_err = insert_err.as_database_error().expect("expected a database error");
+            assert_eq!(
+                insert_db_err.code().as_deref(),
+                Some("42501"),
+                "expected insufficient_privilege (42501) row-security-policy violation, got: {insert_db_err}"
+            );
+            assert!(
+                insert_db_err.message().contains("row-level security policy"),
+                "expected a row-level security policy violation message, got: {}",
+                insert_db_err.message()
+            );
+            tx_a.rollback().await.ok();
+        }
+        sqlx::query("RESET ROLE").execute(&mut *conn_a).await.ok();
+        drop(conn_a);
+
+        // Control: the same tenant A context legitimately inserting a row
+        // tagged tenant_id = A must still succeed — proving the rejection
+        // above is specifically about the tenant mismatch, not some other
+        // failure (bad connection, missing grant, etc.).
+        let mut conn_a2 = pool.acquire().await.expect("acquire a2");
+        {
+            let mut tx_a2 = app_role_tenant_tx(&mut conn_a2, tenant_a).await;
+            sqlx::query("INSERT INTO bookings (tenant_id, spx_id, raw_data) VALUES ($1, $2, '{}')")
+                .bind(tenant_a)
+                .bind("SPX-CROSS-TENANT-WRITE-TEST")
+                .execute(&mut *tx_a2)
+                .await
+                .expect("legitimate same-tenant insert must succeed");
+            tx_a2.commit().await.expect("commit a2");
+        }
+        sqlx::query("RESET ROLE").execute(&mut *conn_a2).await.ok();
+        drop(conn_a2);
+
+        sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_a).execute(&pool).await.ok();
+        sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_b).execute(&pool).await.ok();
+    }
+
     /// Regression guard for the `FORCE ROW LEVEL SECURITY` requirement
     /// itself: queries `pg_class.relforcerowsecurity` for a sample of the 13
     /// tables so a future migration edit that drops `FORCE` (leaving only
