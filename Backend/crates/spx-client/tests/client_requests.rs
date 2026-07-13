@@ -7,7 +7,9 @@
 //! so no test-only client variant is needed.
 use spx_client::client::{
     SpxClient, PATH_ACCEPT, PATH_BIDDING_LIST, PATH_BOOKING_LOG, PATH_BOOKING_OVERVIEW,
-    PATH_COUNT_V2, PATH_NOTIFICATION, PATH_PROFILE, PATH_REQUEST_LIST, PATH_USER_LIST,
+    PATH_COUNT_V2, PATH_NOTIFICATION, PATH_PROFILE, PATH_PROFILE_ACCOUNT_INFO,
+    PATH_PROFILE_AGENCY, PATH_PROFILE_AGENCY_INFO, PATH_PROFILE_USER, PATH_PROFILE_USER_INFO,
+    PATH_REQUEST_LIST, PATH_USER_LIST,
 };
 use spx_client::cookies::SpxCookies;
 use wiremock::matchers::{body_json, header, method, path};
@@ -203,6 +205,86 @@ async fn profile_uses_get_on_the_primary_path() {
     let client = SpxClient::new(server.uri()).expect("client");
     let res = client.fetch_profile(&cookies()).await.expect("fetch");
     assert_eq!(res["data"]["agency_id"], 42);
+}
+
+#[tokio::test]
+async fn profile_falls_back_to_second_get_path_when_primary_fails() {
+    let server = MockServer::start().await;
+    // Primary explicitly fails (500) — proves the fallback below is only
+    // reached because the primary was tried and rejected, not because it
+    // was skipped.
+    Mock::given(method("GET"))
+        .and(path(PATH_PROFILE))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(PATH_PROFILE_AGENCY))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "retcode": 0, "data": { "agency_id": 42, "source": "agency_profile_fallback" }
+        })))
+        .mount(&server)
+        .await;
+
+    let client = SpxClient::new(server.uri()).expect("client");
+    let res = client.fetch_profile(&cookies()).await.expect("fetch");
+    assert_eq!(res["data"]["source"], "agency_profile_fallback");
+}
+
+#[tokio::test]
+async fn profile_falls_back_through_all_get_candidates_to_first_post_candidate() {
+    let server = MockServer::start().await;
+    // The first 3 candidates (all GET, reference order) explicitly fail.
+    for get_path in [PATH_PROFILE, PATH_PROFILE_AGENCY, PATH_PROFILE_USER] {
+        Mock::given(method("GET"))
+            .and(path(get_path))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+    }
+    // The 4th candidate is the first POST fallback and sends an empty body.
+    Mock::given(method("POST"))
+        .and(path(PATH_PROFILE_ACCOUNT_INFO))
+        .and(body_json(serde_json::json!({})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "retcode": 0, "data": { "source": "account_info_fallback" }
+        })))
+        .mount(&server)
+        .await;
+
+    let client = SpxClient::new(server.uri()).expect("client");
+    let res = client.fetch_profile(&cookies()).await.expect("fetch");
+    assert_eq!(res["data"]["source"], "account_info_fallback");
+}
+
+#[tokio::test]
+async fn profile_returns_exhausted_error_when_all_six_candidates_fail() {
+    let server = MockServer::start().await;
+    for get_path in [PATH_PROFILE, PATH_PROFILE_AGENCY, PATH_PROFILE_USER] {
+        Mock::given(method("GET"))
+            .and(path(get_path))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+    }
+    for post_path in [
+        PATH_PROFILE_ACCOUNT_INFO,
+        PATH_PROFILE_USER_INFO,
+        PATH_PROFILE_AGENCY_INFO,
+    ] {
+        Mock::given(method("POST"))
+            .and(path(post_path))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+    }
+
+    let client = SpxClient::new(server.uri()).expect("client");
+    let err = client.fetch_profile(&cookies()).await.unwrap_err();
+    match err {
+        spx_client::client::SpxError::ProfileFallbackExhausted(count, _) => assert_eq!(count, 6),
+        other => panic!("expected ProfileFallbackExhausted, got {other:?}"),
+    }
 }
 
 #[tokio::test]

@@ -23,6 +23,14 @@ pub const PATH_NOTIFICATION: &str =
 pub const PATH_BIDDING_LOG_LIST: &str = "/api/line_haul/agency/booking/bidding/log/list";
 pub const PATH_USER_LIST: &str = "/api/basicserver/agency/account/user/list";
 pub const PATH_PROFILE: &str = "/api/basicserver/agency/account/current_user/basic_info";
+// Fallback profile paths, in the reference's exact order (spx-portal-ref
+// apps/api/src/services/spx.ts:993-1000, `fetchSpxUserProfile`'s `endpoints`
+// array). PATH_PROFILE above is that array's first (primary) entry.
+pub const PATH_PROFILE_AGENCY: &str = "/api/basicserver/agency/profile";
+pub const PATH_PROFILE_USER: &str = "/api/basicserver/user/profile";
+pub const PATH_PROFILE_ACCOUNT_INFO: &str = "/api/basicserver/agency/account/info";
+pub const PATH_PROFILE_USER_INFO: &str = "/api/basicserver/agency/user/info";
+pub const PATH_PROFILE_AGENCY_INFO: &str = "/api/basicserver/agency/info";
 pub const PATH_BOOKING_OVERVIEW: &str =
     "/api/line_haul/agency/booking/bidding/booking_overview";
 pub const PATH_BOOKING_LOG: &str = "/api/line_haul/agency/booking/request/booking_log";
@@ -35,6 +43,8 @@ pub enum SpxError {
     Status(u16),
     #[error("bad response body")]
     Body,
+    #[error("all {0} profile fallback paths failed; last error: {1}")]
+    ProfileFallbackExhausted(usize, String),
 }
 
 pub struct SpxClient {
@@ -166,9 +176,44 @@ impl SpxClient {
         self.post_json(cookies, PATH_USER_LIST, json!({ "request_source": 1, "agency_id": agency_id, "pageno": 1, "count": 100 })).await
     }
 
-    /// profile (GET) — primary of the reference's 6 fallbacks.
+    /// profile — tries the reference's 6 candidate paths in order (primary
+    /// first, then 5 fallbacks), matching `fetchSpxUserProfile`
+    /// (spx-portal-ref apps/api/src/services/spx.ts:988-1029): 3 GETs then
+    /// 3 POSTs (POST fallbacks send an empty JSON body `{}`, per the
+    /// reference's `ep.body !== null ? { body: JSON.stringify(ep.body) } : {}`
+    /// where `ep.body` is `{}` for those three). A candidate "fails" here on
+    /// transport error, non-2xx status, or unparsable body (this crate
+    /// returns raw JSON rather than the reference's extracted
+    /// email/fullName, so the reference's extra "parsed but no email/name
+    /// found → keep trying" fallback trigger has no equivalent here — the
+    /// first candidate returning parseable 2xx JSON wins). Falls through to
+    /// the next candidate on failure; if all 6 fail, returns
+    /// `ProfileFallbackExhausted` naming the count and the last error seen.
     pub async fn fetch_profile(&self, cookies: &SpxCookies) -> Result<Value, SpxError> {
-        self.get_json(cookies, PATH_PROFILE).await
+        const CANDIDATES: [(&str, bool); 6] = [
+            (PATH_PROFILE, true),
+            (PATH_PROFILE_AGENCY, true),
+            (PATH_PROFILE_USER, true),
+            (PATH_PROFILE_ACCOUNT_INFO, false),
+            (PATH_PROFILE_USER_INFO, false),
+            (PATH_PROFILE_AGENCY_INFO, false),
+        ];
+        let mut last_err = SpxError::Transport;
+        for (path, is_get) in CANDIDATES {
+            let attempt = if is_get {
+                self.get_json(cookies, path).await
+            } else {
+                self.post_json(cookies, path, json!({})).await
+            };
+            match attempt {
+                Ok(value) => return Ok(value),
+                Err(err) => last_err = err,
+            }
+        }
+        Err(SpxError::ProfileFallbackExhausted(
+            CANDIDATES.len(),
+            last_err.to_string(),
+        ))
     }
 
     /// booking_overview (POST) — fallback booking source.
