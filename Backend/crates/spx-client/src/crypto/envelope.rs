@@ -171,6 +171,29 @@ pub fn decrypt_agency_password(
     Ok(SecretString::from(s))
 }
 
+/// Encrypt a WAHA API key. AAD binds it to `LABEL_WAHA_KEY` + `tenant_id`.
+pub fn encrypt_waha_key(
+    master: &MasterKey,
+    tenant_id: Uuid,
+    key: &str,
+) -> Result<Ciphertext, CryptoError> {
+    let aad = aad_for(LABEL_WAHA_KEY, tenant_id);
+    encrypt(master, LABEL_WAHA_KEY, key.as_bytes(), &aad)
+}
+
+/// Decrypt a WAHA API key read back from `site_settings`.
+pub fn decrypt_waha_key(
+    master: &MasterKey,
+    tenant_id: Uuid,
+    ciphertext: &[u8],
+    nonce: &[u8; 12],
+) -> Result<SecretString, CryptoError> {
+    let aad = aad_for(LABEL_WAHA_KEY, tenant_id);
+    let plaintext = decrypt(master, LABEL_WAHA_KEY, ciphertext, nonce, &aad)?;
+    let s = String::from_utf8(plaintext).map_err(|_| CryptoError::Aead)?;
+    Ok(SecretString::from(s))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
