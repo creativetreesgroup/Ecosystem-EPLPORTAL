@@ -1711,6 +1711,13 @@ pub async fn dispatch_booking(
         AcceptReason::Auth => {
             st.dedup.abort_accept(&booking.id);
             st.consecutive_401s = st.consecutive_401s.max(3); // correction #5
+            // Corrected during Task 6's review: release, same as Transient — a
+            // 401/403 means the accept never fired server-side, so there is no
+            // double-accept to protect against, and holding the claim/quota
+            // slot for its full 600s TTL would block a legitimate retry and
+            // spuriously inflate the inflight count against OTHER, unrelated
+            // tickets on the same capped rule.
+            shared.executor.release_claim_auto(&st.account_id, &booking.id, Some(meta.uuid)).await;
             DispatchResult::Auth
         }
         AcceptReason::Error => {
@@ -2194,6 +2201,58 @@ cargo clippy -p spx-client -p poller --all-targets -- -D warnings
 cd ..
 git add Backend/crates/spx-client Backend/crates/poller Backend/Cargo.lock
 git commit -m "feat(poller,spx-client): 3-tier auto-login (tier2/3 in-proc + tier1 via auth-sidecar) + fallback + 3x401 reactive + daily proactive"
+```
+
+---
+
+### Task 7b: Wire auto-login into the live poll loop (review-found plan gap)
+
+**Why this task exists:** Task 7's own review (opus) confirmed the brief correctly scoped Task 7 to building the auto-login MECHANISM (`login.rs`'s `auto_login`/`should_reactive_relogin`/`should_daily_relogin`, all genuinely tested including a real connection-refused sidecar-down case) — but found that **no task in this plan actually calls any of it from `poll_once`**. `consecutive_401s` (written by Task 6's dispatch pipeline on an `Auth` outcome) is never read in production and never reset to 0. Task 8 (watchdog)'s `respawn` only recreates a **dead** `AccountHandle`/task — a live poller whose SPX session has gone stale from repeated 401s keeps running forever, never re-logging in, silently defeating the "Auto-login 3-tier … reactive 3x401 relogin" requirement with no test anywhere to catch the miss. This task closes that gap before it can reach Task 14's sign-off unnoticed.
+
+**Files:**
+- Modify: `Backend/crates/poller/src/state.rs` (`PollerShared` gains `pub sidecar: Arc<login::SidecarClient>`; `PollerState` gains `pub username: secrecy::SecretString, pub password: secrecy::SecretString` — populated once at account construction from already-decrypted credentials, mirroring how `cookies: SpxCookies` is already accepted as a constructor parameter rather than fetched internally; decrypting from `store::agency_credentials` via `spx_client::crypto::envelope` is a bootstrap-layer concern for whichever later fase actually constructs `PollerState` for a real account — NOT this task's job, same division Task 6 already established for `rules`/`rule_meta`)
+- Modify: `Backend/crates/poller/src/schedule.rs` (`poll_once`: after the existing fetch→upsert→match→dispatch→anti-drift body, check `login::should_reactive_relogin(st.consecutive_401s) || login::should_daily_relogin(&st.last_daily_relogin_day, &login::wib_day(chrono::Utc::now()))`; if true, call `login::auto_login(&shared.sidecar, &shared.client, &st.account_id, st.username.expose_secret(), st.password.expose_secret())`; on `Some((cookies, tier))`, replace `st.cookies`, reset `st.consecutive_401s = 0`, set `st.last_daily_relogin_day = login::wib_day(chrono::Utc::now())`, `tracing::info!(tier=?tier, "relogin succeeded")`; on `None`, leave `st.cookies`/`st.consecutive_401s` untouched and `tracing::warn!("relogin attempt failed, will retry next cycle")` — do NOT panic, do NOT stop the loop, a failed relogin just means the next cycle's accepts keep hitting Auth until a future cycle's relogin succeeds)
+- Create: `Backend/crates/poller/tests/relogin_wiring.rs`
+
+**Interfaces produced:**
+- No new public functions — this task is pure wiring inside `poll_once` using Task 7's already-shipped, already-tested `login` module.
+
+- [ ] **Step 1: Add credential + sidecar fields**
+
+Add to `PollerShared` (`state.rs`): `pub sidecar: Arc<crate::login::SidecarClient>`. Add to `PollerState`: `pub username: secrecy::SecretString`, `pub password: secrecy::SecretString`, both required constructor parameters on `PollerState::new` (update every existing call site across `poller`'s tests — grep for `PollerState::new` first, there are several from Tasks 1/2/5/6). Use `secrecy = "0.10"` (matches the version already pinned in `spx-client`'s `Cargo.toml` from Fase 3 — re-verify with `cargo add --package poller secrecy@0.10 --dry-run` before assuming; do not introduce a second/different secrecy version into the workspace).
+
+- [ ] **Step 2: Wire the check + trigger into `poll_once`**
+
+At the end of `poll_once`'s existing body (after anti-drift), add the relogin check described above. Keep it a plain sequential `if` — this must run on the SAME task/cycle as the rest of `poll_once`, not spawned, so a relogin-in-progress naturally blocks that account's next accept dispatch (correct: dispatching accepts with a session known to be stale would just produce more `Auth` outcomes).
+
+- [ ] **Step 3: Test — reactive trigger fires and resets the counter**
+
+Real-Redis/Postgres-free test (pure `poll_once` logic against a wiremock SPX server + wiremock sidecar): drive a `PollerState` with `consecutive_401s = 3` into a `poll_once` cycle (empty booking pool is fine — the relogin check runs regardless of dispatch results), mock the sidecar to return valid cookies, assert: `st.cookies` changed to the new value, `st.consecutive_401s == 0` afterward, one HTTP call was made to the sidecar's `/login`.
+
+- [ ] **Step 4: Test — failed relogin doesn't crash and doesn't get stuck retrying every field wrongly**
+
+Same shape, but sidecar AND api AND form all fail (matching Task 7's `all_tiers_failing_returns_none_not_a_hard_error` pattern). Assert: `poll_once` returns normally (no panic), `st.consecutive_401s` stays `>= 3` (so the NEXT cycle tries again), `st.cookies` unchanged (never partially overwritten with `None`/empty).
+
+- [ ] **Step 5: Test — daily relogin fires independent of 401 count**
+
+`st.consecutive_401s = 0` (healthy), `st.last_daily_relogin_day` set to a day BEFORE `login::wib_day(chrono::Utc::now())` (yesterday, computed relative to real now — no `tokio::time::pause` needed here since `wib_day` takes an explicit `DateTime<Utc>` rather than reading a clock itself, matching Task 7's own test style). Assert relogin fires (sidecar mock hit) and `st.last_daily_relogin_day` updates to today.
+
+- [ ] **Step 6: Full verification**
+
+```bash
+cd Backend
+cargo test -p poller
+cargo clippy --workspace --all-targets -- -D warnings
+cd ..
+git add Backend/crates/poller
+git commit -m "fix(poller): wire auto-login into poll_once — closes Task 7 review's unowned-gap finding
+
+Task 7 built and tested the 3-tier login mechanism in isolation but
+no task called it from the live poll loop, so consecutive_401s was
+written but never read/reset in production and daily relogin never
+fired. Wires the reactive (3x401) and proactive (daily WIB) triggers
+into poll_once's existing cycle, with cookie/counter update on
+success and a safe no-op-retry-next-cycle on failure."
 ```
 
 ---
