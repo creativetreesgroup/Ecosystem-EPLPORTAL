@@ -24,7 +24,11 @@ uuid = { version = "1", features = ["v4"] }
 # doesn't allow-list). Without it, wreq falls back to the OS-native trust
 # store (SslConnectorBuilder::set_default_verify_paths) for TLS verification,
 # which is Apache-2.0-clean and has no functional downside for our use case.
-wreq = { version = "=6.0.0-rc.29", default-features = false, features = ["json", "cookies", "tokio-rt"] }
+# "form" (Task 7, on top of Fase 3's ["json", "cookies", "tokio-rt"]) is
+# purely additive: same pinned wreq version, just enables
+# RequestBuilder::form() (dep: serde_html_form) for tier-3 form-login's
+# urlencoded POST body. No BoringSSL/TLS-relevant feature is touched.
+wreq = { version = "=6.0.0-rc.29", default-features = false, features = ["json", "cookies", "tokio-rt", "form"] }
 wreq-util = { version = "=3.0.0-rc.14", features = ["emulation"] }
 zeroize = "1"
 

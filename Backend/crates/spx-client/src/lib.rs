@@ -3,6 +3,7 @@ pub mod booking;
 pub mod client;
 pub mod cookies;
 pub mod crypto;
+pub mod login;
 pub mod waha_settings;
 
 pub use accept::{classify_accept_response, AcceptReason, AcceptResult};

@@ -46,8 +46,15 @@ pub enum SpxError {
 }
 
 pub struct SpxClient {
-    http: wreq::Client,
-    base_url: String,
+    // `pub(crate)`, not private: Task 7's `login.rs` (a sibling module, same
+    // crate) needs the raw transport + base URL to build login/CSRF/redirect
+    // requests that don't fit the `post_json`/`get_json` (cookie-header,
+    // JSON-body, 2xx-or-error) shape data endpoints use — login must inspect
+    // Set-Cookie response headers and (tier 3) a redirect's Location header,
+    // neither of which `post_json`/`get_json` expose. Still fully private to
+    // downstream crates outside `spx-client`.
+    pub(crate) http: wreq::Client,
+    pub(crate) base_url: String,
 }
 
 impl SpxClient {
@@ -67,7 +74,7 @@ impl SpxClient {
         })
     }
 
-    fn url(&self, path: &str) -> String {
+    pub(crate) fn url(&self, path: &str) -> String {
         format!("{}{}", self.base_url, path)
     }
 
