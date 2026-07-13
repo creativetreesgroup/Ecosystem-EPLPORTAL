@@ -8,6 +8,8 @@ publish.workspace = true
 aes-gcm = "0.11"
 argon2 = "0.5"
 base64 = "0.22"
+chrono = "0.4"
+core-domain = { version = "0.1.0", path = "../core-domain" }
 getrandom = "0.4"
 hkdf = "0.13"
 secrecy = "0.10"
