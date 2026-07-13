@@ -113,3 +113,37 @@ async fn tie_break_prefers_earliest_create_time() {
         }
     );
 }
+
+/// Regression for a review finding: the case above places the winner LAST in the
+/// op-log list, which can't distinguish "pick minimum create_time" from a
+/// hypothetical bug that just returns "the last `@`-operator in list order".
+/// Here the earliest-by-time entry sits in the MIDDLE, flanked by later-by-time
+/// entries before and after it, so only a genuine min-by-create_time comparison
+/// (not first-wins or last-wins list-position logic) picks it.
+#[tokio::test]
+async fn tie_break_prefers_earliest_create_time_with_non_monotonic_list_order() {
+    let server = MockServer::start().await;
+    let body = serde_json::json!({
+        "retcode": 0,
+        "data": { "list": [
+            { "booking_operation_type": 4, "operator": "later-op@x.com",      "create_time": 200 },
+            { "booking_operation_type": 4, "operator": "earliest-op@x.com",   "create_time": 100 },
+            { "booking_operation_type": 4, "operator": "even-later-op@x.com", "create_time": 300 }
+        ]}
+    });
+    Mock::given(method("GET"))
+        .and(path(PATH_BIDDING_LOG_LIST))
+        .respond_with(ResponseTemplate::new(200).set_body_json(body))
+        .mount(&server)
+        .await;
+
+    let client = SpxClient::new(server.uri()).expect("client");
+    // self is none of the three → the earliest-create_time operator is the rival.
+    let out = verify_agency_dup(&client, &cookies(), "someone@else.com", 42).await;
+    assert_eq!(
+        out,
+        AgencyDupOutcome::LostToAgency {
+            rival_email: "earliest-op@x.com".into()
+        }
+    );
+}

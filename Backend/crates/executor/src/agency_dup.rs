@@ -160,6 +160,25 @@ mod tests {
         assert_eq!(earliest_accept_operator(&log).as_deref(), Some("b@x.com"));
     }
 
+    /// Regression for a review finding: the other tie-break tests all happen to
+    /// place the winning (earliest `create_time`) entry LAST in the list, so they
+    /// can't distinguish "pick minimum create_time" from a hypothetical bug that
+    /// just picks "the last `@`-operator encountered". Here the winner sits in the
+    /// MIDDLE, surrounded by later-by-time entries on both sides — neither
+    /// "first wins" nor "last wins" list-position logic would select it.
+    #[test]
+    fn earliest_accept_operator_picks_min_create_time_regardless_of_list_position() {
+        let log = json!({
+            "retcode": 0,
+            "data": { "list": [
+                { "booking_operation_type": 4, "operator": "later-op@x.com",     "create_time": 200 },
+                { "booking_operation_type": 4, "operator": "earliest-op@x.com",  "create_time": 100 },
+                { "booking_operation_type": 4, "operator": "even-later-op@x.com","create_time": 300 }
+            ]}
+        });
+        assert_eq!(earliest_accept_operator(&log).as_deref(), Some("earliest-op@x.com"));
+    }
+
     #[test]
     fn extract_self_email_falls_back_across_keys_and_normalizes() {
         let p = json!({ "data": { "login_email": "  Me@Example.COM " } });
