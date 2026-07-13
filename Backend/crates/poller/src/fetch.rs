@@ -42,22 +42,28 @@ pub fn window_pages(poll_count: u64, max_pages: u32) -> (u32, u32) {
 
 /// Fetch `pageno_start..=pageno_end` in parallel. Each page is best-effort; a
 /// failed page → `page_failures += 1` and forces `fetch_complete=false`.
+/// `hedge_ms` is routed straight to `hedged_page` per page: `0` (the default,
+/// and always the value `fast_detect` passes) is a single shot identical to a
+/// plain `fetch_bookings` call; `sweep` passes `cfg.sweep_hedge_ms`, which is
+/// itself only ever non-zero on the FULL-SWEEP path (never the rotating
+/// window — Task 3's correction #1).
 async fn fetch_range(
     client: &SpxClient,
     cookies: &SpxCookies,
     page_size: u32,
     pageno_start: u32,
     pageno_end: u32,
+    hedge_ms: u64,
 ) -> (Vec<SpxBooking>, u32) {
     let futs = (pageno_start..=pageno_end)
-        .map(|pageno| async move { client.fetch_bookings(cookies, pageno, page_size).await });
+        .map(|pageno| crate::hedge::hedged_page(client, cookies, pageno, page_size, hedge_ms));
     let results = join_all(futs).await;
     let mut bookings = Vec::new();
     let mut failures = 0u32;
     for r in results {
         match r {
             Ok(mut page) => bookings.append(&mut page),
-            Err(_) => failures += 1, // best-effort: a failed page does not abort
+            Err(()) => failures += 1, // best-effort: a failed page does not abort
         }
     }
     (bookings, failures)
@@ -76,7 +82,14 @@ pub async fn sweep(
     } else {
         window_pages(poll_count, cfg.max_pages)
     };
-    let (bookings, page_failures) = fetch_range(client, cookies, cfg.page_size, start, end).await;
+    // Hedging is gated to the FULL-SWEEP path only: a rotating window is
+    // cheap-by-design and re-covers any given page again within a few polls,
+    // so trimming its tail latency isn't worth the extra QPS (correction #1
+    // / design note — matches the reference's real
+    // `forceFullSweep ? env.SPX_SWEEP_HEDGE_MS : 0`).
+    let hedge_ms = if full { cfg.sweep_hedge_ms } else { 0 };
+    let (bookings, page_failures) =
+        fetch_range(client, cookies, cfg.page_size, start, end, hedge_ms).await;
 
     let spx_id_set: HashSet<String> = bookings.iter().map(|b| b.id.clone()).collect();
     // fetch_complete: a FULL sweep with ZERO page failures. A rotating window is
@@ -104,7 +117,9 @@ pub async fn fast_detect(
     if cfg.fast_detect_pages == 0 {
         return Vec::new(); // OFF — no network at all
     }
-    let (bookings, _fail) = fetch_range(client, cookies, cfg.page_size, 1, cfg.fast_detect_pages).await;
+    // Fast-detect is an early peek, never hedged (hedge_ms=0 → single shot).
+    let (bookings, _fail) =
+        fetch_range(client, cookies, cfg.page_size, 1, cfg.fast_detect_pages, 0).await;
     bookings
 }
 
