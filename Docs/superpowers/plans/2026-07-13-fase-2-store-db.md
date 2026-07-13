@@ -346,8 +346,76 @@ CREATE INDEX idx_agency_credentials_tenant ON agency_credentials (tenant_id);
 
 - [ ] **Step 2: Write the `accept_rules` migration**
 
+**Correction (post-Task-2-review, applied before Task 2 was marked complete):** the original draft below used `REAL`/`array_to_string(destinations, '>')` directly. Real Postgres 16 rejected the generated column outright (`array_to_string` is catalogued `STABLE`, not `IMMUTABLE` — `GENERATED ALWAYS AS (...) STORED` requires every function used to be `IMMUTABLE`), and a design review found two further issues before any production data existed: (1) `REAL` (`f32`) loses precision on money-critical values above ~16.7M — `core_domain::RuleConditions::max_weight`/`max_cod_amount` are `f64` specifically to survive amounts like `4_500_000_000.0` intact (see `core-domain/src/rule.rs`'s test at that magnitude) — a `REAL` column would silently perturb such values by up to ±256 on a write-then-read round trip; (2) the generated `route_signature` must mirror `core_domain::dedupe_rules`'s actual 5-part signature (`norm_loc(origin)|dests_sig|mode|booking_type|service_types_sig`) — the original 4-part version (missing `service_types_sig`, and not normalizing `destinations` the same way as `origin`) would make the DB's dedup unique index **reject legitimate, Rust-validated distinct rules** that share a lane but differ only by `service_types` (a false-positive collision, not merely a weaker backstop). The corrected SQL below fixes all three; use this version, not a literal reading of "REAL"/plain `array_to_string" from any older description of this task.
+
 ```sql
 -- Backend/crates/store/migrations/0005_accept_rules.sql
+
+-- IMMUTABLE wrapper: array_to_string() is STABLE in Postgres's catalog (a
+-- conservative classification for polymorphic array functions in general),
+-- even though for a fixed-separator TEXT[] join the result is fully
+-- deterministic. Generated-column expressions require every function used
+-- to be IMMUTABLE, so this narrow (TEXT[], TEXT) -> TEXT wrapper — not left
+-- polymorphic — re-labels exactly the deterministic case.
+CREATE OR REPLACE FUNCTION accept_rules_destinations_join_immutable(arr TEXT[], sep TEXT)
+RETURNS TEXT
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+    SELECT array_to_string(arr, sep);
+$$;
+
+-- Mirrors core_domain::norm_loc exactly: lowercase, collapse any run of
+-- non-alphanumeric characters to a single space, trim leading/trailing space.
+CREATE OR REPLACE FUNCTION accept_rules_norm_loc_immutable(s TEXT)
+RETURNS TEXT
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+    SELECT btrim(regexp_replace(lower(s), '[^a-z0-9]+', ' ', 'g'));
+$$;
+
+-- Mirrors core_domain::dedupe_rules's dests_sig: each destination run through
+-- norm_loc, empties dropped, joined with '>' (order preserved, NOT sorted —
+-- matches the Rust implementation).
+CREATE OR REPLACE FUNCTION accept_rules_destinations_sig_immutable(arr TEXT[])
+RETURNS TEXT
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+    SELECT accept_rules_destinations_join_immutable(
+        ARRAY(
+            SELECT accept_rules_norm_loc_immutable(elem)
+            FROM unnest(arr) AS elem
+            WHERE accept_rules_norm_loc_immutable(elem) <> ''
+        ),
+        '>'
+    );
+$$;
+
+-- Mirrors core_domain::dedupe_rules's service_types_sig: each entry
+-- lowercased+trimmed, empties dropped, SORTED (unlike destinations), joined
+-- with ','.
+CREATE OR REPLACE FUNCTION accept_rules_service_types_sig_immutable(arr TEXT[])
+RETURNS TEXT
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+    SELECT array_to_string(
+        ARRAY(
+            SELECT lower(btrim(elem))
+            FROM unnest(arr) AS elem
+            WHERE btrim(elem) <> ''
+            ORDER BY 1
+        ),
+        ','
+    );
+$$;
+
 CREATE TABLE accept_rules (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -356,10 +424,10 @@ CREATE TABLE accept_rules (
     priority INT NOT NULL DEFAULT 0,
     mode TEXT NOT NULL CHECK (mode IN ('booking_id', 'route', 'filter')),
     service_types TEXT[] NOT NULL DEFAULT '{}',
-    max_weight REAL,
+    max_weight DOUBLE PRECISION,
     coc_only BOOLEAN NOT NULL DEFAULT false,
     non_coc_only BOOLEAN NOT NULL DEFAULT false,
-    max_cod_amount REAL,
+    max_cod_amount DOUBLE PRECISION,
     origin TEXT NOT NULL DEFAULT '',
     destinations TEXT[] NOT NULL DEFAULT '{}',
     booking_type TEXT NOT NULL DEFAULT 'all' CHECK (booking_type IN ('spxid', 'reguler', 'all')),
@@ -370,8 +438,10 @@ CREATE TABLE accept_rules (
     max_accept_count INT NOT NULL DEFAULT 0,
     accepted_count INT NOT NULL DEFAULT 0,
     route_signature TEXT GENERATED ALWAYS AS (
-        lower(regexp_replace(origin, '[^a-zA-Z0-9]+', ' ', 'g')) || '|' ||
-        array_to_string(destinations, '>') || '|' || match_mode || '|' || booking_type
+        accept_rules_norm_loc_immutable(origin) || '|' ||
+        accept_rules_destinations_sig_immutable(destinations) || '|' ||
+        match_mode || '|' || booking_type || '|' ||
+        accept_rules_service_types_sig_immutable(service_types)
     ) STORED,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -382,10 +452,13 @@ CREATE TABLE accept_rules (
 
 CREATE INDEX idx_accept_rules_tenant ON accept_rules (tenant_id);
 -- Dedup lane: only one ROUTE-mode rule per tenant may occupy a given
--- normalized lane signature. booking_id/filter modes are unrestricted here
+-- normalized lane signature (origin + destinations + match_mode +
+-- booking_type + service_types, all normalized identically to
+-- core_domain::dedupe_rules). booking_id/filter modes are unrestricted here
 -- (their own dedup semantics live in core-domain's dedupe_rules, applied
 -- before insert — this index only enforces the route-lane invariant at the
--- DB level as a backstop).
+-- DB level as a backstop, and must use the SAME key as the Rust dedup or it
+-- will either miss real duplicates or reject legitimate distinct rules).
 CREATE UNIQUE INDEX idx_accept_rules_route_dedup ON accept_rules (tenant_id, route_signature)
     WHERE mode = 'route';
 ```
@@ -442,10 +515,10 @@ pub struct AcceptRule {
     pub priority: i32,
     pub mode: String,
     pub service_types: Vec<String>,
-    pub max_weight: Option<f32>,
+    pub max_weight: Option<f64>,
     pub coc_only: bool,
     pub non_coc_only: bool,
-    pub max_cod_amount: Option<f32>,
+    pub max_cod_amount: Option<f64>,
     pub origin: String,
     pub destinations: Vec<String>,
     pub booking_type: String,
@@ -483,10 +556,12 @@ Add `pub mod accept_rule; pub mod agency_credential; pub mod rule_booking_target
 
 - [ ] **Step 6: Run migrations and verify with a round-trip test**
 
-Add a test (same pattern as Task 1's Step 10) that: creates a tenant, inserts an `accept_rules` row with `mode='route', origin='Padang DC', destinations=['Cileungsi DC']`, fetches it back, and asserts `route_signature` was computed by Postgres as `"padang dc|cileungsi dc|strict|all"` (trace this by hand against the generated-column SQL before writing the assertion — lowercase, punctuation-to-space via `regexp_replace`, then the literal `|` separators). Also insert a second `accept_rules` row with the SAME origin/destinations/mode and assert the insert **fails** (unique violation) — this proves the dedup index actually fires.
+Add a test (same pattern as Task 1's Step 10) that: creates a tenant, inserts an `accept_rules` row with `mode='route', origin='Padang DC', destinations=['Cileungsi DC']` (default `match_mode='strict'`, `booking_type='all'`, `service_types='{}'`), fetches it back, and asserts `route_signature` was computed by Postgres as `"padang dc|cileungsi dc|strict|all|"` (trace this by hand against the corrected generated-column SQL above before writing the assertion — normalized origin, normalized destinations joined by `>`, `match_mode`, `booking_type`, then a trailing `|` before the empty `service_types_sig`). Also insert a second `accept_rules` row with the SAME origin/destinations/mode/service_types and assert the insert **fails** (unique violation) — this proves the dedup index actually fires.
+
+Add a second test proving the `service_types_sig` fix: insert two `accept_rules` rows with the same `origin`/`destinations`/`mode`, but `service_types=['TRONTON']` on one and `service_types=['FUSO']` on the other — assert **both inserts succeed** (no unique violation), proving the DB-level dedup index no longer produces false-positive collisions between legitimately distinct rules that share a lane but differ by service type.
 
 Run: `cargo test -p store -- --test-threads=1`
-Expected: all tests pass, including the new dedup-collision test asserting an `Err` from the second insert.
+Expected: all tests pass, including the dedup-collision test (same key → `Err`) and the service-types-distinctness test (different key → both `Ok`).
 
 - [ ] **Step 7: Clippy**
 
