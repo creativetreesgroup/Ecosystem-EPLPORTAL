@@ -80,14 +80,18 @@ services:
       POSTGRES_USER: tower
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tower_dev_only}
       POSTGRES_DB: tower
-    # TEMPORARY (Fase 2 dev-time convenience, see store crate's migration-smoke
+    # TEMPORARY (dev-time convenience, see store crate's migration-smoke
     # test): publishes Postgres to localhost only, for `cargo test -p store`
-    # (and later Fase 2 tasks) run from the host outside any container. Scoped
-    # to 127.0.0.1 so it is not reachable off-box; Fase 8's VPS overlay already
-    # treats Postgres as internal-only, so this does not violate Fase 0's
-    # "no published ports except edge" rule's production/edge-exposure intent.
+    # run from the host outside any container. Scoped to 127.0.0.1 so it is
+    # not reachable off-box; Fase 8's VPS overlay already treats Postgres as
+    # internal-only, so this does not violate Fase 0's "no published ports
+    # except edge" rule's production/edge-exposure intent.
     # Port 5432 is used by a pre-existing native Postgres on the dev host, so
-    # this maps to 15432 instead. Remove this `ports` block once Fase 2 lands.
+    # this maps to 15432 instead — `store`'s test_database_url() default and
+    # every later fase's local dev docs must use 15432, not 5432. Fase 2
+    # still needs this (host-run tests), and so will Fase 3-6 as their crates
+    # grow their own store-backed tests — remove only alongside Fase 8's real
+    # deployment tooling, not before.
     ports:
       - "127.0.0.1:15432:5432"
     volumes:

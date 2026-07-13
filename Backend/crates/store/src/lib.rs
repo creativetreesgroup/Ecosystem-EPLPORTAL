@@ -8,8 +8,11 @@ mod tests {
     use super::*;
 
     fn test_database_url() -> String {
+        // 15432, not 5432 — see Docker/docker-compose.yml's tower-postgres port
+        // comment: 5432 is often occupied by a pre-existing native Postgres on
+        // the dev host, so the container's port is published on 15432 instead.
         std::env::var("DATABASE_URL")
-            .unwrap_or_else(|_| "postgres://tower:tower_dev_only@127.0.0.1:5432/tower".to_string())
+            .unwrap_or_else(|_| "postgres://tower:tower_dev_only@127.0.0.1:15432/tower".to_string())
     }
 
     /// Inserts a throwaway tenant and returns its id. Callers are responsible

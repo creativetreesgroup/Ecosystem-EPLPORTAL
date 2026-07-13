@@ -119,14 +119,19 @@ updated_at`. `UNIQUE(tenant_id, label)`.
 ### 5. `bookings`
 `id, tenant_id, spx_id text NOT NULL, raw_data jsonb NOT NULL,
 status varchar(32) NOT NULL DEFAULT 'pending', is_coc boolean GENERATED ALWAYS
-AS (spx_id ~* '^SPXID' OR COALESCE(raw_data->>'booking_name','') ~* '^SPXID')
+AS (spx_id ~* '^\s*SPXID' OR COALESCE(raw_data->>'booking_name','') ~* '^\s*SPXID')
 STORED, needs_enrichment boolean GENERATED ALWAYS AS (
   raw_data->>'route_detail_list' IS NULL AND raw_data->>'route_stops' IS NULL
 ) STORED` (predicate diadaptasi dari acuan `db.ts` — field yang perlu enrichment
-lanjutan), `service_type text, weight real NOT NULL DEFAULT 0, cod_amount real
-NOT NULL DEFAULT 0, auto_accepted boolean NOT NULL DEFAULT false,
-accept_latency_ms int, rule_matched uuid REFERENCES accept_rules(id),
-created_at, updated_at`. `UNIQUE(tenant_id, spx_id)`.
+lanjutan; **`^\s*SPXID` whitespace-tolerant, dikoreksi dari acuan `IS_COC_SQL`
+yang cuma `^SPXID`** — deliberate improvement supaya identik dengan Fase 1's
+`is_coc_name`), `service_type text, weight double precision NOT NULL DEFAULT
+0, cod_amount double precision NOT NULL DEFAULT 0` (**`double precision`/`f64`,
+BUKAN `real`/`f32`** — dikoreksi selama implementasi Task 3: `real` silently
+kehilangan presisi di atas ~16.7M, harus match `core_domain::Booking`'s
+`f64`), `auto_accepted boolean NOT NULL DEFAULT false, accept_latency_ms int,
+rule_matched uuid REFERENCES accept_rules(id) ON DELETE SET NULL, created_at,
+updated_at`. `UNIQUE(tenant_id, spx_id)`.
 Index hot-path: partial `WHERE status='pending'` (newest-first, `created_at
 DESC`), covering index untuk live-list query (`status, created_at, id` INCLUDE
 kolom yang sering dipakai UI), BRIN pada `created_at` (tabel besar,
@@ -137,24 +142,37 @@ Kolom persis `RuleConditions` Fase 1 (`Backend/crates/core-domain/src/rule.rs`),
 bukan jsonb: `id, tenant_id, name text NOT NULL, enabled boolean NOT NULL
 DEFAULT false, priority int NOT NULL DEFAULT 0, mode text NOT NULL` (CHECK IN
 `booking_id,route,filter`), `service_types text[] NOT NULL DEFAULT '{}',
-max_weight real, coc_only boolean NOT NULL DEFAULT false, non_coc_only boolean
-NOT NULL DEFAULT false, max_cod_amount real, origin text NOT NULL DEFAULT '',
-destinations text[] NOT NULL DEFAULT '{}' CHECK (array_length(destinations,1)
-IS NULL OR array_length(destinations,1) <= 5), booking_type text NOT NULL
-DEFAULT 'all'` (CHECK IN `spxid,reguler,all`), `shift_types int[] NOT NULL
-DEFAULT '{}', trip_types int[] NOT NULL DEFAULT '{}', match_mode text NOT NULL
-DEFAULT 'strict'` (CHECK IN `strict,flexible`), `min_deadline_min int,
-max_accept_count int NOT NULL DEFAULT 0, accepted_count int NOT NULL DEFAULT
-0, route_signature text GENERATED ALWAYS AS (
-  lower(regexp_replace(origin, '[^a-zA-Z0-9]+', ' ', 'g')) || '|' ||
-  array_to_string(destinations, '>') || '|' || match_mode || '|' ||
-  booking_type
-) STORED` (dedup-lane signature — versi SQL dari lane signature `dedupeRules`
-di `matching.ts`; normalisasi destinasi penuh ala `norm_loc` ditunda ke
-aplikasi layer karena regex SQL tidak semudah kode Rust untuk itu — signature
-ini "cukup baik" untuk index dedup, normalisasi presisi tetap terjadi di
-`core-domain` sebelum insert), `created_at, updated_at`. Partial unique index
-utk dedup lane: `UNIQUE(tenant_id, route_signature) WHERE mode='route'`.
+max_weight double precision, coc_only boolean NOT NULL DEFAULT false,
+non_coc_only boolean NOT NULL DEFAULT false, max_cod_amount double precision`
+(**`double precision`/`f64`, BUKAN `real`/`f32`** — dikoreksi selama
+implementasi Task 2 setelah review menemukan `real` silently kehilangan
+presisi di atas ~16.7M, harus match `core_domain::RuleConditions`'s `f64`),
+`origin text NOT NULL DEFAULT '', destinations text[] NOT NULL DEFAULT '{}'
+CHECK (array_length(destinations,1) IS NULL OR array_length(destinations,1)
+<= 5), booking_type text NOT NULL DEFAULT 'all'` (CHECK IN
+`spxid,reguler,all`), `shift_types int[] NOT NULL DEFAULT '{}', trip_types
+int[] NOT NULL DEFAULT '{}', match_mode text NOT NULL DEFAULT 'strict'` (CHECK
+IN `strict,flexible`), `min_deadline_min int, max_accept_count int NOT NULL
+DEFAULT 0, accepted_count int NOT NULL DEFAULT 0, route_signature text
+GENERATED ALWAYS AS (
+  accept_rules_norm_loc_immutable(origin) || '|' ||
+  accept_rules_destinations_sig_immutable(destinations) || '|' ||
+  match_mode || '|' || booking_type || '|' ||
+  accept_rules_service_types_sig_immutable(service_types)
+) STORED` (dedup-lane signature — **5-bagian**, dikoreksi selama implementasi
+Task 2 dari draf awal 4-bagian yang tidak menyertakan `service_types` dan
+tidak menormalkan `destinations`. Versi 4-bagian itu bikin index dedup DB
+salah-tolak rule yang sah beda hanya di `service_types` — false-positive
+collision, bukan cuma backstop lemah. Versi final ini cermin persis 5-bagian
+lane signature `dedupeRules` di `matching.ts`/`core_domain::dedupe_rules`:
+`norm_loc(origin)|dests_sig|match_mode|booking_type|service_types_sig`, lewat
+3 fungsi SQL `IMMUTABLE` pembantu — `array_to_string()` bawaan Postgres
+ternyata `STABLE` bukan `IMMUTABLE`, jadi generated column butuh wrapper
+sendiri untuk lolos requirement `GENERATED ... STORED`. Normalisasi presisi
+tetap otoritatif di `core-domain` sebelum insert; kolom DB ini backstop, tapi
+sekarang backstop yang benar-benar sepadan dengan kunci dedup aplikasi, bukan
+kunci yang lebih lemah), `created_at, updated_at`. Partial unique index utk
+dedup lane: `UNIQUE(tenant_id, route_signature) WHERE mode='route'`.
 
 ### 7. `rule_booking_targets`
 Target booking_id-mode, dipisah dari `accept_rules` (list ID bisa banyak, perlu
