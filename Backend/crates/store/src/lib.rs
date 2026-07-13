@@ -423,4 +423,124 @@ mod tests {
 
         sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_id).execute(&pool).await.ok();
     }
+
+    /// Proves the `route_prices_destinations_1to5` CHECK constraint: 0
+    /// destinations must fail, 6 must fail, and anything in between (1-5)
+    /// must succeed.
+    #[tokio::test]
+    async fn route_prices_destinations_check_enforces_1_to_5() {
+        let pool = connect(&test_database_url()).await.expect("connect");
+        run_migrations(&pool).await.expect("migrate");
+        let tenant_id = insert_test_tenant(&pool).await;
+
+        let insert = |destinations: serde_json::Value, code: String| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query(
+                    "INSERT INTO route_prices (tenant_id, route_code, origin, destinations, price, vehicle_type) \
+                     VALUES ($1, $2, 'Padang DC', $3, 100000, 'TRONTON')",
+                )
+                .bind(tenant_id)
+                .bind(code)
+                .bind(destinations)
+                .execute(&pool)
+                .await
+            }
+        };
+
+        assert!(insert(serde_json::json!([]), "zero".into()).await.is_err(), "0 destinations must fail");
+        assert!(
+            insert(serde_json::json!(["A", "B", "C", "D", "E", "F"]), "six".into()).await.is_err(),
+            "6 destinations must fail"
+        );
+        assert!(
+            insert(serde_json::json!(["A", "B", "C"]), "three".into()).await.is_ok(),
+            "3 destinations must succeed"
+        );
+
+        sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_id).execute(&pool).await.ok();
+    }
+
+    #[tokio::test]
+    async fn route_location_round_trips() {
+        let pool = connect(&test_database_url()).await.expect("connect");
+        run_migrations(&pool).await.expect("migrate");
+        let tenant_id = insert_test_tenant(&pool).await;
+
+        let inserted: models::RouteLocation = sqlx::query_as(
+            "INSERT INTO route_locations (tenant_id, name) VALUES ($1, $2) RETURNING *",
+        )
+        .bind(tenant_id)
+        .bind("Padang DC")
+        .fetch_one(&pool)
+        .await
+        .expect("insert route_location");
+
+        let fetched: models::RouteLocation =
+            sqlx::query_as("SELECT * FROM route_locations WHERE id = $1")
+                .bind(inserted.id)
+                .fetch_one(&pool)
+                .await
+                .expect("fetch route_location");
+
+        assert_eq!(fetched.tenant_id, tenant_id);
+        assert_eq!(fetched.name, "Padang DC");
+
+        let dup_result = sqlx::query("INSERT INTO route_locations (tenant_id, name) VALUES ($1, $2)")
+            .bind(tenant_id)
+            .bind("Padang DC")
+            .execute(&pool)
+            .await;
+        assert!(dup_result.is_err(), "duplicate (tenant_id, name) must violate the unique constraint");
+
+        sqlx::query("DELETE FROM tenants WHERE id = $1").bind(tenant_id).execute(&pool).await.ok();
+    }
+
+    #[tokio::test]
+    async fn archive_run_round_trips() {
+        let pool = connect(&test_database_url()).await.expect("connect");
+        run_migrations(&pool).await.expect("migrate");
+
+        let inserted: models::ArchiveRun = sqlx::query_as(
+            "INSERT INTO archive_runs (table_name, captured_count, archived_count, deleted_count) \
+             VALUES ($1, $2, $3, $4) RETURNING *",
+        )
+        .bind("bookings")
+        .bind(1000_i64)
+        .bind(900_i64)
+        .bind(900_i64)
+        .fetch_one(&pool)
+        .await
+        .expect("insert archive_run");
+
+        assert_eq!(inserted.status, "running", "status must default to 'running'");
+        assert!(!inserted.dry_run, "dry_run must default to false");
+        assert!(inserted.archive_path.is_none());
+        assert!(inserted.sha256.is_none());
+
+        let fetched: models::ArchiveRun = sqlx::query_as("SELECT * FROM archive_runs WHERE id = $1")
+            .bind(inserted.id)
+            .fetch_one(&pool)
+            .await
+            .expect("fetch archive_run");
+
+        assert_eq!(fetched.table_name, "bookings");
+        assert_eq!(fetched.captured_count, 1000);
+        assert_eq!(fetched.archived_count, 900);
+        assert_eq!(fetched.deleted_count, 900);
+
+        let bad_status = sqlx::query(
+            "INSERT INTO archive_runs (table_name, captured_count, archived_count, deleted_count, status) \
+             VALUES ($1, $2, $3, $4, 'bogus')",
+        )
+        .bind("bookings")
+        .bind(0_i64)
+        .bind(0_i64)
+        .bind(0_i64)
+        .execute(&pool)
+        .await;
+        assert!(bad_status.is_err(), "status must be constrained to running/completed/failed");
+
+        sqlx::query("DELETE FROM archive_runs WHERE id = $1").bind(inserted.id).execute(&pool).await.ok();
+    }
 }
