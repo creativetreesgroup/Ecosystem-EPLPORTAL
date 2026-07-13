@@ -174,10 +174,23 @@ pub async fn dispatch_booking(
             // than incrementing by one — an accept-time 401/403 is already a
             // confirmed auth failure, not a soft signal to accumulate.
             st.consecutive_401s = st.consecutive_401s.max(3);
-            // Leave the booking row 'pending' and the Layer-2 claim intact
-            // (port exactly: the design note does NOT release here, unlike
-            // Transient — the claim's 600s TTL is a reasonable backstop while
-            // relogin is in flight).
+            // Review correction: release the Layer-2 claim (and, for a capped
+            // rule, the inflight quota slot) here too, same as Transient. A
+            // 401/403 means SPX rejected the request before it authenticated —
+            // the accept almost certainly never fired server-side, so there is
+            // no double-accept to protect against. Holding the claim/quota
+            // slot for its full 600s TTL would block this ticket from being
+            // retried even after Task 7's auto-login recovers in seconds, and
+            // for a capped rule would spuriously inflate the inflight count
+            // against OTHER, unrelated tickets matching the same rule
+            // (`try_claim_auto`'s `accepted_count + SCARD(inflight) >= cap`
+            // check), causing spurious `QuotaFull` unrelated to any real
+            // accept. Leave the booking row 'pending' (no DB write) — Task 7's
+            // relogin is what determines whether this booking gets retried.
+            shared
+                .executor
+                .release_claim_auto(&st.account_id, &booking.id, Some(meta.uuid))
+                .await;
             DispatchResult::Auth
         }
         AcceptReason::Error => {

@@ -1466,7 +1466,7 @@ Expected: the partial-sweep-never-expires and complete-sweep-does test passes; `
      - `LostToAgency{rival}` → `abort_accept`; do NOT consume/record; spawn notifier agency-loss (Task 10); `store::update_booking_status(failed/taken_by_other)`; `LostToAgency`.
    - `Taken` → `abort_accept`; `update_booking_status(failed)`; `Taken` (terminal — keep the durable claim; do NOT release).
    - `Transient` → `abort_accept`; `release_claim_auto` (so next cycle retries); leave `pending`; `Transient`.
-   - `Auth` → `abort_accept`; `st.consecutive_401s = max(st.consecutive_401s, 3)` (correction #5 — jump to relogin threshold); leave `pending`; `Auth`.
+   - `Auth` → `abort_accept`; `st.consecutive_401s = max(st.consecutive_401s, 3)` (correction #5 — jump to relogin threshold); `release_claim_auto` (same as `Transient` — **corrected during Task 6's review**: a 401/403 means SPX rejected the request before authenticating, so the accept almost certainly never fired server-side and there is no double-accept to protect against; holding the claim/quota slot for its full 600s TTL would block this ticket from being retried even after Task 7's auto-login recovers in seconds, and for a capped rule would spuriously inflate the inflight count against OTHER, unrelated tickets on the same rule, causing spurious `QuotaFull`); leave `pending`; `Auth`.
 
 `booking_id_i64 = booking.booking_id.parse::<i64>().unwrap_or(0)`; `request_ids` = the booking's numeric `request_id` (if parseable) as a one-element slice, else empty. `st.self_email` is fetched once via `executor::fetch_self_email` on first need and cached.
 

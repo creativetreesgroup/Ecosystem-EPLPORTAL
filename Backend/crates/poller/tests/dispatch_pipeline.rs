@@ -286,3 +286,128 @@ async fn taken_outcome_leaves_rule_matched_null_and_stamps_accept_reason() {
         .await
         .ok();
 }
+
+/// `Auth` outcome: the Layer-2 claim (and, for a capped rule, the inflight
+/// quota slot) must be released — same as `Transient` — because a 401/403
+/// means the accept never fired server-side, so there is no double-accept to
+/// protect against, and holding the slot would spuriously block retries and
+/// inflate the quota count against unrelated tickets on the same rule. Proven
+/// by attempting a fresh `try_claim_auto` for the same account/spx_id/rule
+/// immediately afterward and asserting it succeeds (`Proceed`), not
+/// `AlreadyClaimed`/`QuotaFull` — a bare "release.await'd" check wouldn't
+/// prove the key was actually gone from Redis.
+#[tokio::test]
+async fn auth_outcome_releases_claim_and_leaves_booking_pending() {
+    let pool = store::connect(&database_url()).await.expect("connect pg");
+    store::run_migrations(&pool).await.expect("migrate");
+    let tenant_id = insert_tenant(&pool).await;
+
+    let rule_uuid = Uuid::new_v4();
+    // Capped at 1 so a leftover inflight slot would be observable via
+    // QuotaFull on the follow-up claim attempt, not just AlreadyClaimed.
+    sqlx::query(
+        "INSERT INTO accept_rules (id, tenant_id, name, mode, coc_only, max_accept_count, accepted_count) \
+         VALUES ($1, $2, 'COC catch-all capped', 'filter', true, 1, 0)",
+    )
+    .bind(rule_uuid)
+    .bind(tenant_id)
+    .execute(&pool)
+    .await
+    .expect("insert accept_rule");
+
+    let spx_id = format!("SPXID-AUTH-{}", Uuid::new_v4().simple());
+    let raw = serde_json::json!({ "booking_id": spx_id, "booking_name": spx_id });
+    let normalized = normalize_booking(&raw);
+    store::upsert_booking(
+        &pool,
+        tenant_id,
+        &store::BookingUpsert {
+            spx_id: spx_id.clone(),
+            status: "pending".into(),
+            is_coc: true,
+            raw_data: raw.clone(),
+        },
+    )
+    .await
+    .expect("seed booking row");
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/line_haul/agency/booking/bidding/accept"))
+        .respond_with(ResponseTemplate::new(401))
+        .mount(&server)
+        .await;
+
+    let executor = Arc::new(
+        ExecutorHandle::connect(&redis_url())
+            .await
+            .expect("connect redis"),
+    );
+    let client = Arc::new(SpxClient::new(server.uri()).expect("client"));
+    let shared = PollerShared {
+        executor: executor.clone(),
+        client,
+        pool: pool.clone(),
+        config: poller::PollerConfig::default(),
+        accounts: Arc::new(DashMap::new()),
+        notifier: None,
+        redis: None,
+    };
+    let account_id = format!("t{}", Uuid::new_v4().simple());
+    let mut st = PollerState::new(account_id.clone(), tenant_id, 42, SpxCookies::default());
+    let compiled = CompiledRule::compile(&core_domain::AcceptRule {
+        id: rule_uuid.to_string(),
+        name: "COC catch-all capped".into(),
+        enabled: true,
+        priority: 0,
+        mode: RuleMode::Filter,
+        conditions: RuleConditions {
+            coc_only: true,
+            ..Default::default()
+        },
+    });
+    st.rules = Arc::new(vec![compiled]);
+    st.rule_meta = Arc::new(vec![RuleMeta {
+        uuid: rule_uuid,
+        cap: 1,
+        accepted_count: 0,
+        name: "COC catch-all capped".into(),
+    }]);
+
+    let outcome = dispatch_booking(&shared, &mut st, &normalized).await;
+    assert_eq!(outcome, DispatchResult::Auth);
+    assert!(
+        st.consecutive_401s >= 3,
+        "Auth outcome must jump consecutive_401s to the relogin threshold"
+    );
+
+    let (status, rule_matched): (String, Option<Uuid>) = sqlx::query_as(
+        "SELECT status, rule_matched FROM bookings WHERE tenant_id = $1 AND spx_id = $2",
+    )
+    .bind(tenant_id)
+    .bind(&spx_id)
+    .fetch_one(&pool)
+    .await
+    .expect("fetch booking row");
+    assert_eq!(status, "pending", "Auth must not write a terminal status");
+    assert_eq!(rule_matched, None, "Auth must not bind a rule uuid");
+
+    // The real proof: the claim (and capped-rule inflight slot) must be gone
+    // from Redis, not just "released.await'd" — a fresh claim attempt for the
+    // exact same account/spx_id/rule must succeed.
+    let reclaim = executor
+        .try_claim_auto(&account_id, &spx_id, Some(rule_uuid), 1, 0)
+        .await;
+    assert_eq!(
+        reclaim,
+        executor::ClaimOutcome::Proceed,
+        "claim key and inflight quota slot must both be released after an Auth outcome, \
+         proving the ticket can be retried once Task 7's relogin recovers the session"
+    );
+
+    sqlx::query("DELETE FROM tenants WHERE id = $1")
+        .bind(tenant_id)
+        .execute(&pool)
+        .await
+        .ok();
+}
