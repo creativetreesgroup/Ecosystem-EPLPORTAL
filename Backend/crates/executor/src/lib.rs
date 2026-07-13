@@ -4,11 +4,12 @@
 //! two callers cannot diverge.
 pub mod dedup;
 pub mod gate;
+pub mod restore;
 
 pub use dedup::AccountDedupState;
 pub use gate::{
     ClaimOutcome, ExecutorError, ExecutorHandle, ManualClaimOutcome, RedisPool, ACCEPT_GATE_LUA,
 };
 
-// Later tasks add: pub mod restore; (Task 4)
+// Later tasks add:
 // pub mod account_lock; pub mod quota; (Task 5) pub mod agency_dup; (Task 6)
