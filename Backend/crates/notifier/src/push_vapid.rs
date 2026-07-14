@@ -32,7 +32,7 @@ impl VapidConfig {
         let subject = std::env::var("VAPID_SUBJECT").ok()?;
         let public_key = std::env::var("VAPID_PUBLIC").ok()?;
         let private_key = std::env::var("VAPID_PRIVATE").ok()?;
-        if public_key.is_empty() || private_key.is_empty() {
+        if subject.is_empty() || public_key.is_empty() || private_key.is_empty() {
             return None;
         }
         Some(Self {
@@ -129,6 +129,12 @@ pub fn build_push_request(
     let ua_auth_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(sub.auth.trim())
         .map_err(|e| PushError::Sub(e.to_string()))?;
+    if ua_auth_bytes.len() != 16 {
+        return Err(PushError::Sub(format!(
+            "auth must be 16 bytes, got {}",
+            ua_auth_bytes.len()
+        )));
+    }
     let ua_public = p256::PublicKey::from_sec1_bytes(&ua_public_bytes)
         .map_err(|e| PushError::Sub(e.to_string()))?;
     // `Auth = GenericArray<u8, U16>` (web-push-native's re-export). This pulls

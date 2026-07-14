@@ -8,7 +8,8 @@
 //! already running via `docker compose` in this environment) for the
 //! subscription store, wiremock only for the push-service HTTP endpoint.
 use notifier::{
-    build_push_request, send_push_to_account, PushPayload, PushSubscription, VapidConfig,
+    build_push_request, send_push_to_account, PushError, PushPayload, PushSubscription,
+    VapidConfig,
 };
 use redis::AsyncCommands;
 use wiremock::matchers::{header, method, path};
@@ -63,6 +64,30 @@ fn build_push_request_has_encryption_and_vapid_headers() {
         .to_str()
         .unwrap()
         .starts_with("vapid "));
+}
+
+// Review finding: `auth` decodes fine as base64url but isn't 16 bytes (this
+// is `SUB_AUTH` above truncated by one char) — `build_push_request` must
+// return `Err(PushError::Sub(_))`, NOT panic, since `Auth::clone_from_slice`
+// (a `GenericArray<u8, U16>`) panics on any length other than 16.
+const SUB_AUTH_WRONG_LEN: &str = "7ZMZGPIeqwZYNPQHrMM9";
+
+#[test]
+fn build_push_request_rejects_malformed_auth_field_instead_of_panicking() {
+    let sub = PushSubscription {
+        endpoint: "https://push.example.com/abc".into(),
+        p256dh: SUB_P256DH.into(),
+        auth: SUB_AUTH_WRONG_LEN.into(),
+    };
+    let payload = PushPayload {
+        title: "T".into(),
+        body: "B".into(),
+        url: None,
+        tag: None,
+    };
+    let err = build_push_request(&vapid(), &sub, &payload)
+        .expect_err("malformed auth must be rejected, not panic");
+    assert!(matches!(err, PushError::Sub(_)));
 }
 
 async fn redis_con() -> redis::aio::MultiplexedConnection {
