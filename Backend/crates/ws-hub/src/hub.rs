@@ -41,10 +41,34 @@ impl Hub {
 
     fn unregister(&self, channels: &[String], id: u64) {
         for ch in channels {
-            if let Some(mut set) = self.clients.get_mut(ch) {
-                set.remove(&id);
+            // Determine emptiness with the `get_mut` guard dropped before any
+            // removal attempt: DashMap's per-shard lock isn't reentrant, so
+            // calling `remove`/`remove_if` on `ch` while still holding this
+            // guard would deadlock.
+            let now_empty = match self.clients.get_mut(ch) {
+                Some(mut set) => {
+                    set.remove(&id);
+                    set.is_empty()
+                }
+                None => false,
+            };
+            if now_empty {
+                // Re-check emptiness under `remove_if` (which re-locks the
+                // shard) rather than an unconditional `remove`, so a
+                // concurrent `register()` that raced in between — adding a
+                // new socket to what was momentarily an empty map — isn't
+                // wiped out from under it.
+                self.clients.remove_if(ch, |_, set| set.is_empty());
             }
         }
+    }
+
+    /// Introspection accessor: does the registry still hold an entry for
+    /// `ch`? Exists mainly so integration tests can prove `unregister`
+    /// reclaims fully-empty channel entries instead of leaking them forever
+    /// (see review finding on Task 12); not otherwise used by the hub itself.
+    pub fn has_channel(&self, ch: &str) -> bool {
+        self.clients.contains_key(ch)
     }
 
     /// Deliver a payload to every socket on `channel`.
