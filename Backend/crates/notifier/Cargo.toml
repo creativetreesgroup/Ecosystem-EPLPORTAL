@@ -3,3 +3,24 @@ name = "notifier"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+
+[dependencies]
+chrono = "0.4.45"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "time"] }
+tracing = "0.1.44"
+# Pinned to the EXACT version spx-client/poller use (=6.0.0-rc.29). Plain
+# `cargo add wreq` (unpinned) resolves to the latest stable release (5.3.0),
+# which links a different native BoringSSL backend (boring-sys2) than the
+# workspace's pinned prerelease (btls-sys) — Cargo rejects two crates in one
+# graph linking the same native lib under different versions ("links =
+# boringssl" conflict). Pinning here reuses the one wreq/BoringSSL build
+# already resolved for spx-client/poller instead of introducing a second one.
+# notifier only needs plain POST + JSON body (no cookies/emulation) —
+# default-features = false + "json"/"tokio-rt" only.
+wreq = { version = "=6.0.0-rc.29", default-features = false, features = ["json", "tokio-rt"] }
+
+[dev-dependencies]
+tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "time"] }
+wiremock = "0.6.5"
