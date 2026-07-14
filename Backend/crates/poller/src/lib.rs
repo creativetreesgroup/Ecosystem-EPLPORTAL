@@ -14,6 +14,7 @@ pub mod login;
 pub mod notif_watch;
 pub mod schedule;
 pub mod state;
+pub mod watchdog;
 
 pub use antidrift::{run_anti_drift, StoreError};
 pub use dispatch::{dispatch_booking, DispatchResult, RuleMeta};
@@ -25,6 +26,4 @@ pub use login::{
 pub use notif_watch::{next_backoff, spawn_notif_watcher, WatchState};
 pub use schedule::{ensure_restored_then_spawn, poll_once, spawn_account_loop};
 pub use state::{AccountHandle, PollerConfig, PollerShared, PollerState};
-
-// Later tasks add:
-// pub mod watchdog; (Task 8)
+pub use watchdog::{heartbeat, spawn_watchdog};

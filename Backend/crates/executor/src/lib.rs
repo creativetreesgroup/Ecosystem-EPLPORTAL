@@ -6,6 +6,7 @@ pub mod account_lock;
 pub mod agency_dup;
 pub mod dedup;
 pub mod gate;
+pub mod heartbeat;
 pub mod quota;
 pub mod release;
 pub mod restore;
