@@ -5,6 +5,14 @@ targets = []
 db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
 yanked = "deny"
+# RUSTSEC-2023-0071 ("Marvin Attack": RSA timing sidechannel). `rsa` is pulled
+# ONLY transitively by `jwt-simple` (the VAPID JWT signer under
+# `web-push-native`, Fase 5's Web Push). VAPID signs exclusively with ECDSA
+# P-256 (ES256) — the `rsa` decryption/signing code path is NEVER invoked by our
+# usage — and there is no fixed `rsa` release for this advisory. This is an
+# unreachable-code ignore, NOT a copyleft/license admission (the MPL-2.0 `ece`
+# landmine was avoided by choosing `web-push-native` over the older `web-push`).
+ignore = ["RUSTSEC-2023-0071"]
 
 [licenses]
 allow = [

@@ -20,15 +20,15 @@
 //! `apps/api/src/services/webhook.ts` — see `message.rs` for field-by-field
 //! cross-check notes against the actual reference source.
 pub mod message;
+pub mod push_vapid;
 pub mod waha;
 
 pub use message::{
     build_agency_loss_text, build_driver_assigned_message, build_new_tickets_message,
     build_ticket_block, build_wa_message,
 };
+pub use push_vapid::{build_push_request, send_push_to_account, PushError, PushPayload, PushSubscription, VapidConfig};
 pub use waha::{parse_chat_ids, send_n8n, send_to_waha_many};
-
-// Task 11 adds: pub mod push_vapid;
 
 /// Notification delivery config. The WAHA API key here is the already
 /// PLAINTEXT/decrypted key — Fase 3's `spx-client::crypto` envelope
