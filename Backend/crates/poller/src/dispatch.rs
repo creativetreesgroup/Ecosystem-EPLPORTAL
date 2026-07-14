@@ -1,8 +1,11 @@
 // Backend/crates/poller/src/dispatch.rs
 //! The accept decision pipeline: match → claim (Layer 1+2) → accept HTTP →
 //! classify → agency-dup verify → quota consume → durable record → notify. Ties
-//! Fase 3 (spx-client) + Fase 4 (executor) + Fase 5 together. Notifier/ws
-//! publish are spawned fire-and-forget (Tasks 10/13 fill the hooks).
+//! Fase 3 (spx-client) + Fase 4 (executor) + Fase 5 together. Task 10's notifier
+//! hook is still a spawn-fire-and-forget placeholder (not this task's scope);
+//! Task 13's ws `ticket_accepted` publish (below, in `finalize_win`) is a
+//! cheap in-process `RedisPublisher::publish` call and is awaited inline
+//! rather than spawned, per the Task 13 brief's own wiring snippet.
 use std::time::Instant;
 
 use core_domain::matching::find_best_matching_rule_compiled;
@@ -242,7 +245,18 @@ async fn finalize_win(
     )
     .await;
     // Task 10: tokio::spawn(notifier::notify_accepted(...)); ignore Result.
-    // Task 13: publish ws `ticket_accepted` to `acct:<account_id>`.
+    if let Some(pub_) = &shared.redis {
+        pub_.publish_ticket_accepted(
+            &st.account_id,
+            serde_json::json!({
+                "bookingId": booking.booking_id,
+                "latencyMs": latency_ms,
+                "autoAccept": true,
+                "rule": meta.name,
+            }),
+        )
+        .await;
+    }
 }
 
 /// Fetch + cache the account's own email (once) for agency-dup classification.

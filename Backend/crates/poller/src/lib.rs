@@ -12,6 +12,7 @@ pub mod fetch;
 pub mod hedge;
 pub mod login;
 pub mod notif_watch;
+pub mod publish;
 pub mod schedule;
 pub mod state;
 pub mod watchdog;
@@ -24,6 +25,7 @@ pub use login::{
     auto_login, should_daily_relogin, should_reactive_relogin, wib_day, LoginTier, SidecarClient,
 };
 pub use notif_watch::{next_backoff, spawn_notif_watcher, WatchState};
+pub use publish::RedisPublisher;
 pub use schedule::{ensure_restored_then_spawn, poll_once, spawn_account_loop};
 pub use state::{AccountHandle, PollerConfig, PollerShared, PollerState};
 pub use watchdog::{heartbeat, spawn_watchdog};

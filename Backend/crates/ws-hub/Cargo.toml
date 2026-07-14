@@ -14,6 +14,15 @@ serde_json = "1.0.150"
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "time", "sync"] }
 tracing = "0.1.44"
 
+[features]
+# Exposes `Hub::test_register` (a direct-registry-insert helper) to
+# integration tests in `tests/*.rs`. Those compile the library as an ordinary
+# extern crate (NOT under `--cfg test`), so a plain `#[cfg(test)]` item would
+# be invisible to them — hence the self dev-dependency below, which unifies
+# this feature on for any test target build.
+test-helpers = []
+
 [dev-dependencies]
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "time", "sync"] }
 tokio-tungstenite = "0.30.0"
+ws-hub = { path = ".", features = ["test-helpers"] }

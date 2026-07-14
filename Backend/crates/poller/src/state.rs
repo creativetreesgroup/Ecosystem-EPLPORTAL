@@ -172,8 +172,12 @@ pub struct PollerShared {
     /// real handle in; `dispatch_booking` only ever fire-and-forgets through
     /// this, so a `None` here is a safe, inert no-op today.
     pub notifier: Option<()>,
-    /// Placeholder for Task 13's ws-hub Redis publish channel (`ticket_accepted`
-    /// etc. published to `acct:<account_id>`). `None` until that task wires a
-    /// real handle in.
-    pub redis: Option<()>,
+    /// ws-hub Redis pub/sub publisher (Task 13): `dispatch::finalize_win`
+    /// publishes a `ticket_accepted` event to `acct:<account_id>` through this
+    /// when present. Unlike `notifier` above, this is the REAL type (not a
+    /// deferred `()`) — Task 13 builds `RedisPublisher` itself. Still an
+    /// `Option` (rather than a bare `RedisPublisher`) because tests that don't
+    /// exercise ws delivery construct `PollerShared` with `redis: None`, a
+    /// safe no-op the same way `notifier: None` is.
+    pub redis: Option<crate::publish::RedisPublisher>,
 }

@@ -92,6 +92,18 @@ impl Hub {
     pub fn deliver_event(&self, channel: &str, ev: &WsEvent) {
         self.deliver(channel, &ev.to_json());
     }
+
+    /// Test-only: register a sender directly under `channel`, bypassing the
+    /// real WS upgrade handshake, so integration tests (Task 13's cross-process
+    /// Redis bridge test) can observe `deliver`/`deliver_broadcast` without
+    /// spinning up a real socket. Gated on `feature = "test-helpers"` (enabled
+    /// for `tests/*.rs` via the self dev-dependency in Cargo.toml) as well as
+    /// plain `cfg(test)` for any future in-crate unit test.
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub fn test_register(&self, channel: &str, tx: UnboundedSender<Message>) {
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        self.register(channel, id, tx);
+    }
 }
 
 #[derive(Debug, Deserialize)]
