@@ -26,6 +26,14 @@
 //!    advanced past TWO 60s cycles: a genuinely alive task (never resolves)
 //!    must never trigger `respawn`. The only I/O under the paused clock here
 //!    is the watchdog's own small Redis heartbeat SET each cycle.
+//! 5. `watchdog_respawns_a_primary_that_dies_between_ticks_counter_only` —
+//!    PAUSED clock, THREE ticks (t=0, t=60s, t=120s), respawn closure does
+//!    ZERO real I/O (just an `AtomicUsize::fetch_add`). Closes the review
+//!    gap left by (3) and (4): neither of those proves the watchdog keeps
+//!    re-checking on a tick AFTER the first. This test seeds a healthy
+//!    primary, advances past ticks 1 and 2 (0 respawns), kills the primary
+//!    mid-run, then advances past tick 3 (exactly 1 respawn) — proving
+//!    periodic re-detection, not just boot-time detection.
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
@@ -36,7 +44,7 @@ use poller::{spawn_watchdog, PollerConfig, PollerShared, PollerState, SidecarCli
 use redis::AsyncCommands;
 use secrecy::SecretString;
 use spx_client::{SpxClient, SpxCookies};
-use tokio::sync::Notify;
+use tokio::sync::{oneshot, Notify};
 use uuid::Uuid;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -453,4 +461,148 @@ async fn watchdog_does_not_respawn_a_healthy_running_primary() {
     if let Some(h) = shared.accounts.get(&primary) {
         h.join.abort();
     };
+}
+
+// ---------------------------------------------------------------------------
+// 5. periodic cadence: healthy survives ticks 1 & 2, a mid-run death is
+//    caught on tick 3 — counter-only respawn closure, ZERO real I/O
+// ---------------------------------------------------------------------------
+
+/// Closes the review-found gap: test 3 only proves the watchdog's very
+/// FIRST tick (boot-with-already-dead-primary, on real time); test 4's
+/// `respawn_calls == 0` assertion is vacuously true even if the interval
+/// never ticks again after the first cycle. Neither positively proves the
+/// loop keeps re-checking on tick 2, tick 3, ... .
+///
+/// This test drives a PAUSED clock across THREE ticks (t=0 immediate,
+/// t=60s, t=120s) with a respawn closure that does ZERO real I/O — it only
+/// increments an `AtomicUsize` — so, unlike test 3, it cannot hit the
+/// per-command response-timeout-vs-paused-clock race that forces test 3
+/// onto real time (see this file's module doc, and test 4's own comment on
+/// the same hazard applying to plain connection establishment).
+///
+/// Sequence: seed a genuinely-alive primary (an `AccountHandle` whose task
+/// blocks on a `oneshot::Receiver`, so it is unaffected by the paused clock
+/// until WE decide to kill it) -> advance ~65s (covers the tick at t=0 AND
+/// the tick at t=60s) -> assert 0 respawns (healthy primary survives PAST
+/// the first tick). Then kill the handle (drop the paired
+/// `oneshot::Sender`) -> advance another ~65s (covers the tick at t=120s)
+/// -> assert exactly 1 respawn (the watchdog genuinely re-checked and
+/// reacted on a LATER tick, not the first).
+#[tokio::test(start_paused = true)]
+async fn watchdog_respawns_a_primary_that_dies_between_ticks_counter_only() {
+    // Same rationale as `watchdog_does_not_respawn_a_healthy_running_primary`
+    // above: under a paused clock, establishing a NEW real connection races
+    // its own timeout against the paused clock's idle-auto-advance. This
+    // test's respawn closure does zero I/O, and `heartbeat()` is
+    // best-effort (error-swallowed on a failed connection — see
+    // `executor::heartbeat_set`'s `if let Ok(mut con) = ...`), so pointing
+    // `executor`/`pool` at addresses nothing listens on is safe and keeps
+    // this test entirely on the paused clock.
+    let executor = Arc::new(
+        ExecutorHandle::connect("redis://127.0.0.1:16999")
+            .await
+            .expect("open offline (parses the URL only; no connection attempted yet)"),
+    );
+    let client = Arc::new(SpxClient::new("http://127.0.0.1:1").expect("client"));
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .connect_lazy(&database_url())
+        .expect("build lazy pg pool (no real connection attempted)");
+
+    let primary = acct("wd-cadence");
+
+    // A genuinely alive task, under our explicit control: it blocks on a
+    // oneshot receiver and only finishes when we drop the paired sender —
+    // no timers, no I/O, so it is unaffected by the paused clock until we
+    // decide to kill it.
+    let (kill_tx, kill_rx) = oneshot::channel::<()>();
+    let primary_join = tokio::spawn(async move {
+        let _ = kill_rx.await;
+    });
+
+    let shared = Arc::new(PollerShared {
+        executor,
+        client,
+        pool,
+        config: no_dispatch_config(&primary),
+        accounts: Arc::new(DashMap::new()),
+        notifier: None,
+        redis: None,
+        sidecar: Arc::new(SidecarClient::new("http://127.0.0.1:1")),
+    });
+    shared.accounts.insert(
+        primary.clone(),
+        poller::AccountHandle {
+            poke: Arc::new(Notify::new()),
+            join: primary_join,
+        },
+    );
+
+    // Counter-only respawn: zero real I/O at all — exactly what the review
+    // asked for — so this closure cannot race any timeout against the
+    // paused clock.
+    let respawn_calls = Arc::new(AtomicUsize::new(0));
+    let rc = respawn_calls.clone();
+    let respawn: Arc<dyn Fn(String) + Send + Sync> = Arc::new(move |_id: String| {
+        rc.fetch_add(1, Ordering::SeqCst);
+    });
+
+    let watchdog_handle = spawn_watchdog(shared.clone(), respawn);
+
+    // Stage 1: advance past the immediate first tick (t=0) AND the second
+    // cycle's tick (t=60s), with a small buffer past the exact 60s boundary
+    // (same margin convention as test 4's 130s-for-two-cycles). The primary
+    // is still alive throughout.
+    advance_paused(Duration::from_secs(65), Duration::from_millis(250)).await;
+    assert_eq!(
+        respawn_calls.load(Ordering::SeqCst),
+        0,
+        "a healthy primary must survive PAST the first tick (t=0 and t=60s) with zero respawns"
+    );
+    assert!(
+        shared
+            .accounts
+            .get(&primary)
+            .map(|h| !h.join.is_finished())
+            .unwrap_or(false),
+        "sanity: the original handle must still be alive going into stage 2"
+    );
+
+    // Kill the primary's task NOW (between the t=60s and t=120s ticks) and
+    // give it real scheduler turns to actually finish, so the test's own
+    // premise ("this handle is now dead") is verified, not assumed — same
+    // pattern as the panic-based dead task in test 3.
+    drop(kill_tx);
+    let mut now_dead = false;
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+        if shared
+            .accounts
+            .get(&primary)
+            .map(|h| h.join.is_finished())
+            .unwrap_or(false)
+        {
+            now_dead = true;
+            break;
+        }
+    }
+    assert!(
+        now_dead,
+        "sanity: the primary's AccountHandle must be observably dead before stage 2's tick"
+    );
+
+    // Stage 2: advance past the THIRD tick (t=120s) — a tick the watchdog
+    // only reaches by having genuinely kept looping past ticks 1 and 2.
+    // This is the assertion that proves periodic re-detection, not just
+    // boot-time detection.
+    advance_paused(Duration::from_secs(65), Duration::from_millis(250)).await;
+    assert_eq!(
+        respawn_calls.load(Ordering::SeqCst),
+        1,
+        "a primary that died AFTER surviving two prior ticks must be respawned exactly once \
+         on the next (third, t=120s) tick — proving the watchdog re-checks on later ticks, \
+         not just the first"
+    );
+
+    watchdog_handle.abort();
 }
