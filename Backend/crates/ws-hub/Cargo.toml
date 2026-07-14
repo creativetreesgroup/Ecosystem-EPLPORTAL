@@ -3,3 +3,17 @@ name = "ws-hub"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+
+[dependencies]
+axum = { version = "0.8.9", features = ["ws"] }
+dashmap = "6.2.1"
+futures = "0.3.32"
+redis = { version = "1.3.0", features = ["tokio-comp", "connection-manager"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "time", "sync"] }
+tracing = "0.1.44"
+
+[dev-dependencies]
+tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "time", "sync"] }
+tokio-tungstenite = "0.30.0"
