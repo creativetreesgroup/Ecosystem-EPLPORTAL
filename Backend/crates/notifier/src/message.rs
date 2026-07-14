@@ -7,7 +7,7 @@
 //! Cross-checked directly against `/tmp/spx-portal-ref/apps/api/src/services/webhook.ts`
 //! (not just the task brief's transcription) — see doc comments below for the
 //! discrepancies found and how each was resolved.
-use chrono::{Datelike, FixedOffset, TimeZone, Timelike, Utc};
+use chrono::{DateTime, Datelike, FixedOffset, TimeZone, Timelike, Utc};
 
 use crate::NotifyBooking;
 
@@ -85,15 +85,25 @@ const ID_MONTHS: [&str; 12] = [
 
 /// Reference `buildDriverAssignedMessage`'s `when`:
 /// `new Date().toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Jakarta' })`.
-/// Verified via real Node output: `"14 Jul 2026, 07.56"` — `DD Mon YYYY, HH.MM`
+/// Verified via real Node output: `"14 Jul 2026, 07.56"` — `D Mon YYYY, HH.MM`
 /// (Indonesian month abbreviation, **period** as the time separator, comma
 /// between date and time — NOT a colon/no-comma `%H:%M` as a naive port would
 /// produce).
-fn fmt_id_datetime_now_wib() -> String {
-    let now = Utc::now().with_timezone(&wib());
+///
+/// Day-of-month is NOT zero-padded (`toLocaleString`'s `dateStyle: 'medium'`
+/// renders e.g. `"6 Jul 2026"`, not `"06 Jul 2026"`), independently verified
+/// via real Node execution. Hour/minute ARE zero-padded (`timeStyle: 'short'`
+/// renders e.g. `"03.05"`, not `"3.5"`) — do not "fix" that part too.
+///
+/// Takes `now` as an explicit `DateTime<Utc>` (rather than calling
+/// `Utc::now()` internally) so callers — and tests — can inject a specific
+/// instant; this is what makes the single-digit-day case below testable at
+/// all.
+fn fmt_id_datetime_wib(now: DateTime<Utc>) -> String {
+    let now = now.with_timezone(&wib());
     let month = ID_MONTHS[(now.month() as usize).saturating_sub(1).min(11)];
     format!(
-        "{:02} {} {}, {:02}.{:02}",
+        "{} {} {}, {:02}.{:02}",
         now.day(),
         month,
         now.year(),
@@ -295,7 +305,7 @@ pub fn build_driver_assigned_message(
     // used 20; this is the one real transcription gap found by cross-checking
     // the reference source directly instead of trusting the brief).
     let div = "—".repeat(18);
-    let when = fmt_id_datetime_now_wib();
+    let when = fmt_id_datetime_wib(Utc::now());
     // Reference: `Nomor Booking: *${idVal(p.txId || p.bookingId)}*` — txId
     // falls back to bookingId (JS `||`) BEFORE idVal is applied; a literal
     // `id_val(tx_id)` (no fallback) would show "-" whenever tx_id is empty
@@ -419,6 +429,25 @@ mod tests {
         // 18 em-dashes, verified against the reference's DIV constant.
         assert!(s.contains(&"—".repeat(18)));
         assert!(!s.contains(&"—".repeat(19)));
+    }
+
+    /// Review finding: `fmt_id_datetime_now_wib` (now `fmt_id_datetime_wib`)
+    /// zero-padded the day-of-month, but the reference's
+    /// `toLocaleString('id-ID', { dateStyle: 'medium', ... })` does NOT —
+    /// verified via real Node execution (`"6 Jul 2026, 03.05"`, not
+    /// `"06 Jul 2026, 03.05"`). Against the old `{:02}`-on-day code this
+    /// assertion would see `"06 Jul 2026, 03.05"` and fail.
+    ///
+    /// Hour/minute in this same instant (03 / 05) ARE single-digit and MUST
+    /// still render zero-padded ("03.05", not "3.5") — that part of the
+    /// original implementation was already correct per the reference and
+    /// must not regress while fixing the day.
+    #[test]
+    fn wib_datetime_day_not_zero_padded_but_hour_minute_are() {
+        // 2026-07-06 03:05 WIB == 2026-07-05 20:05 UTC (WIB = UTC+7).
+        let now = Utc.with_ymd_and_hms(2026, 7, 5, 20, 5, 0).unwrap();
+        let s = fmt_id_datetime_wib(now);
+        assert_eq!(s, "6 Jul 2026, 03.05");
     }
 
     #[test]
