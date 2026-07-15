@@ -22,7 +22,7 @@ pub use portal_sessions::{
     create as create_portal_session, delete as delete_portal_session, find_valid_by_hash,
     touch_last_seen,
 };
-pub use portal_users::find_by_username;
+pub use portal_users::{find_by_id, find_by_username};
 pub use quota::{consume_rule_quota, QuotaConsumeOutcome};
 pub use tenants::find_by_slug;
 // Re-export so downstream crates (e.g. executor) can name the pool type without
@@ -1553,6 +1553,60 @@ mod tests {
             .await
             .expect("find_by_username unknown username");
         assert!(cross.is_none());
+
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_a)
+            .execute(&pool)
+            .await
+            .ok();
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_b)
+            .execute(&pool)
+            .await
+            .ok();
+    }
+
+    /// `find_by_id` (added Fase 6a Task 3 for the session-auth middleware,
+    /// which only has `portal_user_id` — not a username — to look up from a
+    /// validated session row). Same tenant-isolation shape as
+    /// `portal_users_find_by_username_isolates_by_tenant` above: tenant A's
+    /// context must not find tenant B's row by id even if it somehow had the
+    /// id, and an unknown id is a clean `None`, not an error.
+    #[tokio::test]
+    async fn portal_users_find_by_id_isolates_by_tenant() {
+        let pool = connect(&test_database_url()).await.expect("connect");
+        run_migrations(&pool).await.expect("migrate");
+
+        let tenant_a = insert_test_tenant(&pool).await;
+        let tenant_b = insert_test_tenant(&pool).await;
+
+        let user_a: (uuid::Uuid,) = sqlx::query_as(
+            "INSERT INTO portal_users (tenant_id, username, password_hash, display_name)
+             VALUES ($1, 'find-by-id-a', 'hash-a', 'Tenant A User') RETURNING id",
+        )
+        .bind(tenant_a)
+        .fetch_one(&pool)
+        .await
+        .expect("insert tenant a user");
+
+        let found_a = portal_users::find_by_id(&pool, tenant_a, user_a.0)
+            .await
+            .expect("find_by_id tenant a")
+            .expect("tenant a must find its own user by id");
+        assert_eq!(found_a.username, "find-by-id-a");
+
+        let cross = portal_users::find_by_id(&pool, tenant_b, user_a.0)
+            .await
+            .expect("find_by_id cross-tenant lookup");
+        assert!(
+            cross.is_none(),
+            "tenant B must not find tenant A's user by id"
+        );
+
+        let unknown = portal_users::find_by_id(&pool, tenant_a, uuid::Uuid::new_v4())
+            .await
+            .expect("find_by_id unknown id");
+        assert!(unknown.is_none());
 
         sqlx::query("DELETE FROM tenants WHERE id = $1")
             .bind(tenant_a)

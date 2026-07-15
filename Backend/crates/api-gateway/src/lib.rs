@@ -4,6 +4,7 @@
 //! middleware. This sub-phase (6a) ships only the foundation: crate
 //! scaffold, session/RBAC plumbing, login/me/logout, and the middleware
 //! stack. Later sub-phases (6b-6e) add route modules here.
+pub mod auth;
 pub mod error;
 pub mod state;
 

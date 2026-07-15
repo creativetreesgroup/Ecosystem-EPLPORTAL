@@ -6,6 +6,7 @@ publish.workspace = true
 
 [dependencies]
 axum = { version = "0.8.9", features = ["ws"] }
+axum-extra = { version = "0.12.6", features = ["cookie"] }
 chrono = { version = "0.4.45", features = ["serde"] }
 core-domain = { version = "0.1.0", path = "../core-domain" }
 executor = { version = "0.1.0", path = "../executor" }
@@ -30,3 +31,10 @@ tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros"] }
 tracing = "0.1.44"
 uuid = { version = "1.23.5", features = ["v4", "serde"] }
 ws-hub = { version = "0.1.0", path = "../ws-hub" }
+
+[dev-dependencies]
+# Route-level `axum::serve` + real HTTP client testing (Task 3's
+# `session_auth` test and every later route test in this crate) — plain HTTP
+# against 127.0.0.1 only, so no TLS backend is needed.
+dashmap = "6.2.1"
+reqwest = { version = "0.13.4", default-features = false, features = ["json"] }
