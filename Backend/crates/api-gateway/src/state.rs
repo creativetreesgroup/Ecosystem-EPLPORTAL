@@ -14,7 +14,11 @@ pub struct AppState {
     pub ws_hub: Arc<ws_hub::Hub>,
     pub tenant_id: Uuid,
     /// Exact-match CORS allowlist (Task 7) — `Arc` so cloning `AppState` per
-    /// request stays cheap.
+    /// request stays cheap. Raw origin strings as configured (e.g. via
+    /// `reactor-core`'s `CORS_ALLOWED_ORIGINS` env var, comma-separated);
+    /// parsing into `http::HeaderValue`s (dropping + `tracing::warn!`ing any
+    /// entry that fails to parse, rather than panicking) happens in
+    /// `middleware::cors_layer` at `build_router` time, not here.
     pub cors_origins: Arc<Vec<String>>,
     /// Session cookie name, configurable so a later fase/deployment can
     /// rename it without touching handler code.

@@ -16,16 +16,36 @@ pub use state::AppState;
 use axum::routing::get;
 use axum::{Json, Router};
 use serde_json::{json, Value};
+use tower_http::limit::RequestBodyLimitLayer;
+
+/// Global request body-limit (Task 7): 1.5MB, matching the reference's
+/// default. The reference's 15MB branding carve-out is Task 8 of the Fase 6d
+/// plan — that route doesn't exist yet, so no per-route override
+/// infrastructure is built here for it.
+const GLOBAL_BODY_LIMIT_BYTES: usize = 1_500_000;
 
 pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
         .nest("/auth", routes::auth::auth_router(state.clone()))
-        .with_state(state)
+        .with_state(state.clone())
+        // CORS (Task 7): exact-match allowlist, applied to every route this
+        // router produces. Innermost of the three global layers below —
+        // position relative to the body-limit/security-headers layers
+        // doesn't matter for its own behavior (it only reads the `Origin`
+        // request header and adds response headers), so it's placed closest
+        // to the router for readability.
+        .layer(middleware::cors_layer(&state.cors_origins))
+        // Body-limit (Task 7): rejects an over-sized request with a
+        // `413 Payload Too Large` BEFORE it ever reaches routing/handlers —
+        // see `tower_http::limit`'s doc comment on how this is enforced
+        // immediately from `Content-Length` when present.
+        .layer(RequestBodyLimitLayer::new(GLOBAL_BODY_LIMIT_BYTES))
         // Outermost layer: runs on EVERY response this router produces,
         // including `ApiError`-derived error responses (401/404/etc — see
-        // `error.rs`) and `/healthz`, since it wraps the whole `Router`
-        // rather than being scoped to any one route or nested sub-router.
+        // `error.rs`), a body-limit `413`, and `/healthz`, since it wraps the
+        // whole `Router` rather than being scoped to any one route or nested
+        // sub-router.
         .layer(axum::middleware::from_fn(middleware::security_headers))
 }
 

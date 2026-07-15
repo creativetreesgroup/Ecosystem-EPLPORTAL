@@ -18,6 +18,26 @@ fn env_or(key: &str, default: &str) -> String {
         .unwrap_or_else(|| default.to_string())
 }
 
+/// Parses `CORS_ALLOWED_ORIGINS` (comma-separated, e.g.
+/// `https://portal.example.com,https://admin.example.com`) into the raw
+/// origin strings `AppState.cors_origins` carries. Unset/empty -> an empty
+/// allowlist (no origin permitted), NOT a wildcard fallback. Entries are only
+/// trimmed + empty-filtered here; parsing each into an `http::HeaderValue`
+/// (dropping + `tracing::warn!`ing any that fails, per Task 7's brief) is
+/// `middleware::cors_layer`'s job at `build_router` time, not this one's.
+fn cors_origins_from_env() -> Vec<String> {
+    std::env::var("CORS_ALLOWED_ORIGINS")
+        .ok()
+        .map(|raw| {
+            raw.split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Task 1 (Fase 6a) scope: prove `api-gateway` wires into `reactor-core`
 /// end-to-end with a REAL (not stubbed) `AppState`/`PollerShared` — a live
 /// Postgres pool, a real `ExecutorHandle`/`SpxClient`/`SidecarClient` — but
@@ -75,8 +95,9 @@ async fn build_state() -> AppState {
         poller: Arc::new(poller_shared),
         ws_hub: ws_hub::Hub::new(),
         tenant_id,
-        // Populated for real once CORS lands (Task 7).
-        cors_origins: Arc::new(Vec::new()),
+        // Task 7: real exact-match allowlist from `CORS_ALLOWED_ORIGINS`
+        // (comma-separated), not a placeholder anymore.
+        cors_origins: Arc::new(cors_origins_from_env()),
         session_cookie_name: Arc::from(env_or("SESSION_COOKIE_NAME", "spx_session").as_str()),
         // Default true (production-safe); set `COOKIE_SECURE=false` only for
         // local dev where reactor-core is reached directly over plain HTTP

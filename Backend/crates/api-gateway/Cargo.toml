@@ -28,6 +28,7 @@ spx-client = { version = "0.1.0", path = "../spx-client" }
 sqlx = { version = "0.9.0", features = ["postgres", "runtime-tokio", "tls-rustls-ring-native-roots"] }
 store = { version = "0.1.0", path = "../store" }
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros"] }
+tower-http = { version = "0.7.0", features = ["cors", "limit"] }
 tracing = "0.1.44"
 uuid = { version = "1.23.5", features = ["v4", "serde"] }
 ws-hub = { version = "0.1.0", path = "../ws-hub" }
