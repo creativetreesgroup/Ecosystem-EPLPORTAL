@@ -367,7 +367,102 @@ async fn sub_user_gets_403_on_write_but_200_on_read() {
     cleanup(&pool, tenant_id).await;
 }
 
-/// Case 4: `DELETE /:id` for the sub-user -> 204, then `GET /` no longer
+/// Case 4: a SUB-USER (non-main-account) session `POST`s a body that
+/// explicitly sets `"is_main_account": true` — the single most
+/// security-critical escalation path (a sub-user attempting to mint a
+/// BRAND-NEW main-account user for themselves) — is rejected `403`, AND a
+/// subsequent `GET /` proves no row was actually inserted (the user list
+/// is unchanged from immediately before the rejected POST). This is
+/// distinct from Case 3's generic RBAC check: Case 3's rejected POST body
+/// sets `is_main_account: false`, so it never actually exercises the
+/// escalation path itself — only this case does. Guards against a future
+/// regression that reordered body-handling ahead of the
+/// `require_permission` check in the `create` handler.
+#[tokio::test]
+async fn sub_user_cannot_escalate_by_creating_a_main_account_user() {
+    let pool = store::connect(&database_url()).await.expect("connect pg");
+    store::run_migrations(&pool).await.expect("migrate");
+    let tenant_id = insert_tenant(&pool).await;
+    insert_portal_user(&pool, tenant_id, "main-escalation", true).await;
+    insert_portal_user(&pool, tenant_id, "sub-escalation", false).await;
+
+    let state = build_state(pool.clone(), tenant_id).await;
+    let base = spawn_server(state).await;
+    let http = reqwest::Client::new();
+    let sub_cookie = login(&http, &base, "sub-escalation").await;
+
+    // Baseline: capture the user list BEFORE the escalation attempt.
+    let before_resp = http
+        .get(format!("{base}/auth/portal-users"))
+        .header(reqwest::header::COOKIE, &sub_cookie)
+        .send()
+        .await
+        .expect("request GET before escalation attempt");
+    assert_eq!(before_resp.status(), reqwest::StatusCode::OK);
+    let before_body: Value = before_resp.json().await.expect("json body");
+    let before_list = before_body.as_array().expect("GET response is a JSON array");
+    assert_eq!(
+        before_list.len(),
+        2,
+        "sanity check: only the seeded main+sub accounts exist yet: {before_body}"
+    );
+    let mut before_usernames: Vec<&str> = before_list
+        .iter()
+        .map(|v| v["username"].as_str().expect("username is a string"))
+        .collect();
+    before_usernames.sort_unstable();
+
+    // The escalation attempt itself: sub-user POSTs a body that explicitly
+    // sets `is_main_account: true`.
+    let post_resp = http
+        .post(format!("{base}/auth/portal-users"))
+        .header(reqwest::header::COOKIE, &sub_cookie)
+        .json(&serde_json::json!({
+            "username": "escalated-main",
+            "password": "escalation-attempt-password",
+            "display_name": "Escalated Main",
+            "is_main_account": true,
+        }))
+        .send()
+        .await
+        .expect("request POST with is_main_account: true as sub-user");
+    assert_eq!(
+        post_resp.status(),
+        reqwest::StatusCode::FORBIDDEN,
+        "a sub-user must never be able to create ANY user, least of all a main-account one"
+    );
+
+    // Prove the rejection was real, not cosmetic: the list is unchanged
+    // from immediately before the POST — no `escalated-main` row exists.
+    let after_resp = http
+        .get(format!("{base}/auth/portal-users"))
+        .header(reqwest::header::COOKIE, &sub_cookie)
+        .send()
+        .await
+        .expect("request GET after rejected escalation attempt");
+    assert_eq!(after_resp.status(), reqwest::StatusCode::OK);
+    let after_body: Value = after_resp.json().await.expect("json body");
+    let after_list = after_body.as_array().expect("GET response is a JSON array");
+    let mut after_usernames: Vec<&str> = after_list
+        .iter()
+        .map(|v| v["username"].as_str().expect("username is a string"))
+        .collect();
+    after_usernames.sort_unstable();
+
+    assert_eq!(
+        after_usernames, before_usernames,
+        "user list must be unchanged after the rejected escalation POST — no row was inserted: \
+         {after_body}"
+    );
+    assert!(
+        !after_usernames.contains(&"escalated-main"),
+        "the sub-user's attempted main-account user must NOT have been created: {after_body}"
+    );
+
+    cleanup(&pool, tenant_id).await;
+}
+
+/// Case 5: `DELETE /:id` for the sub-user -> 204, then `GET /` no longer
 /// lists them; `DELETE` on an already-deleted (nonexistent) id -> 404.
 #[tokio::test]
 async fn delete_removes_sub_user_and_they_are_gone_from_list() {
@@ -414,7 +509,7 @@ async fn delete_removes_sub_user_and_they_are_gone_from_list() {
     cleanup(&pool, tenant_id).await;
 }
 
-/// Case 5: a main-account user attempting to `DELETE` THEIR OWN `id` -> 400
+/// Case 6: a main-account user attempting to `DELETE` THEIR OWN `id` -> 400
 /// (self-lockout guard), and the account is still present afterward (login
 /// still works).
 #[tokio::test]
