@@ -348,6 +348,24 @@ fn session_validator(pool: store::PgPool) -> ws_hub::SessionValidator {
 /// `Router<()>`s by the time they're merged (`build_router` calls
 /// `.with_state` internally; `ws_router_with_auth` does too), so `.merge`
 /// needs no further state reconciliation.
+///
+/// Deliberate structural note (whole-branch review, Minor finding 2):
+/// `api_gateway::build_router` applies its `.layer(...)` stack (CORS,
+/// request body-limit, security-headers — see that fn's doc comment) to ITS
+/// OWN `Router` before returning it here, and `ws_router` is `.merge`d onto
+/// the result AFTER that — so `/ws` sits outside all three of those layers.
+/// This is intentional, not an oversight: forcing those layers onto `/ws`
+/// isn't what this route needs and risks unintended side effects on the
+/// upgrade handshake itself, so the router is not restructured to capture
+/// it. Each layer is a deliberate no-op for `/ws` on its own merits —
+/// a WS upgrade response has no meaningful use for CSP/security headers;
+/// the body-limit is meant to cap REST JSON payloads and does not apply to
+/// a WS upgrade's handshake; and browsers do not run CORS preflight/
+/// enforcement against WebSocket connections the way they do `fetch`/`XHR`,
+/// so an allowlist mismatch there wouldn't be caught by CORS regardless of
+/// layer placement. If a real need for any of these on `/ws` ever emerges,
+/// it should be added as its own explicit layer on `ws_router` rather than
+/// by moving `/ws` inside `build_router`'s stack.
 fn app(state: AppState) -> Router {
     let ws_router = ws_hub::ws_router_with_auth(
         state.ws_hub.clone(),

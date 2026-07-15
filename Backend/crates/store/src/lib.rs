@@ -1943,4 +1943,122 @@ mod tests {
             .await
             .ok();
     }
+
+    /// Whole-branch review (Fase 6a), Minor finding 1: every other test that
+    /// touches `portal_sessions`/`portal_users` calls `run_migrations`,
+    /// which requires superuser privileges — structurally locking those
+    /// suites to `tower` (BYPASSRLS) and making a missing/wrong `app_role`
+    /// GRANT on either table invisible until it silently zero-rows in
+    /// production. This test drives the actual login/session lifecycle
+    /// (`portal_sessions::create` -> `find_valid_by_hash` ->
+    /// `touch_last_seen` -> `delete`, plus `portal_users::find_by_username`
+    /// / `find_by_id`) as a genuine `app_role` connection, closing that gap.
+    ///
+    /// Unlike `app_role_tenant_tx` (which pins ONE already-acquired
+    /// connection via `SET ROLE`, then hands back a `Transaction` for
+    /// direct SQL — used above because `tenants::find_by_slug` and
+    /// `portal_sessions_find_valid_by_hash` are called against a bare
+    /// `&PgPool` and so cannot be driven from a single pinned connection at
+    /// all), every function under test HERE also takes `&PgPool`
+    /// (`create`/`delete`/`touch_last_seen`/`find_by_username`/`find_by_id`
+    /// all call `begin_tenant_tx(pool, ...)` internally, which acquires an
+    /// arbitrary pooled connection per call) — so a `Transaction` handed
+    /// back from one pinned connection still couldn't be passed into them.
+    /// Instead, this test builds a dedicated single-connection pool
+    /// (`max_connections(1)`) whose `after_connect` hook runs
+    /// `SET ROLE app_role` on every connection it ever opens — with only
+    /// one physical connection possible, every acquire from that pool is
+    /// therefore always already `app_role`, letting the test call the real
+    /// production functions completely unmodified rather than duplicating
+    /// their SQL shape.
+    #[tokio::test]
+    async fn portal_sessions_and_portal_users_write_paths_work_for_app_role() {
+        let pool = connect(&test_database_url()).await.expect("connect");
+        run_migrations(&pool).await.expect("migrate");
+        let tenant_id = insert_test_tenant(&pool).await;
+
+        let portal_user_id: (uuid::Uuid,) = sqlx::query_as(
+            "INSERT INTO portal_users (tenant_id, username, password_hash, display_name)
+             VALUES ($1, 'app-role-write-path-owner', 'hash', 'App Role Write Path Owner')
+             RETURNING id",
+        )
+        .bind(tenant_id)
+        .fetch_one(&pool)
+        .await
+        .expect("insert portal_user");
+
+        let app_role_pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .after_connect(|conn, _meta| {
+                Box::pin(async move {
+                    sqlx::query("SET ROLE app_role").execute(conn).await?;
+                    Ok(())
+                })
+            })
+            .connect(&test_database_url())
+            .await
+            .expect("connect app_role pool");
+
+        // portal_users lookups, as app_role.
+        let by_username = portal_users::find_by_username(
+            &app_role_pool,
+            tenant_id,
+            "app-role-write-path-owner",
+        )
+        .await
+        .expect("find_by_username as app_role")
+        .expect("seeded portal_user must be found by username as app_role");
+        assert_eq!(by_username.id, portal_user_id.0);
+
+        let by_id = portal_users::find_by_id(&app_role_pool, tenant_id, portal_user_id.0)
+            .await
+            .expect("find_by_id as app_role")
+            .expect("seeded portal_user must be found by id as app_role");
+        assert_eq!(by_id.username, "app-role-write-path-owner");
+
+        // portal_sessions create -> find_valid_by_hash -> touch_last_seen ->
+        // delete, as app_role.
+        let hash = [7u8; 32];
+        let created = portal_sessions::create(
+            &app_role_pool,
+            tenant_id,
+            portal_user_id.0,
+            hash,
+            Some("127.0.0.1"),
+            Some("test-agent"),
+            chrono::Duration::hours(1),
+        )
+        .await
+        .expect("create session as app_role");
+
+        let found = portal_sessions::find_valid_by_hash(&app_role_pool, hash)
+            .await
+            .expect("find_valid_by_hash as app_role")
+            .expect("just-created session must round-trip as app_role");
+        assert_eq!(found.id, created.id);
+
+        portal_sessions::touch_last_seen(&app_role_pool, tenant_id, created.id)
+            .await
+            .expect("touch_last_seen as app_role");
+
+        portal_sessions::delete(&app_role_pool, tenant_id, created.id)
+            .await
+            .expect("delete as app_role");
+
+        let after_delete = portal_sessions::find_valid_by_hash(&app_role_pool, hash)
+            .await
+            .expect("find_valid_by_hash after delete as app_role");
+        assert!(
+            after_delete.is_none(),
+            "deleted session must no longer be found by find_valid_by_hash"
+        );
+
+        app_role_pool.close().await;
+
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_id)
+            .execute(&pool)
+            .await
+            .ok();
+    }
 }
