@@ -11,6 +11,7 @@ pub enum ApiError {
     Unauthorized,
     Forbidden,
     NotFound,
+    Conflict(String),
     BadRequest(String),
     Internal(String),
 }
@@ -21,6 +22,7 @@ impl IntoResponse for ApiError {
             ApiError::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized".to_string()),
             ApiError::Forbidden => (StatusCode::FORBIDDEN, "forbidden".to_string()),
             ApiError::NotFound => (StatusCode::NOT_FOUND, "not found".to_string()),
+            ApiError::Conflict(m) => (StatusCode::CONFLICT, m),
             ApiError::BadRequest(m) => (StatusCode::BAD_REQUEST, m),
             ApiError::Internal(m) => {
                 tracing::error!(error = %m, "internal api-gateway error");
@@ -31,8 +33,17 @@ impl IntoResponse for ApiError {
     }
 }
 
+/// Postgres unique-violation (`23505`) maps to 409, not 500 — a later
+/// task's insert into a uniquely-constrained table (e.g. `portal_users
+/// (tenant_id, username)`) is a client-side conflict, not a server fault,
+/// and must not be logged as one via the generic `Internal` path below.
 impl From<sqlx::Error> for ApiError {
     fn from(e: sqlx::Error) -> Self {
+        if let sqlx::Error::Database(db_err) = &e {
+            if db_err.code().as_deref() == Some("23505") {
+                return ApiError::Conflict("already exists".to_string());
+            }
+        }
         ApiError::Internal(e.to_string())
     }
 }
