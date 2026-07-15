@@ -10,6 +10,12 @@ axum-extra = { version = "0.12.6", features = ["cookie"] }
 chrono = { version = "0.4.45", features = ["serde"] }
 core-domain = { version = "0.1.0", path = "../core-domain" }
 executor = { version = "0.1.0", path = "../executor" }
+# Task 4: `otp.rs`'s `generate_code()` needs `getrandom::fill` directly —
+# Rust's extern prelude only exposes DIRECT dependencies, and `getrandom` was
+# previously only a TRANSITIVE dependency here (via `spx-client`'s own use of
+# it). Version pinned to match `spx-client`'s own `getrandom = "0.4"` so
+# Cargo unifies a single `getrandom` build instead of two.
+getrandom = "0.4"
 # NOT in the task brief's `cargo add` list, added here for the same
 # extern-prelude reason as the `sqlx` entry below: `tower_governor` re-exports
 # its OWN types (`GovernorLayer`, `GovernorConfigBuilder`, key extractors) but

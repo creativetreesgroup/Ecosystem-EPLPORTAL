@@ -7,6 +7,7 @@
 pub mod auth;
 pub mod error;
 pub mod middleware;
+pub mod otp;
 pub mod routes;
 pub mod state;
 

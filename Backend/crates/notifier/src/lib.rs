@@ -40,6 +40,12 @@ pub struct BotSettings {
     pub enabled: bool,
     pub webhook_url: String,
     pub wa_group: String,
+    /// The OTP-gate's personal-number delivery target (distinct from
+    /// `wa_group` — the reference explicitly rejects `@g.us` group JIDs for
+    /// OTP delivery; sending a one-time code to a shared group would defeat
+    /// its purpose). Fase 6b's `api-gateway::otp` module is this field's
+    /// first real consumer.
+    pub wa_number: String,
     pub waha_url: String,
     pub waha_api_key: String,
     pub waha_session: String,

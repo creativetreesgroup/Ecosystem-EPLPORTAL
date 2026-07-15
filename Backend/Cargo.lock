@@ -143,6 +143,7 @@ dependencies = [
  "core-domain",
  "dashmap",
  "executor",
+ "getrandom 0.4.3",
  "governor",
  "notifier",
  "poller",
