@@ -1,3 +1,4 @@
+pub mod accept_rules;
 pub mod agency_credentials;
 pub mod bookings;
 pub mod models;
@@ -15,6 +16,9 @@ pub mod tenants;
 // `create`/`delete` re-exports just below. `find_by_label` is already
 // unambiguous. Callers may also always reach these via the qualified
 // `store::agency_credentials::...` path regardless.
+pub use accept_rules::{
+    list_all as list_accept_rules, replace_all as replace_accept_rules, NewAcceptRule,
+};
 pub use agency_credentials::{
     create as create_agency_credential, delete as delete_agency_credential, find_by_label,
     update as update_agency_credential,
@@ -281,6 +285,88 @@ mod tests {
             fuso.route_signature.as_deref(),
             Some("padang dc|cileungsi dc|strict|all|fuso")
         );
+
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_id)
+            .execute(&pool)
+            .await
+            .ok();
+    }
+
+    #[tokio::test]
+    async fn accept_rules_replace_all_deletes_old_rows_and_inserts_fresh() {
+        let pool = connect(&test_database_url()).await.expect("connect");
+        run_migrations(&pool).await.expect("migrate");
+        let tenant_id = insert_test_tenant(&pool).await;
+
+        let first_save = accept_rules::replace_all(
+            &pool,
+            tenant_id,
+            &[accept_rules::NewAcceptRule {
+                name: "Old rule".to_string(),
+                enabled: true,
+                priority: 0,
+                mode: "filter".to_string(),
+                service_types: vec![],
+                max_weight: None,
+                coc_only: false,
+                non_coc_only: false,
+                max_cod_amount: None,
+                origin: String::new(),
+                destinations: vec![],
+                booking_type: "all".to_string(),
+                shift_types: vec![],
+                trip_types: vec![],
+                match_mode: "strict".to_string(),
+                min_deadline_min: None,
+                max_accept_count: 0,
+                accepted_count: 0,
+            }],
+        )
+        .await
+        .expect("first replace_all");
+        assert_eq!(first_save.len(), 1);
+        let old_id = first_save[0].id;
+
+        let second_save = accept_rules::replace_all(
+            &pool,
+            tenant_id,
+            &[accept_rules::NewAcceptRule {
+                name: "New rule".to_string(),
+                enabled: true,
+                priority: 5,
+                mode: "route".to_string(),
+                service_types: vec!["TRONTON".to_string()],
+                max_weight: Some(1000.0),
+                coc_only: true,
+                non_coc_only: false,
+                max_cod_amount: None,
+                origin: "Padang DC".to_string(),
+                destinations: vec!["Cileungsi DC".to_string()],
+                booking_type: "all".to_string(),
+                shift_types: vec![],
+                trip_types: vec![],
+                match_mode: "strict".to_string(),
+                min_deadline_min: None,
+                max_accept_count: 10,
+                accepted_count: 3,
+            }],
+        )
+        .await
+        .expect("second replace_all");
+        assert_eq!(second_save.len(), 1);
+        assert_ne!(
+            second_save[0].id, old_id,
+            "replace_all must insert a fresh row, not update the old one in place"
+        );
+        assert_eq!(second_save[0].name, "New rule");
+        assert_eq!(second_save[0].accepted_count, 3);
+
+        let listed = accept_rules::list_all(&pool, tenant_id)
+            .await
+            .expect("list_all");
+        assert_eq!(listed.len(), 1, "the old row must be gone after replace_all");
+        assert_eq!(listed[0].name, "New rule");
 
         sqlx::query("DELETE FROM tenants WHERE id = $1")
             .bind(tenant_id)
