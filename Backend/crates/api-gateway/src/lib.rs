@@ -28,6 +28,10 @@ pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
         .nest("/auth", routes::auth::auth_router(state.clone()))
+        .nest(
+            "/auth/spx-credentials",
+            routes::spx_credentials::spx_credentials_router(state.clone()),
+        )
         .with_state(state.clone())
         // CORS (Task 7): exact-match allowlist, applied to every route this
         // router produces. Innermost of the three global layers below —
