@@ -492,3 +492,193 @@ async fn auth_outcome_releases_claim_and_leaves_booking_pending() {
         .await
         .ok();
 }
+
+/// Final review finding: `dispatch::ensure_self_email` must never permanently
+/// cache an empty self-email off a transient fetch failure. `ensure_self_email`
+/// is private to `dispatch.rs`, so this drives it indirectly through the public
+/// `dispatch_booking` -> `AcceptReason::AgencyDup` path (`self_email` is `pub`
+/// on `PollerState`, so its caching state is directly observable). The accept
+/// endpoint always returns the "your agency already accepted" AgencyDup
+/// trigger, and the bidding op-log always names an unrelated `@`-bearing
+/// rival on the FIRST probe attempt (avoiding `verify_agency_dup`'s
+/// 500/1500ms inconclusive-retry sleeps) so classification is decided solely
+/// by the SPX-side data, independent of `self_email` — the fix under test is
+/// purely about the CACHING behavior, observed by reusing the SAME
+/// `PollerState` across two dispatches.
+#[tokio::test]
+async fn ensure_self_email_does_not_permanently_cache_a_transient_fetch_failure() {
+    let pool = store::connect(&database_url()).await.expect("connect pg");
+    store::run_migrations(&pool).await.expect("migrate");
+    let tenant_id = insert_tenant(&pool).await;
+
+    let rule_uuid = Uuid::new_v4();
+    insert_rule(&pool, tenant_id, rule_uuid).await;
+
+    let server = MockServer::start().await;
+    // Accept endpoint: always the AgencyDup trigger (retcode 150399, matches
+    // spx-client's RE_AGENCY_DUP — see accept.rs's `eight_real_cases`).
+    Mock::given(method("POST"))
+        .and(path("/api/line_haul/agency/booking/bidding/accept"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "retcode": 150399,
+            "message": "Operation failed. Your agency already accepted this request before."
+        })))
+        .mount(&server)
+        .await;
+    // Bidding op-log: a definite `@`-bearing rival acceptor on the very first
+    // probe attempt, so `verify_agency_dup` resolves immediately every time
+    // (no retry sleeps), and — crucially — resolves the SAME way (a loss to
+    // this unrelated rival) regardless of what `self_email` happens to be on
+    // either call below.
+    Mock::given(method("GET"))
+        .and(path("/api/line_haul/agency/booking/bidding/log/list"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "retcode": 0,
+            "data": { "list": [
+                { "booking_operation_type": 4, "operator": "rival@otheragency.com", "create_time": 1000 }
+            ]}
+        })))
+        .mount(&server)
+        .await;
+    // Deliberately NO mock yet for any of the 6 SPX profile-fallback
+    // candidates `fetch_profile` tries — every one 404s (wiremock's default
+    // for an unmatched route), so `fetch_self_email` fails and
+    // `ensure_self_email` must return "" WITHOUT caching it.
+
+    let executor = Arc::new(
+        ExecutorHandle::connect(&redis_url())
+            .await
+            .expect("connect redis"),
+    );
+    let client = Arc::new(SpxClient::new(server.uri()).expect("client"));
+    let shared = PollerShared {
+        executor,
+        client,
+        pool: pool.clone(),
+        config: poller::PollerConfig::default(),
+        accounts: Arc::new(DashMap::new()),
+        notifier: None,
+        redis: None,
+        sidecar: Arc::new(SidecarClient::new("http://127.0.0.1:0")),
+    };
+
+    let account_id = format!("t{}", Uuid::new_v4().simple());
+    let (username, password) = creds();
+    let mut st = PollerState::new(
+        account_id,
+        tenant_id,
+        42,
+        SpxCookies::default(),
+        username,
+        password,
+    );
+    let compiled = CompiledRule::compile(&core_domain::AcceptRule {
+        id: rule_uuid.to_string(),
+        name: "COC catch-all".into(),
+        enabled: true,
+        priority: 0,
+        mode: RuleMode::Filter,
+        conditions: RuleConditions {
+            coc_only: true,
+            booking_type: RuleBookingType::All,
+            ..Default::default()
+        },
+    });
+    st.rules = Arc::new(vec![compiled]);
+    st.rule_meta = Arc::new(vec![RuleMeta {
+        uuid: rule_uuid,
+        cap: 0,
+        accepted_count: 0,
+        name: "COC catch-all".into(),
+    }]);
+
+    assert_eq!(st.self_email, None, "sanity: starts uncached");
+
+    // (1) First dispatch: the self-email fetch fails (nothing mocked yet for
+    // the 6 profile candidates) -> the AgencyDup path runs with self_email = "".
+    let spx_id_1 = format!("SPXID-SELFMAIL-1-{}", Uuid::new_v4().simple());
+    let raw1 = serde_json::json!({ "booking_id": spx_id_1, "booking_name": spx_id_1 });
+    let normalized1 = normalize_booking(&raw1);
+    store::upsert_booking(
+        &pool,
+        tenant_id,
+        &store::BookingUpsert {
+            spx_id: spx_id_1.clone(),
+            status: "pending".into(),
+            is_coc: true,
+            raw_data: raw1.clone(),
+        },
+    )
+    .await
+    .expect("seed booking row 1");
+
+    let first = dispatch_booking(&shared, &mut st, &normalized1).await;
+    assert_eq!(
+        first,
+        DispatchResult::LostToAgency {
+            rival: "rival@otheragency.com".to_string()
+        },
+        "the rival op-log entry never matches self_email (empty or otherwise), so this must \
+         classify as a loss to the unrelated rival"
+    );
+    assert_eq!(
+        st.self_email, None,
+        "THE FIX: a transient self-email fetch failure must NOT be cached as Some(\"\"). The \
+         pre-fix code left this as Some(String::new()) after exactly this call, permanently \
+         disabling agency-dup detection (every future call short-circuits to \"\") for the rest \
+         of this account's poller task lifetime — this assertion is what the pre-fix code fails."
+    );
+
+    // (2) Mount the primary profile endpoint so the NEXT fetch attempt
+    // succeeds (proving the fix actually retries instead of ever
+    // short-circuiting on a cached empty value).
+    Mock::given(method("GET"))
+        .and(path("/api/basicserver/agency/account/current_user/basic_info"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": { "email": "  Us@OurCompany.COM " }
+        })))
+        .mount(&server)
+        .await;
+
+    // (3) Second dispatch, reusing the SAME `st` (so any cache persists
+    // across calls) -> the fetch now succeeds and must both return AND cache
+    // the real, normalized (trimmed + lowercased) email.
+    let spx_id_2 = format!("SPXID-SELFMAIL-2-{}", Uuid::new_v4().simple());
+    let raw2 = serde_json::json!({ "booking_id": spx_id_2, "booking_name": spx_id_2 });
+    let normalized2 = normalize_booking(&raw2);
+    store::upsert_booking(
+        &pool,
+        tenant_id,
+        &store::BookingUpsert {
+            spx_id: spx_id_2.clone(),
+            status: "pending".into(),
+            is_coc: true,
+            raw_data: raw2.clone(),
+        },
+    )
+    .await
+    .expect("seed booking row 2");
+
+    let second = dispatch_booking(&shared, &mut st, &normalized2).await;
+    assert_eq!(
+        second,
+        DispatchResult::LostToAgency {
+            rival: "rival@otheragency.com".to_string()
+        },
+        "still a loss to the same unrelated rival, now with a REAL self_email available — the \
+         op-log rival never matched either way, so only the caching behavior below differs"
+    );
+    assert_eq!(
+        st.self_email,
+        Some("us@ourcompany.com".to_string()),
+        "once a genuine fetch succeeds, the real (trimmed+lowercased) email must be cached — \
+         proving RECOVERY is possible after a prior transient failure, which the pre-fix \
+         permanent-\"\" cache could never do (it would have returned \"\" forever)"
+    );
+
+    sqlx::query("DELETE FROM tenants WHERE id = $1")
+        .bind(tenant_id)
+        .execute(&pool)
+        .await
+        .ok();
+}

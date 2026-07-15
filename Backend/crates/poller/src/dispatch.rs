@@ -260,13 +260,23 @@ async fn finalize_win(
 }
 
 /// Fetch + cache the account's own email (once) for agency-dup classification.
+/// A fetch failure collapses to `""` (see `fetch_self_email`'s `Option` ->
+/// `unwrap_or_default`); an empty result is never cached as settled — caching
+/// it would permanently short-circuit agency-dup detection to `Inconclusive`
+/// (-> treated as a win) for the rest of this account's poller task lifetime
+/// after a single transient SPX API blip. Only a genuine non-empty email is
+/// cached; otherwise every call retries the fetch until one succeeds.
 async fn ensure_self_email(shared: &PollerShared, st: &mut PollerState) -> String {
     if let Some(e) = &st.self_email {
-        return e.clone();
+        if !e.is_empty() {
+            return e.clone();
+        }
     }
     let email = executor::fetch_self_email(&shared.client, &st.cookies)
         .await
         .unwrap_or_default();
-    st.self_email = Some(email.clone());
+    if !email.is_empty() {
+        st.self_email = Some(email.clone());
+    }
     email
 }
