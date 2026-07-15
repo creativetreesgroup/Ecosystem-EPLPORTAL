@@ -3125,6 +3125,119 @@ git commit -m "feat(notifier): WAHA + n8n fire-and-forget + ported webhook.ts me
 
 ---
 
+### Task 10b: Wire `notifier` into `poller`'s accept-dispatch pipeline (final-review-found plan gap)
+
+**Why this task exists:** Fase 5's final whole-branch review found that `notifier` (Task 10) was built and fully tested in isolation, but no task in this plan ever actually calls it from `poller`. The plan's own Task 10 design note (§"Design note (fire-and-forget — correction #6)") explicitly states "The caller (poller `finalize_win` / agency-loss branch) does `tokio::spawn(async move { notifier::notify_accepted(...).await; })`" — but `dispatch.rs`'s two placeholder comments (`// Task 10: tokio::spawn(notifier::notify_accepted(...)); ignore Result.` in `finalize_win`, and `// Task 10 fills the notifier agency-loss spawn here.` in the `LostToAgency` branch) were never filled by any task's Files/Steps list. This is the same class of gap Task 7b closed for auto-login: a mechanism fully built and tested, with the plan's own prose describing its call site, but no task actually assigned to wire it in. Closing it now (mirroring Task 13's `RedisPublisher` precedent exactly: a real `Option<T>` handle on `PollerShared`, `None` in every existing test construction site, populated by whichever later fase assembles a production binary) so Fase 6 has a real seam to find via `cargo build`, not a silent `Option<()>` no-op.
+
+**Files:**
+- Modify: `Backend/crates/poller/Cargo.toml` (add `notifier` path dependency)
+- Modify: `Backend/crates/poller/src/state.rs` (`PollerShared.notifier` changes from `Option<()>` to `Option<Arc<notifier::BotSettings>>`)
+- Modify: `Backend/crates/poller/src/dispatch.rs` (fill both placeholder comments)
+- Modify: all 12 existing `PollerShared { .. }` construction sites (`state.rs` + the 5 test files that construct it — grep `PollerShared {` first) to add `notifier: None`
+- Create: `Backend/crates/poller/tests/notifier_wiring.rs`
+
+**Interfaces produced:**
+- No new public functions — pure wiring using Task 10's already-shipped, already-tested `notifier::{notify_accepted, notify_agency_loss, BotSettings, NotifyBooking}`.
+
+- [ ] **Step 1: Add the dependency and change the field's type**
+
+`cd Backend && cargo add --package poller --path crates/notifier notifier && cd ..` (a workspace path dependency, matching how `poller` already depends on `spx-client`/`executor`/`store`).
+
+In `state.rs`, replace:
+```rust
+/// Placeholder for Task 10's `notifier` hook ...
+pub notifier: Option<()>,
+```
+with:
+```rust
+/// Fire-and-forget WAHA/n8n notification settings (Task 10b): `dispatch::finalize_win`
+/// and the `LostToAgency` branch spawn `notifier::notify_accepted`/`notify_agency_loss`
+/// through this when present. `Arc` because `BotSettings` is read-only, shared across
+/// every account's task, and cloned into a `tokio::spawn`'d future per accept — same
+/// sharing rationale as `client`/`executor`. Still an `Option` (not a bare value)
+/// because tests that don't exercise notification delivery construct `PollerShared`
+/// with `notifier: None`, a safe no-op the same way `redis: None` already is.
+pub notifier: Option<Arc<notifier::BotSettings>>,
+```
+
+- [ ] **Step 2: Fill the `finalize_win` placeholder**
+
+In `dispatch.rs`'s `finalize_win`, replace `// Task 10: tokio::spawn(notifier::notify_accepted(...)); ignore Result.` with:
+```rust
+if let Some(settings) = shared.notifier.clone() {
+    let nb = notifier::NotifyBooking {
+        booking_id: booking.booking_id.clone(),
+        request_id: booking.request_id.clone(),
+        onsite_id: booking.onsite_id.clone(),
+        booking_name: booking.booking_name.clone(),
+        spx_tx_id: booking.spx_tx_id.clone(),
+        vehicle_type: booking.vehicle_type.clone(),
+        route_stops: booking.route_stops.clone(),
+        report_station: booking.report_station.clone(),
+        cost_type: booking.cost_type,
+        adhoc_tag: booking.adhoc_tag,
+        standby_time: booking.standby_time,
+        period_start: booking.period_start,
+        period_end: booking.period_end,
+        bidding_ddl: booking.bidding_ddl,
+        is_coc: booking.is_coc,
+    };
+    tokio::spawn(async move { notifier::notify_accepted(&settings, &nb).await; });
+}
+```
+> `SpxBooking`'s exact field set may not match `NotifyBooking`'s 1:1 — read `SpxBooking`'s actual struct definition (`spx-client`'s booking type) and `NotifyBooking`'s actual struct definition (`Backend/crates/notifier/src/lib.rs`) before writing this, and map only the fields that genuinely exist on both by name/meaning; default (via `..Default::default()`) any `NotifyBooking` field that has no `SpxBooking` counterpart rather than inventing one. Do not guess — both types already exist in this codebase, read them.
+
+- [ ] **Step 3: Fill the `LostToAgency` placeholder**
+
+In `dispatch.rs`'s `AgencyDupOutcome::LostToAgency { rival_email }` branch, replace `// Task 10 fills the notifier agency-loss spawn here.` with:
+```rust
+if let Some(settings) = shared.notifier.clone() {
+    let spx_id = booking.id.clone();
+    let rival = rival_email.clone();
+    let rule_name = meta.name.clone();
+    let latency_ms_i64 = latency_ms as i64;
+    tokio::spawn(async move {
+        notifier::notify_agency_loss(&settings, &spx_id, &rival, latency_ms_i64, Some(&rule_name)).await;
+    });
+}
+```
+(placed before the existing `DispatchResult::LostToAgency { rival: rival_email }` return — `rival_email` is moved into the spawned task via the `rival` clone above, so the original `rival_email` binding remains available for the function's own return value.)
+
+- [ ] **Step 4: Update every `PollerShared` construction site**
+
+Grep `PollerShared {` across `Backend/crates/poller/` (12 sites: `state.rs` + `tests/relogin_wiring.rs`, `tests/poke_pool_changed.rs`, `tests/dispatch_pipeline.rs`, `tests/restore_before_first_poll.rs`, `tests/watchdog.rs`). Add `notifier: None,` to each (same pattern as `redis: None,`, which Task 13 already added to all these same sites — put the new field next to it for readability).
+
+- [ ] **Step 5: Test — a win spawns exactly one WAHA call; a `LostToAgency` spawns exactly one WAHA call with the rival's email in the text**
+
+New file `Backend/crates/poller/tests/notifier_wiring.rs`. Follow `dispatch_pipeline.rs`'s established style (wiremock SPX server, a real `PollerShared`/`PollerState` pair, `dispatch_booking(...)` called directly). Stand up a wiremock server for WAHA's `POST /api/sendText` (matching `notifier::waha`'s real endpoint shape — check `Backend/crates/notifier/src/waha.rs` for the exact path/method/headers already used by Task 10's own tests, e.g. `notifier/tests/waha_mock.rs`, and mirror it), build a `notifier::BotSettings { enabled: true, waha_url: <wiremock uri>, wa_group: "g1", .. }`, wrap in `Arc`, set `shared.notifier = Some(that_arc)`.
+1. Drive a booking through `dispatch_booking` to an `Ok` accept outcome (same wiremock-SPX-accept-200 setup `dispatch_pipeline.rs`'s existing "accepted" test already uses). After awaiting `dispatch_booking`, `tokio::task::yield_now().await` a couple of times (or a short real sleep, e.g. 50ms — the spawn is fire-and-forget and not join-able from the test) to let the spawned notify task run, then assert wiremock recorded exactly 1 request to `/api/sendText`.
+2. Drive a SEPARATE booking through `dispatch_booking` to an `AgencyDup` → `LostToAgency` outcome (same wiremock-SPX-agencydup setup `dispatch_pipeline.rs`'s existing agency-loss-classification test already uses — check how it mocks `verify_agency_dup`'s underlying HTTP calls). After the same yield/sleep pattern, assert wiremock recorded exactly 1 (new, cumulative 2nd) request to `/api/sendText`, and that request's body contains the rival's email (proving the right data reached the notifier, not just that "some" notify fired).
+3. Add a third case: `shared.notifier = None` (the existing default in every other test) — drive a win through `dispatch_booking` and assert wiremock still recorded ZERO requests (proving the `None` no-op path, which the OTHER 11 unmodified `PollerShared` construction sites all silently rely on, genuinely still works and this task didn't accidentally make notification delivery non-optional).
+
+- [ ] **Step 6: Full verification**
+
+```bash
+cd Backend
+cargo test -p poller
+cargo clippy --workspace --all-targets -- -D warnings
+cargo deny check
+cd ..
+git add Backend/crates/poller Backend/Cargo.toml Backend/Cargo.lock
+git commit -m "fix(poller): wire notifier into finalize_win + agency-loss branch — closes final-review's unowned-gap finding
+
+Task 10 built and tested WAHA/n8n/push delivery in isolation but no
+task called it from the accept-dispatch pipeline, so a real accept or
+a real same-agency loss never actually notified anyone despite the
+plan's own design note describing exactly this call site. Wires both
+placeholders using notifier's already-shipped, already-tested public
+API; PollerShared.notifier moves from a permanently-inert Option<()>
+to a real Option<Arc<BotSettings>>, mirroring Task 13's RedisPublisher
+precedent — populated by whichever later fase assembles a production
+binary, None (a safe no-op) everywhere today."
+```
+
+---
+
 ### Task 11: `notifier` Web Push VAPID (`web-push-native`) + `deny.toml` advisory ignore
 
 **Verification confidence:** `web-push-native` 0.4.0 API READ FROM SOURCE: `WebPushBuilder::new(endpoint: http::Uri, ua_public: p256::PublicKey, ua_auth: Auth)`, `.with_vapid(&jwt_simple::algorithms::ES256KeyPair, contact)`, `.build(body: impl Into<Vec<u8>>) -> Result<http::Request<Vec<u8>>, Error>`. License clean (MIT/Apache — NO `ece`/MPL). The `rsa` advisory + its ignore are research-confirmed. The p256/jwt-simple key construction from the VAPID keys is best-effort — **verify `ES256KeyPair::from_bytes` and `p256::PublicKey::from_sec1_bytes` against the pinned versions.**
