@@ -66,3 +66,4 @@ ws-hub = { version = "0.1.0", path = "../ws-hub" }
 # against 127.0.0.1 only, so no TLS backend is needed.
 dashmap = "6.2.1"
 reqwest = { version = "0.13.4", default-features = false, features = ["json"] }
+wiremock = "0.6.5"
