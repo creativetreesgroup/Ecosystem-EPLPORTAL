@@ -1,5 +1,6 @@
 pub mod accept_rules;
 pub mod agency_credentials;
+pub mod automation_settings;
 pub mod bookings;
 pub mod models;
 pub mod pool;
@@ -24,6 +25,7 @@ pub use agency_credentials::{
     create as create_agency_credential, delete as delete_agency_credential, find_by_label,
     update as update_agency_credential,
 };
+pub use automation_settings::{get as get_automation_settings, set_auto_accept_enabled};
 pub use bookings::{
     expire_stale_bookings, get_detail as get_booking_detail, list_history as list_bookings_history,
     list_live as list_bookings_live, resurrect_pending, update_booking_status, upsert_booking,
@@ -843,6 +845,44 @@ mod tests {
             !row.auto_accept_enabled,
             "kill switch must default to false with zero explicit input"
         );
+
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_id)
+            .execute(&pool)
+            .await
+            .ok();
+    }
+
+    #[tokio::test]
+    async fn automation_settings_set_auto_accept_enabled_creates_then_updates() {
+        let pool = connect(&test_database_url()).await.expect("connect");
+        run_migrations(&pool).await.expect("migrate");
+        let tenant_id = insert_test_tenant(&pool).await;
+
+        let before = automation_settings::get(&pool, tenant_id)
+            .await
+            .expect("get before any row exists");
+        assert!(before.is_none(), "no row should exist before the first set");
+
+        let created = automation_settings::set_auto_accept_enabled(&pool, tenant_id, true)
+            .await
+            .expect("first set (creates the row)");
+        assert!(created.auto_accept_enabled);
+        assert_eq!(
+            created.poll_interval_ms, 1000,
+            "untouched columns must keep the schema default on first insert"
+        );
+
+        let updated = automation_settings::set_auto_accept_enabled(&pool, tenant_id, false)
+            .await
+            .expect("second set (updates the existing row)");
+        assert!(!updated.auto_accept_enabled);
+
+        let fetched = automation_settings::get(&pool, tenant_id)
+            .await
+            .expect("get after update")
+            .expect("row must exist");
+        assert!(!fetched.auto_accept_enabled);
 
         sqlx::query("DELETE FROM tenants WHERE id = $1")
             .bind(tenant_id)
