@@ -9,12 +9,20 @@ name = "reactor-core"
 path = "src/main.rs"
 
 [dependencies]
+api-gateway = { version = "0.1.0", path = "../../crates/api-gateway" }
 axum = "0.8.9"
+dashmap = "6.2.1"
+executor = { version = "0.1.0", path = "../../crates/executor" }
+poller = { version = "0.1.0", path = "../../crates/poller" }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
+spx-client = { version = "0.1.0", path = "../../crates/spx-client" }
+store = { version = "0.1.0", path = "../../crates/store" }
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "signal", "net"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+uuid = { version = "1.23.5", features = ["v4", "serde"] }
+ws-hub = { version = "0.1.0", path = "../../crates/ws-hub" }
 
 [dev-dependencies]
 http-body-util = "0.1.3"

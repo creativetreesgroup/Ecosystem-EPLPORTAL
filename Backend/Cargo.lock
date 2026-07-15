@@ -136,6 +136,23 @@ checksum = "2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3"
 [[package]]
 name = "api-gateway"
 version = "0.1.0"
+dependencies = [
+ "axum",
+ "chrono",
+ "core-domain",
+ "executor",
+ "notifier",
+ "poller",
+ "serde",
+ "serde_json",
+ "spx-client",
+ "sqlx",
+ "store",
+ "tokio",
+ "tracing",
+ "uuid",
+ "ws-hub",
+]
 
 [[package]]
 name = "arc-swap"
@@ -2503,14 +2520,22 @@ checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
 name = "reactor-core"
 version = "0.1.0"
 dependencies = [
+ "api-gateway",
  "axum",
+ "dashmap",
+ "executor",
  "http-body-util",
+ "poller",
  "serde",
  "serde_json",
+ "spx-client",
+ "store",
  "tokio",
  "tower",
  "tracing",
  "tracing-subscriber",
+ "uuid",
+ "ws-hub",
 ]
 
 [[package]]
