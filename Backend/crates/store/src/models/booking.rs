@@ -6,6 +6,7 @@ use uuid::Uuid;
 pub struct Booking {
     pub id: Uuid,
     pub tenant_id: Uuid,
+    pub account_id: String,
     pub spx_id: String,
     pub raw_data: Value,
     pub status: String,

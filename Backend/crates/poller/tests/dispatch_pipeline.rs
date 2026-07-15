@@ -79,6 +79,7 @@ async fn accept_then_duplicate_and_booking_row_flips_to_accepted() {
         &pool,
         tenant_id,
         &store::BookingUpsert {
+            account_id: "test-account".to_string(),
             spx_id: spx_id.clone(),
             status: "pending".into(),
             is_coc: true,
@@ -227,6 +228,7 @@ async fn taken_outcome_leaves_rule_matched_null_and_stamps_accept_reason() {
         &pool,
         tenant_id,
         &store::BookingUpsert {
+            account_id: "test-account".to_string(),
             spx_id: spx_id.clone(),
             status: "pending".into(),
             is_coc: true,
@@ -355,6 +357,7 @@ async fn auth_outcome_releases_claim_and_leaves_booking_pending() {
         &pool,
         tenant_id,
         &store::BookingUpsert {
+            account_id: "test-account".to_string(),
             spx_id: spx_id.clone(),
             status: "pending".into(),
             is_coc: true,
@@ -603,6 +606,7 @@ async fn ensure_self_email_does_not_permanently_cache_a_transient_fetch_failure(
         &pool,
         tenant_id,
         &store::BookingUpsert {
+            account_id: "test-account".to_string(),
             spx_id: spx_id_1.clone(),
             status: "pending".into(),
             is_coc: true,
@@ -650,6 +654,7 @@ async fn ensure_self_email_does_not_permanently_cache_a_transient_fetch_failure(
         &pool,
         tenant_id,
         &store::BookingUpsert {
+            account_id: "test-account".to_string(),
             spx_id: spx_id_2.clone(),
             status: "pending".into(),
             is_coc: true,

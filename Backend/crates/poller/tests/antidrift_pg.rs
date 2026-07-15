@@ -44,6 +44,7 @@ async fn partial_sweep_never_expires_but_complete_sweep_does() {
             &pool,
             tenant_id,
             &store::BookingUpsert {
+                account_id: "test-account".to_string(),
                 spx_id: spx.into(),
                 status: status.into(),
                 is_coc: false,

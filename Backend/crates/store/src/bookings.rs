@@ -35,6 +35,7 @@ use uuid::Uuid;
 /// Minimal fields the poller has at upsert time.
 #[derive(Debug, Clone)]
 pub struct BookingUpsert {
+    pub account_id: String,
     pub spx_id: String,
     pub status: String, // "pending" on first sight
     /// Not written by `upsert_booking` — `bookings.is_coc` is a Postgres
@@ -59,13 +60,14 @@ pub async fn upsert_booking(
 ) -> Result<(), sqlx::Error> {
     let mut tx = crate::begin_tenant_tx(pool, tenant_id).await?;
     sqlx::query(
-        "INSERT INTO bookings (id, tenant_id, spx_id, status, raw_data, created_at, updated_at) \
-         VALUES (gen_random_uuid(), $1, $2, $3, $4, now(), now()) \
-         ON CONFLICT (tenant_id, spx_id) DO UPDATE SET \
+        "INSERT INTO bookings (id, tenant_id, account_id, spx_id, status, raw_data, created_at, updated_at) \
+         VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, now(), now()) \
+         ON CONFLICT (tenant_id, account_id, spx_id) DO UPDATE SET \
            status = CASE WHEN bookings.status = 'pending' THEN EXCLUDED.status ELSE bookings.status END, \
            updated_at = now()",
     )
     .bind(tenant_id)
+    .bind(&b.account_id)
     .bind(&b.spx_id)
     .bind(&b.status)
     .bind(&b.raw_data)
@@ -252,4 +254,77 @@ pub async fn resurrect_pending(
     .await?;
     tx.commit().await?;
     Ok(res.rows_affected())
+}
+
+/// `/bookings/live`: pending bookings, newest first. Uses the `idx_bookings_live_covering`
+/// index (`(tenant_id, status, created_at DESC) INCLUDE (...)`, migration 0007).
+/// `limit`/`offset` are the caller's job to clamp to a sane range (the route layer does this,
+/// not this fn — mirrors this crate's existing "store trusts its caller" convention).
+pub async fn list_live(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<crate::models::Booking>, sqlx::Error> {
+    let mut tx = crate::begin_tenant_tx(pool, tenant_id).await?;
+    let rows = sqlx::query_as::<_, crate::models::Booking>(
+        "SELECT id, tenant_id, account_id, spx_id, raw_data, status, is_coc, needs_enrichment, \
+         service_type, weight, cod_amount, auto_accepted, accept_latency_ms, rule_matched, \
+         created_at, updated_at FROM bookings \
+         WHERE tenant_id = $1 AND status = 'pending' \
+         ORDER BY created_at DESC LIMIT $2 OFFSET $3",
+    )
+    .bind(tenant_id)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(rows)
+}
+
+/// `/bookings/history`: terminal bookings (`accepted`/`failed`), newest first. Uses the
+/// `idx_bookings_created_brin` BRIN index for the time-ordered scan.
+pub async fn list_history(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<crate::models::Booking>, sqlx::Error> {
+    let mut tx = crate::begin_tenant_tx(pool, tenant_id).await?;
+    let rows = sqlx::query_as::<_, crate::models::Booking>(
+        "SELECT id, tenant_id, account_id, spx_id, raw_data, status, is_coc, needs_enrichment, \
+         service_type, weight, cod_amount, auto_accepted, accept_latency_ms, rule_matched, \
+         created_at, updated_at FROM bookings \
+         WHERE tenant_id = $1 AND status IN ('accepted', 'failed') \
+         ORDER BY created_at DESC LIMIT $2 OFFSET $3",
+    )
+    .bind(tenant_id)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(rows)
+}
+
+/// `/bookings/:id/detail`: single row by its own `id` (not `spx_id` — the route's `:id` path
+/// param is the DB primary key, matching every other `/:id/...` route in this crate).
+pub async fn get_detail(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    id: Uuid,
+) -> Result<Option<crate::models::Booking>, sqlx::Error> {
+    let mut tx = crate::begin_tenant_tx(pool, tenant_id).await?;
+    let row = sqlx::query_as::<_, crate::models::Booking>(
+        "SELECT id, tenant_id, account_id, spx_id, raw_data, status, is_coc, needs_enrichment, \
+         service_type, weight, cod_amount, auto_accepted, accept_latency_ms, rule_matched, \
+         created_at, updated_at FROM bookings WHERE tenant_id = $1 AND id = $2",
+    )
+    .bind(tenant_id)
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(row)
 }

@@ -20,7 +20,8 @@ pub use agency_credentials::{
     update as update_agency_credential,
 };
 pub use bookings::{
-    expire_stale_bookings, resurrect_pending, update_booking_status, upsert_booking,
+    expire_stale_bookings, get_detail as get_booking_detail, list_history as list_bookings_history,
+    list_live as list_bookings_live, resurrect_pending, update_booking_status, upsert_booking,
     BookingStatusUpdate, BookingUpsert, StaleOutcome,
 };
 pub use pool::{begin_tenant_tx, connect, run_migrations};
@@ -400,6 +401,110 @@ mod tests {
 
         sqlx::query("DELETE FROM tenants WHERE id = $1")
             .bind(tenant_id)
+            .execute(&pool)
+            .await
+            .ok();
+    }
+
+    #[tokio::test]
+    async fn bookings_list_live_returns_only_pending_newest_first() {
+        let pool = connect(&test_database_url()).await.expect("connect");
+        run_migrations(&pool).await.expect("migrate");
+        let tenant_id = insert_test_tenant(&pool).await;
+
+        for (spx_id, status) in [("p1", "pending"), ("p2", "pending"), ("a1", "accepted")] {
+            upsert_booking(
+                &pool,
+                tenant_id,
+                &BookingUpsert {
+                    account_id: "acct-1".to_string(),
+                    spx_id: spx_id.to_string(),
+                    status: "pending".to_string(),
+                    is_coc: false,
+                    raw_data: serde_json::json!({}),
+                },
+            )
+            .await
+            .expect("upsert");
+            if status == "accepted" {
+                update_booking_status(
+                    &pool,
+                    tenant_id,
+                    spx_id,
+                    BookingStatusUpdate {
+                        status: "accepted",
+                        latency_ms: Some(10),
+                        auto_accepted: true,
+                        rule_matched: None,
+                        accept_reason: None,
+                    },
+                )
+                .await
+                .expect("mark accepted");
+            }
+        }
+
+        let live = bookings::list_live(&pool, tenant_id, 50, 0)
+            .await
+            .expect("list_live");
+        let live_ids: Vec<&str> = live.iter().map(|b| b.spx_id.as_str()).collect();
+        assert_eq!(live_ids.len(), 2, "only the two pending rows must appear");
+        assert!(live_ids.contains(&"p1"));
+        assert!(live_ids.contains(&"p2"));
+        assert!(
+            !live_ids.contains(&"a1"),
+            "the accepted row must not appear in /bookings/live"
+        );
+
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_id)
+            .execute(&pool)
+            .await
+            .ok();
+    }
+
+    #[tokio::test]
+    async fn bookings_get_detail_returns_none_for_wrong_tenant() {
+        let pool = connect(&test_database_url()).await.expect("connect");
+        run_migrations(&pool).await.expect("migrate");
+        let tenant_a = insert_test_tenant(&pool).await;
+        let tenant_b = insert_test_tenant(&pool).await;
+
+        upsert_booking(
+            &pool,
+            tenant_a,
+            &BookingUpsert {
+                account_id: "acct-1".to_string(),
+                spx_id: "spx-detail-1".to_string(),
+                status: "pending".to_string(),
+                is_coc: false,
+                raw_data: serde_json::json!({"k": "v"}),
+            },
+        )
+        .await
+        .expect("upsert");
+
+        let live = bookings::list_live(&pool, tenant_a, 50, 0)
+            .await
+            .expect("list_live");
+        let id = live[0].id;
+
+        let found = bookings::get_detail(&pool, tenant_a, id)
+            .await
+            .expect("get_detail own tenant");
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().raw_data, serde_json::json!({"k": "v"}));
+
+        let cross_tenant = bookings::get_detail(&pool, tenant_b, id)
+            .await
+            .expect("get_detail cross tenant query must not error");
+        assert!(
+            cross_tenant.is_none(),
+            "a booking must not be visible via a different tenant_id"
+        );
+
+        sqlx::query("DELETE FROM tenants WHERE id = ANY($1)")
+            .bind(vec![tenant_a, tenant_b])
             .execute(&pool)
             .await
             .ok();

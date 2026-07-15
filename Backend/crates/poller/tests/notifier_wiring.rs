@@ -184,6 +184,7 @@ async fn win_then_agency_loss_then_none_drive_waha_calls_correctly() {
         &pool,
         tenant_id,
         &store::BookingUpsert {
+            account_id: "test-account".to_string(),
             spx_id: spx_id_1.clone(),
             status: "pending".into(),
             is_coc: true,
@@ -251,6 +252,7 @@ async fn win_then_agency_loss_then_none_drive_waha_calls_correctly() {
         &pool,
         tenant_id,
         &store::BookingUpsert {
+            account_id: "test-account".to_string(),
             spx_id: spx_id_2.clone(),
             status: "pending".into(),
             is_coc: true,
@@ -315,6 +317,7 @@ async fn win_then_agency_loss_then_none_drive_waha_calls_correctly() {
         &pool,
         tenant_id,
         &store::BookingUpsert {
+            account_id: "test-account".to_string(),
             spx_id: spx_id_3.clone(),
             status: "pending".into(),
             is_coc: true,

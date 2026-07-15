@@ -98,6 +98,7 @@ pub async fn poll_once(shared: &PollerShared, st: &mut PollerState, woken_by_pok
             &shared.pool,
             st.tenant_id,
             &store::BookingUpsert {
+                account_id: st.account_id.clone(),
                 spx_id: booking.id.clone(),
                 status: "pending".into(),
                 is_coc: matches!(booking.booking_type, core_domain::BookingType::Spxid),
