@@ -47,6 +47,18 @@ async fn request_otp(
 ) -> Result<Json<OtpOk>, ApiError> {
     require_permission(&user, Permission::ArmAutoAccept)?;
 
+    // Delivery-configured check FIRST, before `otp::request` claims anything
+    // (the 60s resend cooldown, a freshly generated+stored code, a reset
+    // attempt counter). A misconfigured tenant must get a consistent 400
+    // "not configured" on every attempt — if `otp::request` ran first, the
+    // FIRST call would arm the cooldown and then still fail this check, so a
+    // RETRY within that 60s window would misleadingly see 429 "otp already
+    // requested" instead of the accurate 400 (whole-branch review finding).
+    let bot = load_bot_settings(&state, user.tenant_id).await?;
+    if bot.wa_number.trim().is_empty() {
+        return Err(ApiError::BadRequest(OTP_NOT_CONFIGURED_MSG.to_string()));
+    }
+
     let code = otp::request(&mut state.redis, user.tenant_id, user.portal_user_id)
         .await
         .map_err(|e| match e {
@@ -63,10 +75,6 @@ async fn request_otp(
             OtpRequestError::Redis(e) => ApiError::Internal(e.to_string()),
         })?;
 
-    let bot = load_bot_settings(&state, user.tenant_id).await?;
-    if bot.wa_number.trim().is_empty() {
-        return Err(ApiError::BadRequest(OTP_NOT_CONFIGURED_MSG.to_string()));
-    }
     let text = format!("Kode verifikasi TOWER Anda: {code} (berlaku 3 menit)");
     let (sent, _failed) = send_to_waha_many(&bot, &bot.wa_number, &text).await;
     if sent == 0 {

@@ -510,3 +510,61 @@ async fn request_otp_without_site_settings_row_is_bad_request() {
 
     cleanup(&pool, tenant_id).await;
 }
+
+/// Whole-branch review finding regression: a SECOND `request-aa-otp` call
+/// from a still-unconfigured tenant, made within what would have been the
+/// 60s resend cooldown window had the first call armed it, must ALSO see
+/// `400 "not configured"` — never a `429 "otp already requested"`. Before
+/// this fix, `request_otp` called `otp::request` (claiming the cooldown key)
+/// BEFORE checking `load_bot_settings`, so the first call would claim the
+/// cooldown and then still fail with 400; but the SECOND call would find the
+/// cooldown key already occupied and misleadingly return 429 instead of the
+/// accurate 400. Reordering `load_bot_settings` before `otp::request` means
+/// nothing is ever claimed for a misconfigured tenant, so this second call
+/// gets the same accurate 400 the first one did.
+#[tokio::test]
+async fn second_request_from_unconfigured_tenant_is_still_bad_request_not_rate_limited() {
+    let pool = store::connect(&database_url()).await.expect("connect pg");
+    store::run_migrations(&pool).await.expect("migrate");
+    let tenant_id = insert_tenant(&pool).await;
+    insert_portal_user(&pool, tenant_id, "main-otp-unconfigured-retry", true).await;
+
+    let state = build_state(pool.clone(), tenant_id).await;
+    let base = spawn_server(state).await;
+    let http = reqwest::Client::new();
+    let cookie = login(&http, &base, "main-otp-unconfigured-retry").await;
+
+    let first = http
+        .post(format!("{base}/auth/request-aa-otp"))
+        .header(reqwest::header::COOKIE, &cookie)
+        .send()
+        .await
+        .expect("first request-aa-otp with no site_settings row");
+    assert_eq!(first.status(), reqwest::StatusCode::BAD_REQUEST);
+    let first_body: Value = first.json().await.expect("json body");
+    assert_eq!(
+        first_body["error"], "OTP delivery is not configured for this tenant",
+        "expected the disclosed not-configured message on the first attempt: {first_body}"
+    );
+
+    // Immediate retry, well within what would have been the 60s resend
+    // cooldown had the first (misconfigured) attempt armed it.
+    let second = http
+        .post(format!("{base}/auth/request-aa-otp"))
+        .header(reqwest::header::COOKIE, &cookie)
+        .send()
+        .await
+        .expect("second (immediate) request-aa-otp with no site_settings row");
+    assert_eq!(
+        second.status(),
+        reqwest::StatusCode::BAD_REQUEST,
+        "a retry from a still-unconfigured tenant must see 400, not a misleading 429"
+    );
+    let second_body: Value = second.json().await.expect("json body");
+    assert_eq!(
+        second_body["error"], "OTP delivery is not configured for this tenant",
+        "expected the disclosed not-configured message on the retry too: {second_body}"
+    );
+
+    cleanup(&pool, tenant_id).await;
+}

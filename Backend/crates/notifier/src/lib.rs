@@ -35,7 +35,16 @@ pub use waha::{parse_chat_ids, send_n8n, send_to_waha_many};
 /// decryption of the `site_settings`-stored ciphertext happens in the
 /// caller's layer (e.g. whatever assembles `BotSettings` before calling
 /// `notify_*`), not in this crate.
-#[derive(Debug, Clone, Default)]
+///
+/// No `Debug` derive: since Fase 6b, `api-gateway::routes::otp::
+/// load_bot_settings` populates `waha_api_key` with a genuine decrypted
+/// WAHA credential at runtime (Fase 5's own tests never did), and a
+/// `Debug`/`{:?}` impl is exactly the kind of thing a future
+/// `tracing::debug!(?bot)` could reach for without realizing it logs a raw
+/// credential — same reasoning as `routes::spx_credentials::
+/// UpsertCredential`'s dropped `Debug` derive (review finding — Fase 6b
+/// Task 2).
+#[derive(Clone, Default)]
 pub struct BotSettings {
     pub enabled: bool,
     pub webhook_url: String,
