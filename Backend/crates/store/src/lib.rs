@@ -5,6 +5,7 @@ pub mod pool;
 pub mod portal_sessions;
 pub mod portal_users;
 pub mod quota;
+pub mod site_settings;
 pub mod tenants;
 
 // `create`/`update`/`delete` are deliberately aliased rather than

@@ -13,6 +13,15 @@ pub enum ApiError {
     NotFound,
     Conflict(String),
     BadRequest(String),
+    /// `429 Too Many Requests` — Fase 6b Task 5's OTP-gate cooldown/attempt-cap
+    /// family (`OtpRequestError::TooSoon`, `OtpVerifyError::TooManyAttempts`).
+    /// Distinct from `Conflict`: those two are rate-limit-shaped rejections
+    /// ("come back later"), not a resource-state conflict, and this project
+    /// already has a `429` precedent for a different rate-limit mechanism
+    /// (`middleware::rate_limit`'s `tower_governor` login limiter) — this
+    /// variant gives handler-level (non-`tower_governor`) rate-limit
+    /// rejections the same, correct status code.
+    TooManyRequests(String),
     Internal(String),
 }
 
@@ -24,6 +33,7 @@ impl IntoResponse for ApiError {
             ApiError::NotFound => (StatusCode::NOT_FOUND, "not found".to_string()),
             ApiError::Conflict(m) => (StatusCode::CONFLICT, m),
             ApiError::BadRequest(m) => (StatusCode::BAD_REQUEST, m),
+            ApiError::TooManyRequests(m) => (StatusCode::TOO_MANY_REQUESTS, m),
             ApiError::Internal(m) => {
                 tracing::error!(error = %m, "internal api-gateway error");
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal error".to_string())

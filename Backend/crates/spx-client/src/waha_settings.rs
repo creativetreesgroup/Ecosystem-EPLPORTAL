@@ -21,6 +21,18 @@ pub struct WahaSettings {
     /// Non-sensitive: WAHA session name (plaintext, default "default").
     #[serde(default)]
     pub waha_session: String,
+    /// Non-sensitive: the OTP-gate's personal-number WAHA delivery target
+    /// (plaintext — distinct from a `wa_group`/`@g.us` broadcast JID, which
+    /// this narrowly-scoped Fase 3 struct does not carry at all; see
+    /// `notifier::BotSettings::wa_number`'s doc comment for why a one-time
+    /// code must never go to a shared group). `#[serde(default)]` for the
+    /// same forward-compat reason as `waha_url`/`waha_session` above: added
+    /// in Fase 6b Task 5, after this struct first shipped, so a row encoded
+    /// before this field existed still decodes cleanly (as `""`). Fase 6b's
+    /// `api-gateway::routes::otp::load_bot_settings` is this field's first
+    /// real reader.
+    #[serde(default)]
+    pub wa_number: String,
     /// base64(STANDARD) of the AES-256-GCM ciphertext of the API key.
     pub api_key_ciphertext_b64: String,
     /// base64(STANDARD) of the 12-byte nonce.
@@ -44,6 +56,14 @@ impl WahaSettings {
         Ok(WahaSettings {
             waha_url: waha_url.to_string(),
             waha_session: waha_session.to_string(),
+            // Not a parameter of `encrypt_new` — this constructor's job is
+            // the WAHA connection info + encrypted key only (its existing,
+            // unchanged parameter list). Callers that need a non-empty
+            // `wa_number` (Fase 6b Task 5's own route tests, until 6d's
+            // `site_settings` CRUD ships a real write path) set the field
+            // directly afterward — it's `pub`, so `settings.wa_number = ...`
+            // needs no new constructor or builder method.
+            wa_number: String::new(),
             api_key_ciphertext_b64: STANDARD.encode(&ct.bytes),
             api_key_nonce_b64: STANDARD.encode(ct.nonce),
             key_version: KEY_VERSION,

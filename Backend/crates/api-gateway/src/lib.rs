@@ -29,6 +29,11 @@ pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
         .nest("/auth", routes::auth::auth_router(state.clone()))
+        // Mounted directly at `/auth` (not a further sub-path): this
+        // router's own routes are already named in full
+        // (`/request-aa-otp`, `/verify-aa-otp`), matching the reference's
+        // `/auth/request-aa-otp` / `/auth/verify-aa-otp` paths.
+        .nest("/auth", routes::otp::otp_router(state.clone()))
         .nest(
             "/auth/spx-credentials",
             routes::spx_credentials::spx_credentials_router(state.clone()),
