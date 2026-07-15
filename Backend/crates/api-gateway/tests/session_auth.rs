@@ -296,3 +296,55 @@ async fn well_formed_but_unknown_token_401_not_500() {
         .await
         .ok();
 }
+
+/// Case 5: a session that is otherwise entirely valid (unexpired, correct
+/// hash, real user) but whose owning `portal_users` row has `enabled =
+/// false` -> 401. Exercises `session_auth`'s `if !user.enabled { return
+/// Err(ApiError::Unauthorized); }` branch specifically (middleware.rs
+/// ~line 65), which none of cases 1-4 above touch: the user is disabled
+/// AFTER the session is created, via a raw `UPDATE portal_users` against the
+/// same test pool, so the session row itself is never invalid — only the
+/// user lookup's `enabled` flag is.
+#[tokio::test]
+async fn disabled_user_session_returns_401() {
+    let pool = store::connect(&database_url()).await.expect("connect pg");
+    store::run_migrations(&pool).await.expect("migrate");
+    let tenant_id = insert_tenant(&pool).await;
+    let user_id = insert_portal_user(&pool, tenant_id, "agent-disabled").await;
+
+    sqlx::query("UPDATE portal_users SET enabled = false WHERE id = $1")
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .expect("disable portal_user");
+
+    let (token, hash) = generate_session_token().expect("generate token");
+    store::portal_sessions::create(&pool, tenant_id, user_id, hash, None, None, Duration::hours(2))
+        .await
+        .expect("create session");
+
+    let state = build_state(pool.clone()).await;
+    let base = spawn_server(state).await;
+    let http = reqwest::Client::new();
+
+    let resp = http
+        .get(format!("{base}/protected"))
+        .header(
+            reqwest::header::COOKIE,
+            format!("{SESSION_COOKIE_NAME}={}", token.expose_secret()),
+        )
+        .send()
+        .await
+        .expect("request protected");
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::UNAUTHORIZED,
+        "a valid, unexpired session for a disabled portal user must be rejected"
+    );
+
+    sqlx::query("DELETE FROM tenants WHERE id = $1")
+        .bind(tenant_id)
+        .execute(&pool)
+        .await
+        .ok();
+}
