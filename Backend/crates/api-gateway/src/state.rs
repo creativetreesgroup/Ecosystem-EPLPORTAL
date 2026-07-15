@@ -19,4 +19,13 @@ pub struct AppState {
     /// Session cookie name, configurable so a later fase/deployment can
     /// rename it without touching handler code.
     pub session_cookie_name: Arc<str>,
+    /// Whether the session cookie is issued with the `Secure` attribute
+    /// (Task 5). Defaults to `true` in every real deployment binary
+    /// (`reactor-core`'s `build_state`, via `COOKIE_SECURE`) — browsers
+    /// refuse to send a `Secure` cookie back over plain HTTP, so this only
+    /// needs to be `false` for local dev setups that reach `reactor-core`
+    /// directly over HTTP instead of through the TLS-terminating edge proxy
+    /// (Caddy/Traefik) the master spec's architecture assumes in
+    /// production.
+    pub cookie_secure: bool,
 }

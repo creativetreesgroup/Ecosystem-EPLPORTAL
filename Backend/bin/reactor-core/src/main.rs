@@ -78,6 +78,11 @@ async fn build_state() -> AppState {
         // Populated for real once CORS lands (Task 7).
         cors_origins: Arc::new(Vec::new()),
         session_cookie_name: Arc::from(env_or("SESSION_COOKIE_NAME", "spx_session").as_str()),
+        // Default true (production-safe); set `COOKIE_SECURE=false` only for
+        // local dev where reactor-core is reached directly over plain HTTP
+        // (no TLS-terminating edge proxy in front of it) — see `state.rs`'s
+        // field doc comment.
+        cookie_secure: env_or("COOKIE_SECURE", "true").parse().unwrap_or(true),
     }
 }
 

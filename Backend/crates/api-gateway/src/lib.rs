@@ -6,6 +6,7 @@
 //! stack. Later sub-phases (6b-6e) add route modules here.
 pub mod auth;
 pub mod error;
+pub mod routes;
 pub mod state;
 
 pub use error::ApiError;
@@ -18,6 +19,7 @@ use serde_json::{json, Value};
 pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
+        .nest("/auth", routes::auth::auth_router(state.clone()))
         .with_state(state)
 }
 

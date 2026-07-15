@@ -97,6 +97,10 @@ async fn build_state(pool: PgPool) -> AppState {
         tenant_id: Uuid::nil(),
         cors_origins: Arc::new(Vec::new()),
         session_cookie_name: Arc::from(SESSION_COOKIE_NAME),
+        // Irrelevant to this test file (only `session_auth` is exercised,
+        // never a `Set-Cookie`-issuing handler) — `true` matches the
+        // production default.
+        cookie_secure: true,
     }
 }
 
