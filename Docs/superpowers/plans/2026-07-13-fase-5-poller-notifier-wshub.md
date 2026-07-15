@@ -77,7 +77,7 @@ Full context: [`Docs/tower-master-spec.md`](../../tower-master-spec.md) and the 
 - `pub fn spawn_account_loop(shared: Arc<PollerShared>, mut st: PollerState, poke: Arc<Notify>) -> JoinHandle<()>` — the single-flight loop.
 - `pub struct PollerShared` — the global clone-shared context: `executor: Arc<ExecutorHandle>`, `client: Arc<SpxClient>`, `pool: store::PgPool`, `redis: RedisPublisher` (Task 13 uses it), `config: PollerConfig`, `accounts: DashMap<String, AccountHandle>`. (Fields are added as later tasks need them; Task 1 may include just `config` + a placeholder `poll_once` hook.)
 
-- [ ] **Step 1: Add dependencies**
+- [x] **Step 1: Add dependencies**
 
 ```bash
 cd Backend
@@ -102,7 +102,7 @@ cd ..
 
 `--dev tokio ... test-util` is required for `tokio::time::pause`/`advance`. Every crate above resolves to an already-allowed license (all confirmed in-tree; `cargo deny check` stays green — no new deps enter the graph that weren't already resolved for Fase 3/4).
 
-- [ ] **Step 2: Write `state.rs`**
+- [x] **Step 2: Write `state.rs`**
 
 ```rust
 // Backend/crates/poller/src/state.rs
@@ -232,7 +232,7 @@ pub struct PollerShared {
 }
 ```
 
-- [ ] **Step 3: Write `schedule.rs` (the single-flight loop)**
+- [x] **Step 3: Write `schedule.rs` (the single-flight loop)**
 
 ```rust
 // Backend/crates/poller/src/schedule.rs
@@ -287,7 +287,7 @@ pub async fn poll_once(_shared: &PollerShared, st: &mut PollerState) {
 }
 ```
 
-- [ ] **Step 4: Write `lib.rs`**
+- [x] **Step 4: Write `lib.rs`**
 
 ```rust
 // Backend/crates/poller/src/lib.rs
@@ -309,7 +309,7 @@ pub use state::{AccountHandle, PollerConfig, PollerShared, PollerState};
 // (Task 6) pub mod login; (Task 7) pub mod watchdog; (Task 8)
 ```
 
-- [ ] **Step 5: Single-flight + poke tests (DoD #1)**
+- [x] **Step 5: Single-flight + poke tests (DoD #1)**
 
 The single-flight test drives the real loop and proves no two `poll_once` overlap, using a re-entrancy sentinel that a wrapper increments/decrements around an `await`. Because `poll_once`'s body is trivial in Task 1, the test wraps the loop's invariant differently: it spawns the loop, lets it run under paused time, and asserts the loop advances exactly one cycle per interval/poke (never two concurrently). The poke test proves an early wake happens BEFORE a full interval elapses.
 
@@ -404,7 +404,7 @@ async fn poke_wakes_before_full_interval() {
 
 > Note: the test uses a self-contained `run_loop` mirroring `spawn_account_loop`'s exact `select!`/sentinel structure because Task 1's `poll_once` is not yet pluggable. Task 6 (which finalizes `poll_once`) adds a direct integration test that drives the REAL `spawn_account_loop`. Keep `spawn_account_loop`'s `select!` shape byte-identical to `run_loop`'s so this test remains a faithful proof.
 
-- [ ] **Step 6: Build, test, clippy, commit**
+- [x] **Step 6: Build, test, clippy, commit**
 
 ```bash
 cd Backend
@@ -439,13 +439,13 @@ Expected: both tests pass (single-flight sentinel never trips; poke produces the
 
 **Design note (read before coding):** `fetch_complete` is TRUE only when EVERY page in the fetched range returned successfully. A rotating-window cycle (not the whole pool) is `fetch_complete = false` regardless of per-page success — it did not observe the whole pool, so it must never gate anti-drift (correction #9). A full sweep with zero page failures is `fetch_complete = true`. `page_failures > 0` forces `fetch_complete = false` even on a full sweep (the "REG only 500 of 1146" incident — a partial full sweep must not expire live tickets).
 
-- [ ] **Step 1: Add `futures`**
+- [x] **Step 1: Add `futures`**
 
 ```bash
 cd Backend && cargo add --package poller futures && cd ..
 ```
 
-- [ ] **Step 2: Write `fetch.rs`**
+- [x] **Step 2: Write `fetch.rs`**
 
 ```rust
 // Backend/crates/poller/src/fetch.rs
@@ -590,14 +590,14 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Wire `lib.rs`**
+- [x] **Step 3: Wire `lib.rs`**
 
 ```rust
 pub mod fetch;
 pub use fetch::{fast_detect, sweep, should_full_sweep, window_pages, FetchOutcome};
 ```
 
-- [ ] **Step 4: wiremock cadence + fetch_complete test (DoD #2 half + #3)**
+- [x] **Step 4: wiremock cadence + fetch_complete test (DoD #2 half + #3)**
 
 ```rust
 // Backend/crates/poller/tests/fetch_cadence.rs
@@ -672,7 +672,7 @@ async fn full_sweep_with_a_failing_page_is_not_complete() {
 }
 ```
 
-- [ ] **Step 5: Test, clippy, commit**
+- [x] **Step 5: Test, clippy, commit**
 
 ```bash
 cd Backend
@@ -704,7 +704,7 @@ Expected: cadence unit tests + wiremock fetch_complete-gating tests pass.
 
 **Design note:** hedged fetch adds AT MOST one backup per slow page, and only after `hedge_ms`. It never changes results — it only trims the tail latency of a parallel full sweep (which waits on the slowest page, max-of-N). A backup timeout/failure is counted as a page failure by the caller exactly as a single-shot failure would be, so the `fetch_complete` gate is preserved (strictly fewer false failures than single-shot).
 
-- [ ] **Step 1: Write `hedge.rs`**
+- [x] **Step 1: Write `hedge.rs`**
 
 ```rust
 // Backend/crates/poller/src/hedge.rs
@@ -756,7 +756,7 @@ pub async fn hedged_page(
 }
 ```
 
-- [ ] **Step 2: Route `fetch_range` through the hedge**
+- [x] **Step 2: Route `fetch_range` through the hedge**
 
 In `fetch.rs`, change `fetch_range` to accept `hedge_ms` and use `crate::hedge::hedged_page` instead of a direct `fetch_bookings`. `sweep` passes `cfg.sweep_hedge_ms`. Update the earlier tests' expectations only if needed (they use default `sweep_hedge_ms = 0`, so behavior is unchanged — the default-off path is exactly `client.fetch_bookings`).
 
@@ -787,14 +787,14 @@ async fn fetch_range(
 
 Update `sweep` and `fast_detect` call sites to pass `cfg.sweep_hedge_ms` and `0` respectively (fast-detect is already an early peek; no hedging).
 
-- [ ] **Step 3: Wire `lib.rs`**
+- [x] **Step 3: Wire `lib.rs`**
 
 ```rust
 pub mod hedge;
 pub use hedge::{hedge_fires_since_reset, hedged_page};
 ```
 
-- [ ] **Step 4: Default-off + enabled tests (DoD #2)**
+- [x] **Step 4: Default-off + enabled tests (DoD #2)**
 
 ```rust
 // Backend/crates/poller/tests/hedge.rs
@@ -851,7 +851,7 @@ async fn enabled_fires_backup_on_slow_page() {
 
 > Note: `enabled_fires_backup_on_slow_page` uses a REAL 300ms wiremock delay (wiremock drives a real socket, so `time::pause` cannot control it). This is the one place a small real delay is unavoidable; keep it ≤300ms. The default-off test is instant.
 
-- [ ] **Step 5: Test, clippy, commit**
+- [x] **Step 5: Test, clippy, commit**
 
 ```bash
 cd Backend
@@ -881,7 +881,7 @@ git commit -m "feat(poller): opt-in hedged fetch (default off) — tail-latency 
 
 **Design note:** The watcher NEVER touches dedup/executor/DB — it only reads `notification_count` + `fetch_booking_counts` (two cheap endpoints) and pokes. Lanes: when healthy (`backoff==0`), run up to `notif_watch_concurrency` overlapping ticks per interval so detection latency is ~interval/concurrency, not interval+RTT. When unhealthy (`backoff>0`), collapse to ONE slow lane (the reference: `state.watchBackoffMs > 0 ? 1 : concurrency`). Reset backoff to 0 on the first healthy tick.
 
-- [ ] **Step 1: Write `notif_watch.rs`**
+- [x] **Step 1: Write `notif_watch.rs`**
 
 ```rust
 // Backend/crates/poller/src/notif_watch.rs
@@ -1003,14 +1003,14 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Wire `lib.rs`**
+- [x] **Step 2: Wire `lib.rs`**
 
 ```rust
 pub mod notif_watch;
 pub use notif_watch::{next_backoff, spawn_notif_watcher, WatchState};
 ```
 
-- [ ] **Step 3: wiremock watcher test — poke on change, backoff on error (DoD #4)**
+- [x] **Step 3: wiremock watcher test — poke on change, backoff on error (DoD #4)**
 
 ```rust
 // Backend/crates/poller/tests/notif_watch.rs
@@ -1078,7 +1078,7 @@ async fn change_in_signal_pokes_the_loop() {
 }
 ```
 
-- [ ] **Step 4: Test, clippy, commit**
+- [x] **Step 4: Test, clippy, commit**
 
 ```bash
 cd Backend
@@ -1111,7 +1111,7 @@ git commit -m "feat(poller): notif watcher — staggered lanes + exp backoff (25
 **Interfaces produced in `poller` (the FetchOutcome gate — DoD #7):**
 - `pub async fn run_anti_drift(pool: &store::PgPool, tenant_id: Uuid, outcome: &FetchOutcome) -> Result<(), store::StoreError>` — **takes `&FetchOutcome`, not a `HashSet`.** Runs `resurrect_pending` + `expire_stale_bookings` ONLY when `outcome.fetch_complete`; otherwise returns `Ok(())` immediately (a partial sweep does nothing). This is the type-level gate: to run anti-drift you must PRODUCE a `FetchOutcome`, and the function still double-checks `fetch_complete` for the rotating-window case (a full sweep that hit page failures is `fetch_complete=false`, so it is also correctly skipped).
 
-- [ ] **Step 1: Write `store::bookings`**
+- [x] **Step 1: Write `store::bookings`**
 
 ```rust
 // Backend/crates/store/src/bookings.rs
@@ -1251,7 +1251,7 @@ pub async fn resurrect_pending(
 }
 ```
 
-- [ ] **Step 2: Wire `store::lib.rs`**
+- [x] **Step 2: Wire `store::lib.rs`**
 
 ```rust
 pub mod bookings;
@@ -1262,7 +1262,7 @@ pub use bookings::{
 
 > If `store` does not already expose a `StoreError`, the poller wraps `sqlx::Error` via `Display` (`.to_string()`) exactly as `executor` does — see Step 3's `StoreError` (a poller-local error). Do NOT add a direct `sqlx` dependency to `poller`'s production deps; the poller consumes `store`'s `sqlx::Error` only through `store`'s functions and maps it by `to_string()`.
 
-- [ ] **Step 3: Write `poller::antidrift` (the FetchOutcome gate — DoD #7)**
+- [x] **Step 3: Write `poller::antidrift` (the FetchOutcome gate — DoD #7)**
 
 ```rust
 // Backend/crates/poller/src/antidrift.rs
@@ -1308,14 +1308,14 @@ pub async fn run_anti_drift(
 }
 ```
 
-- [ ] **Step 4: Wire `lib.rs`**
+- [x] **Step 4: Wire `lib.rs`**
 
 ```rust
 pub mod antidrift;
 pub use antidrift::{run_anti_drift, StoreError};
 ```
 
-- [ ] **Step 5: Postgres test — partial sweep does NOT expire; full sweep does (DoD #7)**
+- [x] **Step 5: Postgres test — partial sweep does NOT expire; full sweep does (DoD #7)**
 
 ```rust
 // Backend/crates/poller/tests/antidrift_pg.rs
@@ -1417,7 +1417,7 @@ Add the test-only `sqlx` dev-dep (production `poller` stays free of a direct `sq
 cd Backend && cargo add --package poller --dev sqlx --features postgres,runtime-tokio-rustls,macros,uuid,chrono && cd ..
 ```
 
-- [ ] **Step 6: Test, clippy, commit**
+- [x] **Step 6: Test, clippy, commit**
 
 ```bash
 cd Docker && docker compose up -d tower-postgres && cd ..
@@ -1470,7 +1470,7 @@ Expected: the partial-sweep-never-expires and complete-sweep-does test passes; `
 
 `booking_id_i64 = booking.booking_id.parse::<i64>().unwrap_or(0)`; `request_ids` = the booking's numeric `request_id` (if parseable) as a one-element slice, else empty. `st.self_email` is fetched once via `executor::fetch_self_email` on first need and cached.
 
-- [ ] **Step 1: Add `store::update_booking_status`** (additive; needed by the pipeline)
+- [x] **Step 1: Add `store::update_booking_status`** (additive; needed by the pipeline)
 
 Append to `Backend/crates/store/src/bookings.rs` and re-export:
 
@@ -1510,7 +1510,7 @@ pub use bookings::update_booking_status;
 
 > Column names (`accept_latency_ms`, `auto_accepted`, `rule_matched`) MUST be confirmed against `store`'s migration before proceeding; adjust the binds to the real schema if they differ.
 
-- [ ] **Step 2: Add `executor::release_claim_auto`**
+- [x] **Step 2: Add `executor::release_claim_auto`**
 
 ```rust
 // Backend/crates/executor/src/release.rs
@@ -1543,7 +1543,7 @@ impl ExecutorHandle {
 pub mod release;
 ```
 
-- [ ] **Step 3: real-Redis test for `release_claim_auto` (proves retry-after-release)**
+- [x] **Step 3: real-Redis test for `release_claim_auto` (proves retry-after-release)**
 
 ```rust
 // Backend/crates/executor/tests/release_claim.rs
@@ -1570,7 +1570,7 @@ async fn release_allows_reclaim() {
 }
 ```
 
-- [ ] **Step 4: Extend `PollerState` with compiled rules + match state**
+- [x] **Step 4: Extend `PollerState` with compiled rules + match state**
 
 Add to `state.rs` `PollerState`:
 
@@ -1585,7 +1585,7 @@ pub match_state: MatchState,
 
 Initialize `rules`/`rule_meta` to empty `Arc::new(vec![])` and `match_state` to `MatchState::default()` in `PollerState::new` (Task 6 focuses on the pipeline; loading rules from `store` is a thin call the account bootstrap does — a `store::load_active_rules(pool, tenant_id) -> Vec<(Uuid, AcceptRule, i64, i64)>` helper, added additively; if `store` lacks it, the bootstrap builds `AcceptRule`s from `store::models::accept_rule` rows and parses `AcceptRule.id = uuid.to_string()`).
 
-- [ ] **Step 5: Write `dispatch.rs`**
+- [x] **Step 5: Write `dispatch.rs`**
 
 ```rust
 // Backend/crates/poller/src/dispatch.rs
@@ -1763,7 +1763,7 @@ async fn ensure_self_email(shared: &PollerShared, st: &mut PollerState) -> Strin
 }
 ```
 
-- [ ] **Step 6: Finalize `poll_once` + the restore contract in `schedule.rs`**
+- [x] **Step 6: Finalize `poll_once` + the restore contract in `schedule.rs`**
 
 Replace `poll_once` with the real body and add `ensure_restored_then_spawn`:
 
@@ -1832,7 +1832,7 @@ pub async fn ensure_restored_then_spawn(shared: Arc<PollerShared>, st: PollerSta
 }
 ```
 
-- [ ] **Step 7: Wire `lib.rs`**
+- [x] **Step 7: Wire `lib.rs`**
 
 ```rust
 pub mod dispatch;
@@ -1840,7 +1840,7 @@ pub use dispatch::{dispatch_booking, DispatchResult, RuleMeta};
 pub use schedule::ensure_restored_then_spawn;
 ```
 
-- [ ] **Step 8: Pipeline test (wiremock SPX + real Redis + real PG)**
+- [x] **Step 8: Pipeline test (wiremock SPX + real Redis + real PG)**
 
 ```rust
 // Backend/crates/poller/tests/dispatch_pipeline.rs
@@ -1861,7 +1861,7 @@ pub use schedule::ensure_restored_then_spawn;
 
 > The full test body is left as a fill-in with an EXACT checklist (above) rather than verbatim code because it composes four real subsystems and its precise `PollerShared`/`PollerState` construction depends on the `store::load_active_rules` shape finalized in Step 4 — the implementer wires it against the compiled types. It MUST assert: (1) first `dispatch_booking` → `Accepted`; (2) second → `Duplicate`; (3) `bookings.status == 'accepted'`; (4) `st.dedup.is_known(id)` is true after the win.
 
-- [ ] **Step 9: Test, clippy, commit**
+- [x] **Step 9: Test, clippy, commit**
 
 ```bash
 cd Docker && docker compose up -d tower-postgres tower-redis && cd ..
@@ -1905,7 +1905,7 @@ git commit -m "feat(poller): accept dispatch pipeline (claim→accept→classify
 - Response 200: `{"ok":true,"cookies":{"fms_user_skey":"...","fms_user_id":"...","fms_user_agency_id":"...","csrftoken":"...","spx_uk":"...","spx_cid":"...","spx_uid":"...","spx_agid":"...","spx_st":"...","ds":"...","spx_admin_device_id":"..."}}` — the 11 SPX cookie fields (missing ones = `""`).
 - Failure/unavailable: `{"ok":false,"error":"..."}` or a non-2xx / connection error → the poller treats ALL of these as "tier 1 unavailable" and falls through to tier 2 (never a hard failure — tier 2/3 exist exactly for this, correction #2 rationale).
 
-- [ ] **Step 1: Write `spx-client::login`** (tier 2/3 — needs a Set-Cookie-capturing client)
+- [x] **Step 1: Write `spx-client::login`** (tier 2/3 — needs a Set-Cookie-capturing client)
 
 ```rust
 // Backend/crates/spx-client/src/login.rs
@@ -1998,7 +1998,7 @@ impl SpxClient {
 
 > **This module has intentional `TODO(impl)` bodies for the wreq-specific plumbing (Set-Cookie capture + manual redirect follow), because the exact `wreq 6.0.0-rc.29` response-header + redirect-control API could not be fully read for this plan.** The implementer fills these against the installed `wreq` (its API is reqwest-shaped: `res.headers().get_all(reqwest::header::SET_COOKIE)`, `ClientBuilder::redirect(Policy::none())`). The wiremock test in Step 4 pins the REQUIRED behavior (success == captured `fms_user_skey`), so a correct fill is verifiable.
 
-- [ ] **Step 2: Wire `spx-client::lib.rs`**
+- [x] **Step 2: Wire `spx-client::lib.rs`**
 
 ```rust
 pub mod login;
@@ -2006,7 +2006,7 @@ pub mod login;
 
 (The methods are inherent `impl SpxClient` — already reachable via the `SpxClient` re-export.)
 
-- [ ] **Step 3: Write `poller::login`** (tier chain + sidecar client + relogin triggers)
+- [x] **Step 3: Write `poller::login`** (tier chain + sidecar client + relogin triggers)
 
 ```rust
 // Backend/crates/poller/src/login.rs
@@ -2151,7 +2151,7 @@ pub fn wib_day(now: chrono::DateTime<chrono::Utc>) -> String {
 }
 ```
 
-- [ ] **Step 4: Wire `poller::lib.rs`** + tests
+- [x] **Step 4: Wire `poller::lib.rs`** + tests
 
 ```rust
 pub mod login;
@@ -2191,7 +2191,7 @@ async fn sidecar_down_falls_through_to_api() {
 
 > Both wiremock login tests depend on the `spx-client::login` Set-Cookie capture being filled in (Step 1's `TODO(impl)`). If the implementer has not yet wired `login_post_capture`, `sidecar_down_falls_through_to_api` will fail at tier 2 — that failure is the SIGNAL that Step 1 is incomplete, not a flaky test.
 
-- [ ] **Step 5: Test, clippy, commit**
+- [x] **Step 5: Test, clippy, commit**
 
 ```bash
 cd Backend
@@ -2217,27 +2217,27 @@ git commit -m "feat(poller,spx-client): 3-tier auto-login (tier2/3 in-proc + tie
 **Interfaces produced:**
 - No new public functions — this task is pure wiring inside `poll_once` using Task 7's already-shipped, already-tested `login` module.
 
-- [ ] **Step 1: Add credential + sidecar fields**
+- [x] **Step 1: Add credential + sidecar fields**
 
 Add to `PollerShared` (`state.rs`): `pub sidecar: Arc<crate::login::SidecarClient>`. Add to `PollerState`: `pub username: secrecy::SecretString`, `pub password: secrecy::SecretString`, both required constructor parameters on `PollerState::new` (update every existing call site across `poller`'s tests — grep for `PollerState::new` first, there are several from Tasks 1/2/5/6). Use `secrecy = "0.10"` (matches the version already pinned in `spx-client`'s `Cargo.toml` from Fase 3 — re-verify with `cargo add --package poller secrecy@0.10 --dry-run` before assuming; do not introduce a second/different secrecy version into the workspace).
 
-- [ ] **Step 2: Wire the check + trigger into `poll_once`**
+- [x] **Step 2: Wire the check + trigger into `poll_once`**
 
 At the end of `poll_once`'s existing body (after anti-drift), add the relogin check described above. Keep it a plain sequential `if` — this must run on the SAME task/cycle as the rest of `poll_once`, not spawned, so a relogin-in-progress naturally blocks that account's next accept dispatch (correct: dispatching accepts with a session known to be stale would just produce more `Auth` outcomes).
 
-- [ ] **Step 3: Test — reactive trigger fires and resets the counter**
+- [x] **Step 3: Test — reactive trigger fires and resets the counter**
 
 Real-Redis/Postgres-free test (pure `poll_once` logic against a wiremock SPX server + wiremock sidecar): drive a `PollerState` with `consecutive_401s = 3` into a `poll_once` cycle (empty booking pool is fine — the relogin check runs regardless of dispatch results), mock the sidecar to return valid cookies, assert: `st.cookies` changed to the new value, `st.consecutive_401s == 0` afterward, one HTTP call was made to the sidecar's `/login`.
 
-- [ ] **Step 4: Test — failed relogin doesn't crash and doesn't get stuck retrying every field wrongly**
+- [x] **Step 4: Test — failed relogin doesn't crash and doesn't get stuck retrying every field wrongly**
 
 Same shape, but sidecar AND api AND form all fail (matching Task 7's `all_tiers_failing_returns_none_not_a_hard_error` pattern). Assert: `poll_once` returns normally (no panic), `st.consecutive_401s` stays `>= 3` (so the NEXT cycle tries again), `st.cookies` unchanged (never partially overwritten with `None`/empty).
 
-- [ ] **Step 5: Test — daily relogin fires independent of 401 count**
+- [x] **Step 5: Test — daily relogin fires independent of 401 count**
 
 `st.consecutive_401s = 0` (healthy), `st.last_daily_relogin_day` set to a day BEFORE `login::wib_day(chrono::Utc::now())` (yesterday, computed relative to real now — no `tokio::time::pause` needed here since `wib_day` takes an explicit `DateTime<Utc>` rather than reading a clock itself, matching Task 7's own test style). Assert relogin fires (sidecar mock hit) and `st.last_daily_relogin_day` updates to today.
 
-- [ ] **Step 6: Full verification**
+- [x] **Step 6: Full verification**
 
 ```bash
 cd Backend
@@ -2272,7 +2272,7 @@ success and a safe no-op-retry-next-cycle on failure."
 
 **Design note:** Watchdog only guards the ONE `primary_account_id()` account (the `PORTAL_USERNAME` analog), not every account — a faithful port of the reference `ensureDurablePollerAlive` (not a health-check of all accounts). It writes the heartbeat key but builds NO consumer (that key is aspirational until Fase 8).
 
-- [ ] **Step 1: Write `watchdog.rs`**
+- [x] **Step 1: Write `watchdog.rs`**
 
 ```rust
 // Backend/crates/poller/src/watchdog.rs
@@ -2332,14 +2332,14 @@ pub fn spawn_watchdog(
 
 > `PollerShared.executor.redis` must be reachable from `poller`; if `RedisPool.conn` is not `pub` on `ExecutorHandle`, add a thin `pub async fn ExecutorHandle::heartbeat_set(&self, key, val_ms, ttl)` to `executor` (additive) and call THAT instead — do not reach into private fields. Prefer the public helper.
 
-- [ ] **Step 2: Wire `lib.rs`**
+- [x] **Step 2: Wire `lib.rs`**
 
 ```rust
 pub mod watchdog;
 pub use watchdog::{heartbeat, spawn_watchdog};
 ```
 
-- [ ] **Step 3: Watchdog recreate test (DoD #6)**
+- [x] **Step 3: Watchdog recreate test (DoD #6)**
 
 ```rust
 // Backend/crates/poller/tests/watchdog.rs
@@ -2378,7 +2378,7 @@ async fn watchdog_recreates_dead_primary_within_60s() {
 
 > Note: `tokio::time::interval`'s FIRST `tick()` completes immediately; the test accounts for this. The Task-14 integration variant asserts the REAL `spawn_watchdog` calls its `respawn` closure against a real (empty) `shared.accounts` map.
 
-- [ ] **Step 4: Test, clippy, commit**
+- [x] **Step 4: Test, clippy, commit**
 
 ```bash
 cd Backend
@@ -2408,7 +2408,7 @@ git commit -m "feat(poller): durable-primary watchdog (60s recreate) + heartbeat
 
 **Design note:** Chromium is NOT bundled by chromiumoxide — it drives an EXTERNAL browser. The Docker image must install one (`chromium` on Debian) and the sidecar points chromiumoxide at it via `BrowserConfig::builder().chrome_executable(path)` (from `CHROME_BIN`, default `/usr/bin/chromium`). Use `.no_sandbox()` (containers) + the reference's speed/stealth args. Every browser error is caught and returned as `Err` — a chromiumoxide/Chromium crash must NEVER take down this process (and it is a SEPARATE process from `reactor-core`, so even a hard abort cannot touch the hot-path dedup/quota state — correction #2).
 
-- [ ] **Step 1: Add deps**
+- [x] **Step 1: Add deps**
 
 ```bash
 cd Backend
@@ -2420,7 +2420,7 @@ cd ..
 
 Confirm `cargo deny check` is still `advisories ok, bans ok, licenses ok, sources ok` after this add (research says it is — chromiumoxide's whole subtree is already-allowed licenses; `reqwest` 0.13 enters `auth-sidecar` as a second HTTP client but `bans.multiple-versions=warn` tolerates it).
 
-- [ ] **Step 2: Write `browser.rs`**
+- [x] **Step 2: Write `browser.rs`**
 
 ```rust
 // Backend/bin/auth-sidecar/src/browser.rs
@@ -2545,7 +2545,7 @@ fn cdp(e: CdpError) -> String {
 
 > The exact `chromiumoxide::error` type path (`CdpError`) and `Cookie` field access (`.name`/`.value`) were read from the 0.9.1 source; still, **the implementer should `cargo build -p auth-sidecar` early to confirm the error type import path and the `Cookie` struct's exact field types (they come from `chromiumoxide_cdp::cdp::browser_protocol::network::Cookie`).** Adjust the `cdp()` mapper import if the error enum name differs.
 
-- [ ] **Step 3: Wire `main.rs` `/login` route**
+- [x] **Step 3: Wire `main.rs` `/login` route**
 
 ```rust
 // Backend/bin/auth-sidecar/src/main.rs (additions)
@@ -2612,7 +2612,7 @@ async fn login(Json(req): Json<LoginReq>) -> Json<Value> {
 
 Keep the existing `healthz`, `main`, `shutdown_signal` unchanged.
 
-- [ ] **Step 4: Docker — install Chromium**
+- [x] **Step 4: Docker — install Chromium**
 
 Edit `Docker/auth-sidecar.Dockerfile`'s runtime stage to install `chromium` and set `CHROME_BIN`:
 
@@ -2628,7 +2628,7 @@ ENV CHROME_BIN=/usr/bin/chromium
 
 (Replace the existing runtime `apt-get install` line; keep the `useradd`, `COPY --from=builder`, `USER tower`, `EXPOSE 8082`, `ENTRYPOINT`.) **Task concern:** the image grows ~300MB; the build stage also now compiles chromiumoxide's larger dep tree — note in the commit that the sidecar image is intentionally heavier than `reactor-core`'s. Chromium under `USER tower` needs `--no-sandbox` (set in `browser.rs`).
 
-- [ ] **Step 5: Handler parse/shape test (DoD #5 sidecar half)**
+- [x] **Step 5: Handler parse/shape test (DoD #5 sidecar half)**
 
 ```rust
 // in Backend/bin/auth-sidecar/src/main.rs #[cfg(test)] mod tests
@@ -2662,7 +2662,7 @@ async fn login_returns_ok_false_when_browser_unavailable() {
 
 > This test intentionally does NOT require a browser: it proves the endpoint parses the contract and returns the `ok:false` shape when Chromium is absent — the design doc's DoD #5 explicitly scopes the sidecar test to "endpoint receives request and returns cookies [shape]" rather than an end-to-end SPX login. A separate, MANUALLY-run smoke (documented in the commit message) drives a real login against a live SPX when a Chromium is present.
 
-- [ ] **Step 6: Build, test, clippy, deny, commit**
+- [x] **Step 6: Build, test, clippy, deny, commit**
 
 ```bash
 cd Backend
@@ -2697,7 +2697,7 @@ Expected: the handler test passes (ok:false when Chromium absent); `cargo deny c
 
 **Design note (fire-and-forget — correction #6):** notifier has NO bus. Each `notify_*` builds the message, POSTs to WAHA (`{waha_url}/api/sendText` with `X-Api-Key` header, body `{session, chatId, text}`) for each parsed chatId, and optionally POSTs the n8n webhook — all best-effort. The caller (poller `finalize_win` / agency-loss branch) does `tokio::spawn(async move { notifier::notify_accepted(...).await; })` and drops the handle. A WAHA failure must NEVER propagate — DoD #8 tests this by making WAHA return 500 and asserting the sender still returns `()`.
 
-- [ ] **Step 1: Add deps**
+- [x] **Step 1: Add deps**
 
 ```bash
 cd Backend
@@ -2712,7 +2712,7 @@ cargo add --package notifier --dev tokio --features rt-multi-thread,macros,time
 cd ..
 ```
 
-- [ ] **Step 2: Write `message.rs` (port the REAL templates)**
+- [x] **Step 2: Write `message.rs` (port the REAL templates)**
 
 Port `webhook.ts`'s canonical block. The key shape (verbatim from the reference): a `buildTicketBlock` with a type line (`FTL CENTRAL ON CALL ( COC )` vs `FTL REGULER ( REG )` — `isCoc` = booking name starts `SPXID`), a `—`×25 divider, aligned `Label   : value` rows (`Booking [ id ] name`, `Request [ id ]`, `Onsite [ id ]`, `Station`, `Rute` (` → ` joined), `Armada`, `Periode` (DD/MM/YYYY), `Standby` (minutes-from-midnight → HH:MM)), and an optional `🔔 : <link>` footer. Accepted messages prepend `*TIKET DI TERIMA OLEH SYSTEM[ - <label>]*`.
 
@@ -2922,7 +2922,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Write `waha.rs` + `lib.rs`** (fire-and-forget senders)
+- [x] **Step 3: Write `waha.rs` + `lib.rs`** (fire-and-forget senders)
 
 ```rust
 // Backend/crates/notifier/src/waha.rs
@@ -3065,7 +3065,7 @@ pub async fn notify_driver_assigned(settings: &BotSettings, tx_id: &str, booking
 }
 ```
 
-- [ ] **Step 4: Fire-and-forget test — WAHA failure never propagates (DoD #8)**
+- [x] **Step 4: Fire-and-forget test — WAHA failure never propagates (DoD #8)**
 
 ```rust
 // Backend/crates/notifier/tests/waha_mock.rs
@@ -3112,7 +3112,7 @@ async fn healthy_waha_receives_sendtext() {
 
 > The `booking()` helper is unused by the two tests below (they construct `NotifyBooking` inline via `..Default::default()`) — keep it only if you add more cases, otherwise delete it to avoid a dead-code warning. The load-bearing assertions are: (1) a 500 does not propagate; (2) a healthy WAHA receives exactly one sendText.
 
-- [ ] **Step 5: Test, clippy, commit**
+- [x] **Step 5: Test, clippy, commit**
 
 ```bash
 cd Backend
@@ -3145,7 +3145,7 @@ git commit -m "feat(notifier): WAHA + n8n fire-and-forget + ported webhook.ts me
 
 **Design note (deny.toml — the Fase-5 exception):** `web-push-native` pulls `rsa` transitively via `jwt-simple` (VAPID's ES256 JWT signer). `rsa` triggers `RUSTSEC-2023-0071` (Marvin timing sidechannel). **VAPID signs ONLY with ECDSA P-256 (ES256) — the `rsa` code path is never invoked — and there is no fixed `rsa` release.** So Fase 5 adds `RUSTSEC-2023-0071` to `deny.toml`'s `[advisories] ignore` with a justifying comment. This is an UNREACHABLE-CODE advisory ignore, NOT a copyleft license admission (the MPL-2.0 landmine was avoided entirely by choosing `web-push-native` over `web-push`). Do NOT add MPL-2.0. Do NOT add any copyleft license.
 
-- [ ] **Step 1: Add deps**
+- [x] **Step 1: Add deps**
 
 ```bash
 cd Backend
@@ -3166,7 +3166,7 @@ cd Backend && cargo tree -p notifier -i p256 && cargo tree -p notifier -i jwt-si
 
 Expect `p256 0.13.x` and `jwt-simple 0.12.x` (single versions). If a duplicate appears, pin `notifier`'s `p256`/`jwt-simple` to the exact versions `web-push-native` uses.
 
-- [ ] **Step 2: Add the advisory ignore to `deny.toml`**
+- [x] **Step 2: Add the advisory ignore to `deny.toml`**
 
 Edit `Backend/deny.toml`'s `[advisories]` section. It currently has no `ignore` key; add one:
 
@@ -3187,7 +3187,7 @@ ignore = ["RUSTSEC-2023-0071"]
 
 Do NOT touch `[licenses]` (no new license needed), `[bans]`, `[sources]`, or `private.ignore`.
 
-- [ ] **Step 3: Write `push_vapid.rs`**
+- [x] **Step 3: Write `push_vapid.rs`**
 
 ```rust
 // Backend/crates/notifier/src/push_vapid.rs
@@ -3367,14 +3367,14 @@ pub async fn send_push_to_account(
 
 > **`Auth::clone_from_slice` / `p256::PublicKey::from_sec1_bytes` / `ES256KeyPair::from_bytes` / the `http::Request`→`wreq` replay are best-effort; verify each against the installed versions.** `Auth = GenericArray<u8, U16>` (from web-push-native's `pub type Auth`); the auth secret is exactly 16 bytes. If `wreq`'s request builder does not accept `.body(Vec<u8>)` directly, wrap it per wreq's body API. The wiremock test in Step 5 pins the required behavior (a valid subscription yields a POST to the endpoint with `Content-Encoding: aes128gcm` + an `Authorization: vapid …` header).
 
-- [ ] **Step 4: Wire `lib.rs`**
+- [x] **Step 4: Wire `lib.rs`**
 
 ```rust
 pub mod push_vapid;
 pub use push_vapid::{build_push_request, send_push_to_account, PushPayload, PushSubscription, VapidConfig};
 ```
 
-- [ ] **Step 5: Push test (build shape + send via wiremock)**
+- [x] **Step 5: Push test (build shape + send via wiremock)**
 
 ```rust
 // Backend/crates/notifier/tests/push_mock.rs
@@ -3412,7 +3412,7 @@ fn build_push_request_has_encryption_and_vapid_headers() {
 
 > This test needs REAL base64url key material (32-byte VAPID private, 65-byte uncompressed P-256 public for the subscription, 16-byte auth). The implementer generates them once (e.g. `p256::SecretKey::random(&mut OsRng)` → encode) and pastes the vectors; the assertion is the built request's shape (POST + `aes128gcm` + `vapid …`). A live-endpoint send is verified manually against a real browser subscription, documented in the commit.
 
-- [ ] **Step 6: Test, clippy, deny, commit**
+- [x] **Step 6: Test, clippy, deny, commit**
 
 ```bash
 cd Backend
@@ -3447,7 +3447,7 @@ Expected: `cargo deny check` prints `advisories ok, bans ok, licenses ok, source
 - `pub async fn ws_handler(ws: WebSocketUpgrade, State(hub): State<Arc<Hub>>, session/account query) -> Response` — upgrade → register the socket under its `session_id` AND (if present) `acct:<account_id>`; spawn a recv task (handle Pong/Close) and a send task (forward from the socket's mpsc + a 30s ping); unregister on close.
 - `pub fn ws_router(hub: Arc<Hub>) -> Router` — mounts `GET /ws` (mountable into `reactor-core` in Fase 6).
 
-- [ ] **Step 1: Add deps**
+- [x] **Step 1: Add deps**
 
 ```bash
 cd Backend
@@ -3466,7 +3466,7 @@ cd ..
 
 > `tokio-tungstenite` is a **dev-dependency ONLY** (a WS client to drive the server in tests). Production `ws-hub` uses ONLY axum's `ws` — Task 14 asserts no `tokio-tungstenite` in normal edges. Confirm `tokio-tungstenite` resolves to an allowed license (it is `MIT` — verify with `cargo deny check`).
 
-- [ ] **Step 2: Write `events.rs` (port hub.ts:6-20)**
+- [x] **Step 2: Write `events.rs` (port hub.ts:6-20)**
 
 ```rust
 // Backend/crates/ws-hub/src/events.rs
@@ -3524,7 +3524,7 @@ impl WsEvent {
 }
 ```
 
-- [ ] **Step 3: Write `hub.rs` (registry + upgrade handler + 30s ping)**
+- [x] **Step 3: Write `hub.rs` (registry + upgrade handler + 30s ping)**
 
 ```rust
 // Backend/crates/ws-hub/src/hub.rs
@@ -3673,7 +3673,7 @@ pub fn ws_router(hub: Arc<Hub>) -> Router {
 }
 ```
 
-- [ ] **Step 4: Write `lib.rs`**
+- [x] **Step 4: Write `lib.rs`**
 
 ```rust
 // Backend/crates/ws-hub/src/lib.rs
@@ -3689,7 +3689,7 @@ pub use hub::{ws_handler, ws_router, Hub, WsQuery};
 // Task 13 adds: pub mod bridge;
 ```
 
-- [ ] **Step 5: Event serde test + local delivery test**
+- [x] **Step 5: Event serde test + local delivery test**
 
 ```rust
 // Backend/crates/ws-hub/tests/events_serde.rs
@@ -3757,7 +3757,7 @@ async fn account_channel_delivers_to_connected_socket() {
 }
 ```
 
-- [ ] **Step 6: Test, clippy, commit**
+- [x] **Step 6: Test, clippy, commit**
 
 ```bash
 cd Backend
@@ -3793,7 +3793,7 @@ Expected: event serde matches the reference wire shape; a real WS client receive
 
 **Design note (avoid a poller→ws-hub dependency):** to keep `poller` from depending on `ws-hub`, the poller-side publisher takes a pre-serialized `payload: &str` (the poller builds the JSON itself, or a tiny shared `WsEvent` lives in a leaf crate). Simplest: `RedisPublisher::publish(channel, payload)` takes a `&str`, and the poller constructs the JSON via `serde_json::json!({"type":"ticket_accepted","data":{…}})`. ws-hub owns the `WsEvent` enum for its own serialization; the wire format is a shared CONTRACT (the JSON shape from Task 12), not a shared type. Document the two `type` strings the poller emits in Fase 5 (`ticket_accepted`, `new_tickets`) so they match `WsEvent` exactly.
 
-- [ ] **Step 1: Write `ws-hub::bridge`**
+- [x] **Step 1: Write `ws-hub::bridge`**
 
 ```rust
 // Backend/crates/ws-hub/src/bridge.rs
@@ -3841,14 +3841,14 @@ pub async fn spawn_bridge(hub: Arc<Hub>, redis_url: &str) -> Result<JoinHandle<(
 
 > If `pubsub.psubscribe`/`get_channel_name` differ on redis 1.3.0's `aio::PubSub`, adjust: `get_async_pubsub` returns `aio::PubSub` which exposes `subscribe`/`psubscribe`; `Msg::get_channel_name()` and `get_payload::<String>()` were confirmed in the source. If pattern subscribe is not available, `subscribe` to each channel as sockets register (pass a subscription command channel from `Hub` to the bridge). **Verify before proceeding.**
 
-- [ ] **Step 2: Wire `ws-hub::lib.rs`**
+- [x] **Step 2: Wire `ws-hub::lib.rs`**
 
 ```rust
 pub mod bridge;
 pub use bridge::spawn_bridge;
 ```
 
-- [ ] **Step 3: Write `poller::publish` + wire `PollerShared`**
+- [x] **Step 3: Write `poller::publish` + wire `PollerShared`**
 
 ```rust
 // Backend/crates/poller/src/publish.rs
@@ -3889,7 +3889,7 @@ impl RedisPublisher {
 
 Add `pub redis: Option<RedisPublisher>` to `PollerShared` (Task 6's `finalize_win` and the new-ticket path call it when present). Wire `pub mod publish; pub use publish::RedisPublisher;` into `poller::lib.rs`. In `dispatch::finalize_win`, after the DB status write, add: `if let Some(pub_) = &shared.redis { pub_.publish_ticket_accepted(&st.account_id, serde_json::json!({"bookingId": booking.booking_id, "latencyMs": latency_ms, "autoAccept": true, "rule": meta.name})).await; }`.
 
-- [ ] **Step 4: Two-connection cross-process bridge test (DoD #9)**
+- [x] **Step 4: Two-connection cross-process bridge test (DoD #9)**
 
 ```rust
 // Backend/crates/ws-hub/tests/redis_bridge.rs
@@ -3941,7 +3941,7 @@ async fn publish_on_one_connection_reaches_a_socket_via_the_bridge() {
 
 Add a `#[cfg(any(test, feature = "test-helpers"))]`-gated `pub fn Hub::test_register(&self, channel: &str, tx: UnboundedSender<Message>)` to `hub.rs` that inserts a sender directly (so the test can observe deliveries without a full WS client). Expose `Message` re-export or use `axum::extract::ws::Message` in the test as shown.
 
-- [ ] **Step 5: Test, clippy, commit**
+- [x] **Step 5: Test, clippy, commit**
 
 ```bash
 cd Docker && docker compose up -d tower-redis && cd ..
@@ -3966,7 +3966,7 @@ Expected: the bridge test proves a PUBLISH on one connection reaches a socket vi
 - Consumes: everything from Tasks 1–13.
 - Produces: recorded evidence the Fase 5 Definition of Done (design doc, 10 items) is met.
 
-- [ ] **Step 1: Bring up services, run the full workspace suite from clean containers**
+- [x] **Step 1: Bring up services, run the full workspace suite from clean containers**
 
 ```bash
 cd Docker && docker compose up -d tower-postgres tower-redis && cd ..
@@ -3979,7 +3979,7 @@ cd ..
 
 Expected: every crate's suite is green — `poller` (single-flight/poke, fetch cadence + fetch_complete, hedge on/off, notif backoff + poke, anti-drift gate, dispatch pipeline, login chain fallback, watchdog), `notifier` (message templates, WAHA fire-and-forget, push build shape), `ws-hub` (event serde, local delivery, Redis bridge), `auth-sidecar` (handler ok:false shape), plus the unchanged Fase 1–4 suites (`core-domain`, `spx-client`, `executor`, `store`).
 
-- [ ] **Step 2: Clippy + deny workspace-wide**
+- [x] **Step 2: Clippy + deny workspace-wide**
 
 ```bash
 cd Backend
@@ -3990,7 +3990,7 @@ cd ..
 
 Expected: clippy clean; `cargo deny check` prints `advisories ok, bans ok, licenses ok, sources ok`. The ONLY deny change in Fase 5 is the `RUSTSEC-2023-0071` advisory ignore (Task 11) — **licenses stay clean (no MPL-2.0, no copyleft added).** If licenses fail with `MPL-2.0`, the wrong push crate (`web-push` instead of `web-push-native`) is in the tree — fix it.
 
-- [ ] **Step 3: Per-crate dependency-footprint check (DoD #10)**
+- [x] **Step 3: Per-crate dependency-footprint check (DoD #10)**
 
 ```bash
 cd Backend
@@ -4008,7 +4008,7 @@ Confirm:
 - **`notifier`** has `web-push-native` (NOT `web-push`), `wreq` (NOT a second reqwest of its own — the only `reqwest` in the workspace is chromiumoxide's, isolated to `auth-sidecar`), and `redis`.
 - **`auth-sidecar`** has `chromiumoxide` (expected; it is the ONLY crate that may).
 
-- [ ] **Step 4: Cross-check every DoD item in the design doc (10 items) — cite concrete evidence, do not just assert**
+- [x] **Step 4: Cross-check every DoD item in the design doc (10 items) — cite concrete evidence, do not just assert**
 
 Read `Docs/superpowers/specs/2026-07-13-fase-5-poller-notifier-wshub-design.md`'s "Definition of Done — Fase 5" and map each item to its test:
 1. Single-flight BY CONSTRUCTION + poke wakes early (paused time) — `poller/tests/schedule_singleflight.rs` (`poll_cycles_never_overlap`, `poke_wakes_before_full_interval`) (Task 1).
@@ -4024,7 +4024,7 @@ Read `Docs/superpowers/specs/2026-07-13-fase-5-poller-notifier-wshub-design.md`'
 
 If any item lacks green evidence, STOP and fix it before checking the box — do not check a box on an aspiration.
 
-- [ ] **Step 5: Mark this plan complete — with the STRENGTHENED checkbox-corruption warning**
+- [x] **Step 5: Mark this plan complete — with the STRENGTHENED checkbox-corruption warning**
 
 Check every remaining real `- [ ]` step checkbox in THIS file to `- [x]`. Then IMMEDIATELY verify no prose was corrupted.
 
@@ -4044,7 +4044,7 @@ Check every remaining real `- [ ]` step checkbox in THIS file to `- [x]`. Then I
 > ```
 > 3. `git diff` the plan file and eyeball EVERY changed line: each must be a real `- [ ] **Step …` → `- [x] **Step …`. If any changed line is prose/code containing an embedded `- [ ]` (like this warning), REVERT that line by hand. The two counts in step 2 must be equal.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add Backend Docs/superpowers/plans/2026-07-13-fase-5-poller-notifier-wshub.md
