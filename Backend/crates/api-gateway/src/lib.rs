@@ -42,6 +42,10 @@ pub fn build_router(state: AppState) -> Router {
             "/auth/spx-login",
             routes::spx_login::spx_login_router(state.clone()),
         )
+        .nest(
+            "/auth/portal-users",
+            routes::portal_users::portal_users_router(state.clone()),
+        )
         .with_state(state.clone())
         // CORS (Task 7): exact-match allowlist, applied to every route this
         // router produces. Innermost of the three global layers below —
