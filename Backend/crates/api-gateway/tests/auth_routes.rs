@@ -33,6 +33,27 @@ fn redis_url() -> String {
     std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:16379".to_string())
 }
 
+/// A throwaway 32-byte master key for `AppState.master_key` (Task 1) — this
+/// test file never exercises envelope-encryption itself, so a fixed key is
+/// enough to satisfy the field's type.
+fn test_master_key() -> Arc<spx_client::crypto::envelope::MasterKey> {
+    Arc::new(spx_client::crypto::envelope::MasterKey::from_bytes(
+        [7u8; 32],
+    ))
+}
+
+/// Real Redis connection for `AppState.redis` (Task 1's OTP-gate field) —
+/// not `Option`, so a real, live `ConnectionManager` is required to
+/// construct any `AppState` at all, even a test one that never touches the
+/// OTP routes.
+async fn test_redis_manager() -> redis::aio::ConnectionManager {
+    redis::Client::open(redis_url())
+        .expect("open redis client for AppState.redis")
+        .get_connection_manager()
+        .await
+        .expect("connect AppState.redis connection manager")
+}
+
 async fn insert_tenant(pool: &PgPool) -> Uuid {
     let tenant_id = Uuid::new_v4();
     sqlx::query("INSERT INTO tenants (id, name, slug) VALUES ($1, $2, $3)")
@@ -94,6 +115,8 @@ async fn build_state(pool: PgPool, tenant_id: Uuid) -> AppState {
         cors_origins: Arc::new(Vec::new()),
         session_cookie_name: Arc::from(SESSION_COOKIE_NAME),
         cookie_secure: true,
+        master_key: test_master_key(),
+        redis: test_redis_manager().await,
     }
 }
 

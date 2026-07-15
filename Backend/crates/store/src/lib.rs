@@ -7,6 +7,17 @@ pub mod portal_users;
 pub mod quota;
 pub mod tenants;
 
+// `create`/`update`/`delete` are deliberately aliased rather than
+// re-exported bare, same reasoning as `portal_sessions`'s `create`/`delete`
+// aliases below — `store::create`/`store::delete` would be an unhelpfully
+// generic top-level name, and a collision risk against `portal_users`'s own
+// `create`/`delete` re-exports just below. `find_by_label` is already
+// unambiguous. Callers may also always reach these via the qualified
+// `store::agency_credentials::...` path regardless.
+pub use agency_credentials::{
+    create as create_agency_credential, delete as delete_agency_credential, find_by_label,
+    update as update_agency_credential,
+};
 pub use bookings::{
     expire_stale_bookings, resurrect_pending, update_booking_status, upsert_booking,
     BookingStatusUpdate, BookingUpsert, StaleOutcome,
@@ -23,7 +34,13 @@ pub use portal_sessions::{
     create as create_portal_session, delete as delete_portal_session, find_valid_by_hash,
     touch_last_seen,
 };
-pub use portal_users::{find_by_id, find_by_username};
+// `create`/`list_all`/`delete` aliased the same way as `agency_credentials`'s
+// re-exports above, for the same reason (avoids a bare `store::create`
+// colliding with `agency_credentials::create`'s own re-export).
+pub use portal_users::{
+    create as create_portal_user, delete as delete_portal_user, find_by_id, find_by_username,
+    list_all as list_all_portal_users,
+};
 pub use quota::{consume_rule_quota, QuotaConsumeOutcome};
 pub use tenants::find_by_slug;
 // Re-export so downstream crates (e.g. executor) can name the pool type without
@@ -2000,14 +2017,11 @@ mod tests {
             .expect("connect app_role pool");
 
         // portal_users lookups, as app_role.
-        let by_username = portal_users::find_by_username(
-            &app_role_pool,
-            tenant_id,
-            "app-role-write-path-owner",
-        )
-        .await
-        .expect("find_by_username as app_role")
-        .expect("seeded portal_user must be found by username as app_role");
+        let by_username =
+            portal_users::find_by_username(&app_role_pool, tenant_id, "app-role-write-path-owner")
+                .await
+                .expect("find_by_username as app_role")
+                .expect("seeded portal_user must be found by username as app_role");
         assert_eq!(by_username.id, portal_user_id.0);
 
         let by_id = portal_users::find_by_id(&app_role_pool, tenant_id, portal_user_id.0)
@@ -2057,6 +2071,427 @@ mod tests {
 
         sqlx::query("DELETE FROM tenants WHERE id = $1")
             .bind(tenant_id)
+            .execute(&pool)
+            .await
+            .ok();
+    }
+
+    // -- Fase 6b Task 1: agency_credentials / portal_users CRUD --
+
+    /// Full round trip for `agency_credentials::{create, find_by_label,
+    /// update, delete}`: created row is found by label with the exact fields
+    /// supplied; `update` replaces username/ciphertext/nonce/key_version and
+    /// a follow-up `find_by_label` sees the NEW values (not the old ones);
+    /// `delete` reports `true` and removes the row (`find_by_label` -> `None`
+    /// afterward); a second `delete` on the now-absent row reports `false`
+    /// (not an error).
+    #[tokio::test]
+    async fn agency_credentials_create_find_update_delete_round_trip() {
+        let pool = connect(&test_database_url()).await.expect("connect");
+        run_migrations(&pool).await.expect("migrate");
+        let tenant_id = insert_test_tenant(&pool).await;
+
+        let created = agency_credentials::create(
+            &pool,
+            tenant_id,
+            "primary",
+            "agent-original",
+            &[0xAA, 0xBB, 0xCC],
+            &[1u8; 12],
+            1,
+        )
+        .await
+        .expect("create agency_credential");
+        assert_eq!(created.tenant_id, tenant_id);
+        assert_eq!(created.label, "primary");
+        assert_eq!(created.username, "agent-original");
+
+        let found = agency_credentials::find_by_label(&pool, tenant_id, "primary")
+            .await
+            .expect("find_by_label query")
+            .expect("just-created row must be found");
+        assert_eq!(found.id, created.id);
+        assert_eq!(found.username, "agent-original");
+        assert_eq!(found.ciphertext, vec![0xAA, 0xBB, 0xCC]);
+        assert_eq!(found.nonce, vec![1u8; 12]);
+        assert_eq!(found.key_version, 1);
+
+        let updated = agency_credentials::update(
+            &pool,
+            tenant_id,
+            "primary",
+            "agent-rotated",
+            &[0xDD, 0xEE],
+            &[2u8; 12],
+            2,
+        )
+        .await
+        .expect("update query")
+        .expect("update must match the existing row and return it");
+        assert_eq!(updated.id, created.id, "update must not change the row id");
+        assert_eq!(updated.username, "agent-rotated");
+        assert_eq!(updated.ciphertext, vec![0xDD, 0xEE]);
+        assert_eq!(updated.nonce, vec![2u8; 12]);
+        assert_eq!(updated.key_version, 2);
+
+        let refound = agency_credentials::find_by_label(&pool, tenant_id, "primary")
+            .await
+            .expect("find_by_label after update")
+            .expect("row must still exist after update");
+        assert_eq!(
+            refound.username, "agent-rotated",
+            "find_by_label must see the UPDATED username, not the original"
+        );
+        assert_eq!(refound.ciphertext, vec![0xDD, 0xEE]);
+
+        let update_missing = agency_credentials::update(
+            &pool,
+            tenant_id,
+            "no-such-label",
+            "irrelevant",
+            &[],
+            &[3u8; 12],
+            1,
+        )
+        .await
+        .expect("update query for a non-existent label");
+        assert!(
+            update_missing.is_none(),
+            "update on a non-existent (tenant_id, label) must return None, not error"
+        );
+
+        let deleted = agency_credentials::delete(&pool, tenant_id, "primary")
+            .await
+            .expect("delete query");
+        assert!(deleted, "delete must report true for a row that existed");
+
+        let after_delete = agency_credentials::find_by_label(&pool, tenant_id, "primary")
+            .await
+            .expect("find_by_label after delete");
+        assert!(
+            after_delete.is_none(),
+            "deleted row must no longer be found by find_by_label"
+        );
+
+        let delete_again = agency_credentials::delete(&pool, tenant_id, "primary")
+            .await
+            .expect("delete query for an already-deleted row");
+        assert!(
+            !delete_again,
+            "deleting an already-absent row must report false, not error"
+        );
+
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_id)
+            .execute(&pool)
+            .await
+            .ok();
+    }
+
+    /// A duplicate `(tenant_id, label)` on `agency_credentials::create` must
+    /// surface as a real Postgres unique-violation (`23505`), NOT some other
+    /// error code — `store` deliberately does not special-case this (see
+    /// `agency_credentials.rs`'s doc comment on `create`); `api-gateway`'s
+    /// `ApiError: From<sqlx::Error>` maps `23505` specifically to `409`, so a
+    /// wrong code here would silently break that mapping.
+    #[tokio::test]
+    async fn agency_credentials_create_duplicate_label_returns_23505() {
+        let pool = connect(&test_database_url()).await.expect("connect");
+        run_migrations(&pool).await.expect("migrate");
+        let tenant_id = insert_test_tenant(&pool).await;
+
+        agency_credentials::create(
+            &pool,
+            tenant_id,
+            "dup-label",
+            "agent-1",
+            &[0x01],
+            &[1u8; 12],
+            1,
+        )
+        .await
+        .expect("first create must succeed");
+
+        let dup_result = agency_credentials::create(
+            &pool,
+            tenant_id,
+            "dup-label",
+            "agent-2",
+            &[0x02],
+            &[2u8; 12],
+            1,
+        )
+        .await;
+        assert!(
+            dup_result.is_err(),
+            "second create with the same (tenant_id, label) must fail"
+        );
+        let err = dup_result.unwrap_err();
+        let db_err = err.as_database_error().expect("expected a database error");
+        assert_eq!(
+            db_err.code().as_deref(),
+            Some("23505"),
+            "expected unique_violation (23505), got: {db_err}"
+        );
+
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_id)
+            .execute(&pool)
+            .await
+            .ok();
+    }
+
+    /// Full round trip for `portal_users::{create, list_all, delete}`: a
+    /// created sub-user is present in `list_all`; after `delete` it is
+    /// absent; deleting an already-absent row reports `false`, not error.
+    #[tokio::test]
+    async fn portal_users_create_list_all_delete_round_trip() {
+        let pool = connect(&test_database_url()).await.expect("connect");
+        run_migrations(&pool).await.expect("migrate");
+        let tenant_id = insert_test_tenant(&pool).await;
+
+        let created = portal_users::create(
+            &pool,
+            tenant_id,
+            "sub-user-1",
+            "bcrypt-hash-1",
+            "Sub User One",
+            false,
+        )
+        .await
+        .expect("create portal_user");
+        assert_eq!(created.tenant_id, tenant_id);
+        assert_eq!(created.username, "sub-user-1");
+        assert!(!created.is_main_account);
+        assert!(created.enabled, "enabled must default to true");
+
+        let listed = portal_users::list_all(&pool, tenant_id)
+            .await
+            .expect("list_all query");
+        assert!(
+            listed.iter().any(|u| u.id == created.id),
+            "just-created sub-user must be present in list_all"
+        );
+
+        let deleted = portal_users::delete(&pool, tenant_id, created.id)
+            .await
+            .expect("delete query");
+        assert!(deleted, "delete must report true for a row that existed");
+
+        let listed_after = portal_users::list_all(&pool, tenant_id)
+            .await
+            .expect("list_all query after delete");
+        assert!(
+            !listed_after.iter().any(|u| u.id == created.id),
+            "deleted sub-user must no longer be present in list_all"
+        );
+
+        let delete_again = portal_users::delete(&pool, tenant_id, created.id)
+            .await
+            .expect("delete query for an already-deleted row");
+        assert!(
+            !delete_again,
+            "deleting an already-absent row must report false, not error"
+        );
+
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_id)
+            .execute(&pool)
+            .await
+            .ok();
+    }
+
+    /// A duplicate `(tenant_id, username)` on `portal_users::create` must
+    /// surface as a real Postgres unique-violation (`23505`), same reasoning
+    /// as `agency_credentials_create_duplicate_label_returns_23505` above —
+    /// `api-gateway`'s `ApiError: From<sqlx::Error>` depends on this exact
+    /// code to map to `409 Conflict`.
+    #[tokio::test]
+    async fn portal_users_create_duplicate_username_returns_23505() {
+        let pool = connect(&test_database_url()).await.expect("connect");
+        run_migrations(&pool).await.expect("migrate");
+        let tenant_id = insert_test_tenant(&pool).await;
+
+        portal_users::create(&pool, tenant_id, "dup-user", "hash-1", "First", false)
+            .await
+            .expect("first create must succeed");
+
+        let dup_result =
+            portal_users::create(&pool, tenant_id, "dup-user", "hash-2", "Second", false).await;
+        assert!(
+            dup_result.is_err(),
+            "second create with the same (tenant_id, username) must fail"
+        );
+        let err = dup_result.unwrap_err();
+        let db_err = err.as_database_error().expect("expected a database error");
+        assert_eq!(
+            db_err.code().as_deref(),
+            Some("23505"),
+            "expected unique_violation (23505), got: {db_err}"
+        );
+
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_id)
+            .execute(&pool)
+            .await
+            .ok();
+    }
+
+    /// Tenant-isolation test for the new CRUD, on BOTH tables at once: seeds
+    /// the SAME label (`agency_credentials`) / username (`portal_users`)
+    /// under two different tenants and confirms every new query
+    /// (`find_by_label`/`list_all`, plus the pre-existing
+    /// `find_by_username`) only ever sees its own tenant's row — mirroring
+    /// `agency_credentials_list_all_isolates_by_tenant`'s and
+    /// `portal_users_find_by_username_isolates_by_tenant`'s established
+    /// pattern, extended to the write-side functions this task adds.
+    #[tokio::test]
+    async fn agency_credentials_and_portal_users_crud_isolates_by_tenant() {
+        let pool = connect(&test_database_url()).await.expect("connect");
+        run_migrations(&pool).await.expect("migrate");
+
+        let tenant_a = insert_test_tenant(&pool).await;
+        let tenant_b = insert_test_tenant(&pool).await;
+
+        // agency_credentials: same label under both tenants.
+        let cred_a = agency_credentials::create(
+            &pool,
+            tenant_a,
+            "shared-label",
+            "tenant-a-agent",
+            &[0xAA],
+            &[1u8; 12],
+            1,
+        )
+        .await
+        .expect("create tenant a credential");
+        let cred_b = agency_credentials::create(
+            &pool,
+            tenant_b,
+            "shared-label",
+            "tenant-b-agent",
+            &[0xBB],
+            &[2u8; 12],
+            1,
+        )
+        .await
+        .expect("create tenant b credential");
+        assert_ne!(cred_a.id, cred_b.id);
+
+        let found_a = agency_credentials::find_by_label(&pool, tenant_a, "shared-label")
+            .await
+            .expect("find_by_label tenant a")
+            .expect("tenant a must find its own row");
+        assert_eq!(found_a.username, "tenant-a-agent");
+        let found_b = agency_credentials::find_by_label(&pool, tenant_b, "shared-label")
+            .await
+            .expect("find_by_label tenant b")
+            .expect("tenant b must find its own row");
+        assert_eq!(found_b.username, "tenant-b-agent");
+
+        // update() under tenant A must not touch tenant B's row.
+        agency_credentials::update(
+            &pool,
+            tenant_a,
+            "shared-label",
+            "tenant-a-agent-rotated",
+            &[0xCC],
+            &[3u8; 12],
+            2,
+        )
+        .await
+        .expect("update tenant a")
+        .expect("update must match tenant a's row");
+        let b_after_a_update = agency_credentials::find_by_label(&pool, tenant_b, "shared-label")
+            .await
+            .expect("find_by_label tenant b after tenant a's update")
+            .expect("tenant b's row must still exist");
+        assert_eq!(
+            b_after_a_update.username, "tenant-b-agent",
+            "tenant a's update must not leak into tenant b's row"
+        );
+
+        // delete() under tenant A must not touch tenant B's row.
+        let deleted_a = agency_credentials::delete(&pool, tenant_a, "shared-label")
+            .await
+            .expect("delete tenant a");
+        assert!(deleted_a);
+        let b_after_a_delete = agency_credentials::find_by_label(&pool, tenant_b, "shared-label")
+            .await
+            .expect("find_by_label tenant b after tenant a's delete");
+        assert!(
+            b_after_a_delete.is_some(),
+            "tenant a's delete must not remove tenant b's row"
+        );
+
+        // portal_users: same username under both tenants.
+        let user_a = portal_users::create(
+            &pool,
+            tenant_a,
+            "shared-username",
+            "hash-a",
+            "Tenant A Sub User",
+            false,
+        )
+        .await
+        .expect("create tenant a portal_user");
+        let user_b = portal_users::create(
+            &pool,
+            tenant_b,
+            "shared-username",
+            "hash-b",
+            "Tenant B Sub User",
+            false,
+        )
+        .await
+        .expect("create tenant b portal_user");
+        assert_ne!(user_a.id, user_b.id);
+
+        let list_a = portal_users::list_all(&pool, tenant_a)
+            .await
+            .expect("list_all tenant a");
+        assert!(list_a.iter().any(|u| u.id == user_a.id));
+        assert!(
+            list_a.iter().all(|u| u.id != user_b.id),
+            "tenant a's list_all must not see tenant b's portal_user"
+        );
+
+        let list_b = portal_users::list_all(&pool, tenant_b)
+            .await
+            .expect("list_all tenant b");
+        assert!(list_b.iter().any(|u| u.id == user_b.id));
+        assert!(
+            list_b.iter().all(|u| u.id != user_a.id),
+            "tenant b's list_all must not see tenant a's portal_user"
+        );
+
+        let found_by_username_a =
+            portal_users::find_by_username(&pool, tenant_a, "shared-username")
+                .await
+                .expect("find_by_username tenant a")
+                .expect("tenant a must find its own user");
+        assert_eq!(found_by_username_a.id, user_a.id);
+
+        // delete() under tenant A must not touch tenant B's portal_user.
+        let user_deleted_a = portal_users::delete(&pool, tenant_a, user_a.id)
+            .await
+            .expect("delete tenant a portal_user");
+        assert!(user_deleted_a);
+        let list_b_after_a_delete = portal_users::list_all(&pool, tenant_b)
+            .await
+            .expect("list_all tenant b after tenant a's delete");
+        assert!(
+            list_b_after_a_delete.iter().any(|u| u.id == user_b.id),
+            "tenant a's delete must not remove tenant b's portal_user"
+        );
+
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_a)
+            .execute(&pool)
+            .await
+            .ok();
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_b)
             .execute(&pool)
             .await
             .ok();

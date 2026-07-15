@@ -22,6 +22,12 @@ executor = { version = "0.1.0", path = "../executor" }
 governor = "0.10.4"
 notifier = { version = "0.1.0", path = "../notifier" }
 poller = { version = "0.1.0", path = "../poller" }
+# Pinned to "1.3.0" explicitly — plain `cargo add` resolves 1.4.0 (latest),
+# which would leave two `redis` majors/minors in the workspace graph
+# alongside `executor`/`poller`'s already-pinned `redis = "1.3.0"`. Same
+# version + feature set (`tokio-comp`, `connection-manager`) as those two, so
+# Cargo unifies a single `redis` build instead of compiling it twice.
+redis = { version = "=1.3.0", features = ["tokio-comp", "connection-manager"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 spx-client = { version = "0.1.0", path = "../spx-client" }

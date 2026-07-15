@@ -146,19 +146,32 @@ async fn build_state() -> AppState {
     // host-dev-friendly alternative. Functionally identical to
     // `load_default()` in production, where TOWER_MASTER_KEY_PATH is always
     // set explicitly and this fallback branch is never reached.
+    // `Arc`-wrapped: Task 1 (6b) threads this SAME loaded key into
+    // `AppState.master_key` below, in addition to the account-bootstrap loop
+    // a few lines down still using it via `&master_key` (an `&Arc<MasterKey>`
+    // deref-coerces to `&MasterKey` at every `decrypt_agency_password` call
+    // site, so that loop needed zero changes). Loaded exactly ONCE — this
+    // used to be a locally-scoped load with no life beyond the bootstrap
+    // loop; it now also outlives it as a first-class `AppState` field so
+    // Fase 6b's `agency_credentials` CRUD handlers can encrypt/decrypt
+    // without a second `load_from_file` call (which would mean two decrypted
+    // copies of the same secret material resident in memory for no reason).
     let master_key_path = env_or(
         "TOWER_MASTER_KEY_PATH",
         "../Docker/secrets/tower_master_key",
     );
-    let master_key = spx_client::crypto::envelope::MasterKey::load_from_file(&master_key_path)
-        .unwrap_or_else(|e| {
-            panic!(
-                "reactor-core: load master key from {master_key_path:?} — set \
+    let master_key = Arc::new(
+        spx_client::crypto::envelope::MasterKey::load_from_file(&master_key_path).unwrap_or_else(
+            |e| {
+                panic!(
+                    "reactor-core: load master key from {master_key_path:?} — set \
                  TOWER_MASTER_KEY_PATH, or for local dev: mkdir -p Docker/secrets && \
                  openssl rand -out Docker/secrets/tower_master_key 32 && chmod 0400 \
                  Docker/secrets/tower_master_key (see Docker/.env.example): {e}"
-            )
-        });
+                )
+            },
+        ),
+    );
 
     // ws-hub Redis pub/sub publisher (Task 13's `RedisPublisher`), wired
     // into `PollerShared` for the first time here. A connect failure is
@@ -180,6 +193,35 @@ async fn build_state() -> AppState {
             None
         }
     };
+
+    // `AppState.redis` — Fase 6b's OTP gate (`POST /auth/request-aa-otp` /
+    // `POST /auth/verify-aa-otp`) generate/store/verify/rate-limit state.
+    // DELIBERATELY a hard `.expect()`, NOT the same graceful
+    // connect-failure-is-a-warn-and-`None` pattern `redis_publisher` just
+    // above uses — disclosed judgment call, not an oversight:
+    // `RedisPublisher` is optional-at-boot because its ONLY consumer (ws
+    // `ticket_accepted` push notifications) is allowed to silently degrade to
+    // a no-op per that field's own doc comment — the REST API and account
+    // polling keep working fine without it. `AppState.redis` has no such
+    // "fine to degrade" consumer: every OTP request genuinely NEEDS Redis to
+    // exist (there is no non-Redis fallback path for "generate a code, store
+    // it, verify it, rate-limit it" — see the design doc's OTP Redis key
+    // convention), and `AppState.redis` is a plain `ConnectionManager` field
+    // (not `Option<ConnectionManager>`, per this task's own interface spec),
+    // so there is no type-level way to represent "not connected yet" without
+    // making EVERY handler that touches OTP state carry its own
+    // reconnect-or-503 logic — worse than failing loudly once, here, at boot,
+    // with a clear diagnostic. `ConnectionManager` itself still transparently
+    // reconnects across any LATER transient Redis blip (that's its whole
+    // purpose) — this `.expect()` only guards the initial connect.
+    let redis = redis::Client::open(redis_url.as_str())
+        .expect("reactor-core: parse REDIS_URL")
+        .get_connection_manager()
+        .await
+        .expect(
+            "reactor-core: connect AppState.redis (OTP gate) — Redis at REDIS_URL must be \
+             reachable at boot; the OTP gate has no non-Redis fallback",
+        );
 
     let poller_shared = Arc::new(poller::PollerShared {
         executor: Arc::new(executor),
@@ -315,6 +357,10 @@ async fn build_state() -> AppState {
         // (no TLS-terminating edge proxy in front of it) — see `state.rs`'s
         // field doc comment.
         cookie_secure: env_or("COOKIE_SECURE", "true").parse().unwrap_or(true),
+        // Same `Arc<MasterKey>` the account-bootstrap loop above already
+        // used via deref coercion — moved in here, not re-loaded.
+        master_key,
+        redis,
     }
 }
 
@@ -577,9 +623,8 @@ mod tests {
         let tower_pool = store::connect(&tower_superuser_url())
             .await
             .expect("connect as tower");
-        let master_key =
-            spx_client::crypto::envelope::MasterKey::load_from_file(&master_key_path)
-                .expect("load test master key back");
+        let master_key = spx_client::crypto::envelope::MasterKey::load_from_file(&master_key_path)
+            .expect("load test master key back");
 
         let good_username = format!("good-agent-{}", Uuid::new_v4().simple());
         let ct = spx_client::crypto::envelope::encrypt_agency_password(
@@ -687,9 +732,8 @@ mod tests {
         let tower_pool = store::connect(&tower_superuser_url())
             .await
             .expect("connect as tower");
-        let master_key =
-            spx_client::crypto::envelope::MasterKey::load_from_file(&master_key_path)
-                .expect("load test master key back");
+        let master_key = spx_client::crypto::envelope::MasterKey::load_from_file(&master_key_path)
+            .expect("load test master key back");
 
         let shared_username = format!("dup-agent-{}", Uuid::new_v4().simple());
 
