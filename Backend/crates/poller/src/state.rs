@@ -167,11 +167,14 @@ pub struct PollerShared {
     /// 7b). Shared (not per-account) since it is a stateless internal-HTTP
     /// client keyed by `account_id` per call, same reuse pattern as `client`.
     pub sidecar: Arc<crate::login::SidecarClient>,
-    /// Placeholder for Task 10's `notifier` hook (fire-and-forget "accepted"/
-    /// "agency-loss" WhatsApp notifications). `None` until that task wires a
-    /// real handle in; `dispatch_booking` only ever fire-and-forgets through
-    /// this, so a `None` here is a safe, inert no-op today.
-    pub notifier: Option<()>,
+    /// Fire-and-forget WAHA/n8n notification settings (Task 10b): `dispatch::finalize_win`
+    /// and the `LostToAgency` branch spawn `notifier::notify_accepted`/`notify_agency_loss`
+    /// through this when present. `Arc` because `BotSettings` is read-only, shared across
+    /// every account's task, and cloned into a `tokio::spawn`'d future per accept — same
+    /// sharing rationale as `client`/`executor`. Still an `Option` (not a bare value)
+    /// because tests that don't exercise notification delivery construct `PollerShared`
+    /// with `notifier: None`, a safe no-op the same way `redis: None` already is.
+    pub notifier: Option<Arc<notifier::BotSettings>>,
     /// ws-hub Redis pub/sub publisher (Task 13): `dispatch::finalize_win`
     /// publishes a `ticket_accepted` event to `acct:<account_id>` through this
     /// when present. Unlike `notifier` above, this is the REAL type (not a

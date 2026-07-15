@@ -1,14 +1,17 @@
 // Backend/crates/poller/src/dispatch.rs
 //! The accept decision pipeline: match → claim (Layer 1+2) → accept HTTP →
 //! classify → agency-dup verify → quota consume → durable record → notify. Ties
-//! Fase 3 (spx-client) + Fase 4 (executor) + Fase 5 together. Task 10's notifier
-//! hook is still a spawn-fire-and-forget placeholder (not this task's scope);
+//! Fase 3 (spx-client) + Fase 4 (executor) + Fase 5 together. Task 10b wires
+//! `notifier::notify_accepted`/`notify_agency_loss` in as `tokio::spawn`'d
+//! fire-and-forget calls (real outbound HTTP to WAHA/n8n — must never block
+//! the hot path) in `finalize_win` and the `LostToAgency` branch below.
 //! Task 13's ws `ticket_accepted` publish (below, in `finalize_win`) is a
 //! cheap in-process `RedisPublisher::publish` call and is awaited inline
 //! rather than spawned, per the Task 13 brief's own wiring snippet.
 use std::time::Instant;
 
 use core_domain::matching::find_best_matching_rule_compiled;
+use core_domain::BookingType;
 use executor::{AgencyDupOutcome, ClaimOutcome};
 use spx_client::{to_core_booking, AcceptReason, SpxBooking};
 use uuid::Uuid;
@@ -137,7 +140,16 @@ pub async fn dispatch_booking(
                         },
                     )
                     .await;
-                    // Task 10 fills the notifier agency-loss spawn here.
+                    // Task 10b: fire-and-forget "agency-loss" WAHA/n8n alert.
+                    if let Some(settings) = shared.notifier.clone() {
+                        let spx_id = booking.id.clone();
+                        let rival = rival_email.clone();
+                        let rule_name = meta.name.clone();
+                        let latency_ms_i64 = latency_ms as i64;
+                        tokio::spawn(async move {
+                            notifier::notify_agency_loss(&settings, &spx_id, &rival, latency_ms_i64, Some(&rule_name)).await;
+                        });
+                    }
                     DispatchResult::LostToAgency { rival: rival_email }
                 }
             }
@@ -244,7 +256,16 @@ async fn finalize_win(
         },
     )
     .await;
-    // Task 10: tokio::spawn(notifier::notify_accepted(...)); ignore Result.
+    // Task 10b: fire-and-forget "accepted" WAHA/n8n notification. Field
+    // mapping verified against SpxBooking's ACTUAL struct (spx-client's
+    // booking.rs), not guessed — see notify_booking_from_spx_booking's doc
+    // comment for the field-by-field rationale (several NotifyBooking fields
+    // have no genuine SpxBooking counterpart and are left at their
+    // `Default` rather than invented).
+    if let Some(settings) = shared.notifier.clone() {
+        let nb = notify_booking_from_spx_booking(booking);
+        tokio::spawn(async move { notifier::notify_accepted(&settings, &nb).await; });
+    }
     if let Some(pub_) = &shared.redis {
         pub_.publish_ticket_accepted(
             &st.account_id,
@@ -256,6 +277,51 @@ async fn finalize_win(
             }),
         )
         .await;
+    }
+}
+
+/// Build `notifier::NotifyBooking` from a real `SpxBooking` (Task 10b). Field
+/// mapping was verified against SpxBooking's ACTUAL struct definition
+/// (`spx-client/src/booking.rs`) and NotifyBooking's ACTUAL struct definition
+/// (`notifier/src/lib.rs`) — not assumed from the plan brief's guessed 1:1
+/// list, which named several fields (`cost_type`, `adhoc_tag`,
+/// `standby_time`, `period_start`, `period_end`, `bidding_ddl`) that do not
+/// actually exist on `SpxBooking` under any name or clear equivalent meaning:
+///
+/// - `booking_id`/`request_id`/`spx_tx_id`/`vehicle_type`/`route_stops`/
+///   `report_station`: identical field names AND meaning on both structs —
+///   direct copy.
+/// - `onsite_id`: same meaning, but `SpxBooking.onsite_id` is `Option<String>`
+///   while `NotifyBooking.onsite_id` is a bare `String` — `unwrap_or_default`.
+/// - `is_coc`: NOT sourced from `SpxBooking.cod` (that field is COD/"cash on
+///   delivery", a distinct concept — proven independent of COC classification
+///   by core_domain's own
+///   `coc_only_treats_spxid_as_coc_even_when_cod_flag_is_false` /
+///   `coc_only_rejects_reguler_even_when_cod_flag_is_true` tests in
+///   `matching.rs`). This codebase's actual definition of "COC" is
+///   `booking_type == BookingType::Spxid` (same signal `coc_only` accept
+///   rules match on, and the same SPXID-prefix detection
+///   `notifier::message::build_ticket_block` itself falls back to internally).
+/// - `booking_name`, `cost_type`, `adhoc_tag`, `standby_time`, `period_start`,
+///   `period_end`, `bidding_ddl`: `SpxBooking` has no field with this name or
+///   an unambiguous same-meaning/same-unit equivalent (`deadline_at` is the
+///   closest candidate for `bidding_ddl`, but it is epoch-MILLISECONDS while
+///   sibling `period_start`/`period_end` are consumed as epoch-SECONDS by
+///   `message::fmt_dmy` — guessing a scale would risk silently planting a
+///   1000x-wrong timestamp for whenever these currently-unused-by-any-template
+///   fields do get wired up). Left at `NotifyBooking::default()`'s value per
+///   the brief's own instruction to default rather than invent.
+fn notify_booking_from_spx_booking(b: &SpxBooking) -> notifier::NotifyBooking {
+    notifier::NotifyBooking {
+        booking_id: b.booking_id.clone(),
+        request_id: b.request_id.clone(),
+        onsite_id: b.onsite_id.clone().unwrap_or_default(),
+        spx_tx_id: b.spx_tx_id.clone(),
+        vehicle_type: b.vehicle_type.clone(),
+        route_stops: b.route_stops.clone(),
+        report_station: b.report_station.clone(),
+        is_coc: b.booking_type == BookingType::Spxid,
+        ..Default::default()
     }
 }
 

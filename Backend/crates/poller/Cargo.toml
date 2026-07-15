@@ -10,6 +10,7 @@ core-domain = { version = "0.1.0", path = "../core-domain" }
 dashmap = "6.2.1"
 executor = { version = "0.1.0", path = "../executor" }
 futures = "0.3.32"
+notifier = { version = "0.1.0", path = "../notifier" }
 redis = { version = "1.3.0", features = ["tokio-comp", "connection-manager"] }
 # Pinned to the SAME minor version already used by spx-client's Cargo.toml
 # (Fase 3, `crypto::secret`) — reused, not a second/parallel secrecy dep in

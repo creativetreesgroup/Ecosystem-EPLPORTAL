@@ -2321,6 +2321,7 @@ dependencies = [
  "dashmap",
  "executor",
  "futures",
+ "notifier",
  "redis",
  "secrecy",
  "serde",
