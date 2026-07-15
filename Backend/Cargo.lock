@@ -3414,6 +3414,7 @@ name = "store"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "core-domain",
  "serde_json",
  "sqlx",
  "tokio",

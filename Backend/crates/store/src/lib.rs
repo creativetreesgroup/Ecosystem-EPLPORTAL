@@ -6,6 +6,7 @@ pub mod pool;
 pub mod portal_sessions;
 pub mod portal_users;
 pub mod quota;
+pub mod rule_booking_targets;
 pub mod site_settings;
 pub mod tenants;
 
@@ -48,6 +49,9 @@ pub use portal_users::{
     list_all as list_all_portal_users,
 };
 pub use quota::{consume_rule_quota, QuotaConsumeOutcome};
+pub use rule_booking_targets::{
+    list_for_tenant as list_rule_booking_targets, replace_for_rule as replace_rule_booking_targets,
+};
 pub use tenants::find_by_slug;
 // Re-export so downstream crates (e.g. executor) can name the pool type without
 // a direct `sqlx` dependency.
@@ -1040,6 +1044,78 @@ mod tests {
         assert_eq!(fetched.rule_id, rule_id.0);
         assert_eq!(fetched.booking_id_raw, "BK-778899");
         assert_eq!(fetched.booking_id_norm, "bk-778899");
+
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_id)
+            .execute(&pool)
+            .await
+            .ok();
+    }
+
+    #[tokio::test]
+    async fn rule_booking_targets_replace_for_rule_normalizes_and_replaces() {
+        let pool = connect(&test_database_url()).await.expect("connect");
+        run_migrations(&pool).await.expect("migrate");
+        let tenant_id = insert_test_tenant(&pool).await;
+
+        let rule = accept_rules::replace_all(
+            &pool,
+            tenant_id,
+            &[accept_rules::NewAcceptRule {
+                name: "Booking-id rule".to_string(),
+                enabled: true,
+                priority: 0,
+                mode: "booking_id".to_string(),
+                service_types: vec![],
+                max_weight: None,
+                coc_only: false,
+                non_coc_only: false,
+                max_cod_amount: None,
+                origin: String::new(),
+                destinations: vec![],
+                booking_type: "all".to_string(),
+                shift_types: vec![],
+                trip_types: vec![],
+                match_mode: "strict".to_string(),
+                min_deadline_min: None,
+                max_accept_count: 0,
+                accepted_count: 0,
+            }],
+        )
+        .await
+        .expect("create rule");
+        let rule_id = rule[0].id;
+
+        let first = rule_booking_targets::replace_for_rule(
+            &pool,
+            tenant_id,
+            rule_id,
+            &["SPXID_VM_001397509".to_string()],
+        )
+        .await
+        .expect("first replace_for_rule");
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].booking_id_raw, "SPXID_VM_001397509");
+        assert_eq!(first[0].booking_id_norm, "spxidvm001397509");
+
+        let second = rule_booking_targets::replace_for_rule(
+            &pool,
+            tenant_id,
+            rule_id,
+            &["SPXID VM 002".to_string(), "SPXID VM 003".to_string()],
+        )
+        .await
+        .expect("second replace_for_rule");
+        assert_eq!(
+            second.len(),
+            2,
+            "replace_for_rule must delete the old target before inserting the new set"
+        );
+
+        let all = rule_booking_targets::list_for_tenant(&pool, tenant_id)
+            .await
+            .expect("list_for_tenant");
+        assert_eq!(all.len(), 2, "only the second save's two targets must remain");
 
         sqlx::query("DELETE FROM tenants WHERE id = $1")
             .bind(tenant_id)
