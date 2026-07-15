@@ -26,4 +26,14 @@ ws-hub = { version = "0.1.0", path = "../../crates/ws-hub" }
 
 [dev-dependencies]
 http-body-util = "0.1.3"
+# Task 9's boot-smoke test needs raw `sqlx::query`/`query_as` to run
+# migrations as the `tower` superuser, set `app_role`'s test password (the
+# one-time operational step migration 0019's own comment documents), and
+# seed real `agency_credentials` rows (incl. one deliberately-malformed one)
+# directly against Postgres — `store` re-exports `PgPool` but not the `sqlx`
+# crate itself (Rust 2021's extern prelude only exposes DIRECT dependencies),
+# same disclosed reasoning `api-gateway`'s own `sqlx` dev/direct dependency
+# comment already gives. Feature set mirrors `store`'s Cargo.toml exactly so
+# Cargo unifies one `sqlx` build across the workspace instead of two.
+sqlx = { version = "0.9.0", features = ["postgres", "runtime-tokio", "tls-rustls-ring-native-roots", "macros", "migrate", "uuid", "chrono"] }
 tower = { version = "0.5.3", features = ["util"] }

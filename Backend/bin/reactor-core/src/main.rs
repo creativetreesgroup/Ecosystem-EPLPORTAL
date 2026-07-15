@@ -4,7 +4,6 @@ use std::sync::Arc;
 use api_gateway::AppState;
 use axum::Router;
 use dashmap::DashMap;
-use uuid::Uuid;
 
 /// `key` from the environment, or `default` if unset/empty. Every fallback
 /// below matches an already-established convention elsewhere in the
@@ -39,33 +38,72 @@ fn cors_origins_from_env() -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Task 1 (Fase 6a) scope: prove `api-gateway` wires into `reactor-core`
-/// end-to-end with a REAL (not stubbed) `AppState`/`PollerShared` — a live
-/// Postgres pool, a real `ExecutorHandle`/`SpxClient`/`SidecarClient` — but
-/// otherwise IDLE: zero accounts spawned, no notifier, no ws-hub Redis
-/// bridge, and a placeholder `tenant_id` (parsed from `TENANT_ID` if set,
-/// else `Uuid::nil()`). The real account-bootstrap sequence — resolving the
-/// single deployment tenant from `TENANT_SLUG`/`TENANT_ID`, spawning one
-/// poller task per `agency_credentials` row via
-/// `poller::schedule::ensure_restored_then_spawn`, wiring the ws-hub Redis
-/// bridge and the notifier — is Task 9's job later in this same plan, not
-/// this one.
+/// Fase 6a Task 9: the real account-bootstrap boot sequence. Resolves the
+/// single deployment tenant from `TENANT_SLUG`, decrypts every
+/// `agency_credentials` row for it, and spawns one live poller task per
+/// successfully-decrypted row via `poller::schedule::ensure_restored_then_spawn`
+/// — the first thing in this project's history that spawns a REAL poller
+/// task from `main()` rather than a test file. Everything else this fn
+/// builds (Postgres pool, `ExecutorHandle`/`SpxClient`/`SidecarClient`, CORS/
+/// cookie config) was already real as of Task 1/5/7/8 — see git history for
+/// that incremental build-up; this task's own diff is the tenant resolution,
+/// the master key + `RedisPublisher` wiring, and the bootstrap loop below.
+///
+/// Two DISCLOSED, intentional gaps remain (both explicitly sanctioned by the
+/// Task 9 brief as acceptable for this task's scope — NOT silently invented):
+///
+/// - Every spawned `PollerState.rules`/`rule_meta` starts EMPTY
+///   (`PollerState::new`'s own default). Accounts poll and dedupe correctly
+///   but match no accept rules until Fase 6c's rules-CRUD route lets an
+///   operator configure them. Fase 6a's own DoD is "the binary boots and
+///   polls accounts", not "accounts auto-accept correctly yet".
+/// - `PollerState.agency_id` (the numeric SPX agency id `dispatch.rs` needs
+///   for `SpxClient::accept_booking`) is set to `0` for every account.
+///   `agency_credentials` carries no such column (verified against
+///   `migrations/0004_agency_credentials.sql`'s column list) — the only
+///   place this value is genuinely knowable is the SPX login response
+///   itself (`fms_user_agency_id`/`spx_agid`, see `spx_client::SpxCookies`
+///   and `auth-sidecar`'s `/login` response shape), but
+///   `schedule::poll_once`'s relogin branch (Task 7b) only ever writes the
+///   fresh cookies back into `st.cookies`, never `st.agency_id`. That is a
+///   PRE-EXISTING structural gap this task surfaces (by being the first
+///   thing to construct a live `PollerState` outside a test file) but does
+///   not introduce and is out of scope to close here — accept-booking calls
+///   will carry `agency_id=0` (and, per the gap above, no rules to match
+///   against anyway) until a later task teaches the relogin success path to
+///   also parse and persist the real agency id.
 async fn build_state() -> AppState {
     let database_url = env_or(
         "DATABASE_URL",
-        "postgres://tower:tower_dev_only@127.0.0.1:15432/tower",
+        "postgres://app_role:app_role_dev_only@127.0.0.1:15432/tower",
     );
     let redis_url = env_or("REDIS_URL", "redis://127.0.0.1:16379");
     let spx_base_url = env_or("SPX_BASE_URL", "https://logistics.myagencyservice.id");
     let sidecar_url = env_or("AUTH_SIDECAR_URL", "http://127.0.0.1:8082");
-    let tenant_id = std::env::var("TENANT_ID")
-        .ok()
-        .and_then(|s| Uuid::parse_str(&s).ok())
-        .unwrap_or_else(Uuid::nil);
 
     let pool = store::connect(&database_url)
         .await
         .expect("reactor-core: connect to Postgres");
+
+    // The single deployment tenant this process serves, resolved from
+    // TENANT_SLUG (replaces the earlier placeholder TENANT_ID/Uuid::nil()
+    // fallback). An unresolvable slug is a boot-time misconfiguration, not a
+    // runtime-recoverable condition — panic with a clear message rather than
+    // silently booting against Uuid::nil(), which would previously have made
+    // every tenant-scoped query see zero rows under RLS: a much more
+    // confusing failure mode to debug in production than a boot-time panic.
+    let tenant_slug = env_or("TENANT_SLUG", "");
+    let tenant_id = store::tenants::find_by_slug(&pool, &tenant_slug)
+        .await
+        .expect("reactor-core: query tenants")
+        .unwrap_or_else(|| {
+            panic!(
+                "reactor-core: TENANT_SLUG={tenant_slug:?} does not match any row in \
+                 `tenants` — set TENANT_SLUG to a real tenant's slug (see \
+                 Backend/.env.example)"
+            )
+        })
+        .id;
 
     // `ExecutorHandle::connect` only PARSES `redis_url` + best-effort loads
     // the claim script; it does not require Redis to be reachable right now
@@ -78,22 +116,147 @@ async fn build_state() -> AppState {
     let client = spx_client::SpxClient::new(spx_base_url).expect("reactor-core: build SpxClient");
     let sidecar = poller::SidecarClient::new(sidecar_url);
 
-    let poller_shared = poller::PollerShared {
-        executor: Arc::new(executor),
-        client: Arc::new(client),
-        pool,
-        config: poller::PollerConfig::from_env(),
-        // Idle: no accounts spawned yet (Task 9).
-        accounts: Arc::new(DashMap::new()),
-        sidecar: Arc::new(sidecar),
-        // No fire-and-forget WAHA/n8n notifications yet (Task 9/6b).
-        notifier: None,
-        // No ws-hub Redis bridge yet (Task 9/6a's ws-hub mount work).
-        redis: None,
+    // Envelope-encryption master key (Fase 3) — needed to decrypt every
+    // `agency_credentials.ciphertext` below. TOWER_MASTER_KEY_PATH's
+    // production value is always set explicitly by
+    // Docker/docker-compose.yml's `tower-reactor-core` service
+    // (/run/secrets/tower_master_key, the Compose file-secret mount point —
+    // same convention `tower-auth-sidecar` already uses). The fallback path
+    // here is purely a host-run (`cargo run`/`cargo test` OUTSIDE that
+    // container) dev convenience, mirroring this fn's own `env_or`
+    // philosophy for every other var — deliberately NOT a bare call to
+    // `MasterKey::load_default()`, which hardcodes
+    // `/run/secrets/tower_master_key` as ITS OWN fallback with no
+    // host-dev-friendly alternative. Functionally identical to
+    // `load_default()` in production, where TOWER_MASTER_KEY_PATH is always
+    // set explicitly and this fallback branch is never reached.
+    let master_key_path = env_or(
+        "TOWER_MASTER_KEY_PATH",
+        "../Docker/secrets/tower_master_key",
+    );
+    let master_key = spx_client::crypto::envelope::MasterKey::load_from_file(&master_key_path)
+        .unwrap_or_else(|e| {
+            panic!(
+                "reactor-core: load master key from {master_key_path:?} — set \
+                 TOWER_MASTER_KEY_PATH, or for local dev: mkdir -p Docker/secrets && \
+                 openssl rand -out Docker/secrets/tower_master_key 32 && chmod 0400 \
+                 Docker/secrets/tower_master_key (see Docker/.env.example): {e}"
+            )
+        });
+
+    // ws-hub Redis pub/sub publisher (Task 13's `RedisPublisher`), wired
+    // into `PollerShared` for the first time here. A connect failure is
+    // logged and left `None` — the same safe no-op `PollerShared.redis`'s
+    // own doc comment already documents for tests — rather than panicking
+    // the whole boot: Aturan Keras #10's "one failure can't take down the
+    // process" applies to a transient Redis outage at boot too, not only to
+    // steady-state per-account failures. ws `ticket_accepted` notifications
+    // degrade to a no-op; every other feature (HTTP API, polling, accepts)
+    // keeps running.
+    let redis_publisher = match poller::RedisPublisher::connect(&redis_url).await {
+        Ok(publisher) => Some(publisher),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "reactor-core: RedisPublisher::connect failed at boot — ws ticket_accepted \
+                 notifications will no-op until this is fixed"
+            );
+            None
+        }
     };
 
+    let poller_shared = Arc::new(poller::PollerShared {
+        executor: Arc::new(executor),
+        client: Arc::new(client),
+        pool: pool.clone(),
+        config: poller::PollerConfig::from_env(),
+        accounts: Arc::new(DashMap::new()),
+        sidecar: Arc::new(sidecar),
+        // No fire-and-forget WAHA/n8n notifications yet (6b) — disclosed,
+        // pre-existing gap, unchanged by this task.
+        notifier: None,
+        redis: redis_publisher,
+    });
+
+    // Account bootstrap: one live poller task per `agency_credentials` row.
+    // A single row's decryption failure (bad/rotated master key, corrupted
+    // ciphertext/nonce, anything) must skip ONLY that account, never abort
+    // the whole boot — Aturan Keras #10 applied at boot-time bootstrap, not
+    // just the steady-state watchdog Fase 5 already built.
+    let credentials = store::agency_credentials::list_all(&pool, tenant_id)
+        .await
+        .expect("reactor-core: list agency_credentials");
+    for credential in credentials {
+        let nonce: [u8; 12] = match credential.nonce.as_slice().try_into() {
+            Ok(n) => n,
+            Err(_) => {
+                tracing::warn!(
+                    credential_id = %credential.id,
+                    label = %credential.label,
+                    nonce_len = credential.nonce.len(),
+                    "agency_credentials row has a malformed nonce (expected 12 bytes) — \
+                     skipping this account, boot continues"
+                );
+                continue;
+            }
+        };
+        let password = match spx_client::crypto::envelope::decrypt_agency_password(
+            &master_key,
+            tenant_id,
+            &credential.ciphertext,
+            &nonce,
+        ) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(
+                    credential_id = %credential.id,
+                    label = %credential.label,
+                    error = %e,
+                    "failed to decrypt agency_credentials row — skipping this account, \
+                     boot continues"
+                );
+                continue;
+            }
+        };
+
+        // `account_id` MUST match the same lowercased-username convention
+        // `PollerConfig::from_env`'s `primary_account_id` (sourced from
+        // PORTAL_USERNAME) already uses, and that `watchdog::spawn_watchdog`
+        // looks up via `shared.accounts.get(&primary)` — this is the key
+        // this row's handle is stored under below, and the ONLY identifier
+        // that ties an `agency_credentials` row to its live `AccountHandle`/
+        // Redis keyspace/ws-hub `acct:<id>` channel (see
+        // `RedisPublisher::publish_ticket_accepted`).
+        let account_id = credential.username.trim().to_lowercase();
+        if account_id.is_empty() {
+            tracing::warn!(
+                credential_id = %credential.id,
+                "agency_credentials row has an empty/whitespace-only username — skipping"
+            );
+            continue;
+        }
+
+        let state = poller::PollerState::new(
+            account_id.clone(),
+            tenant_id,
+            0, // agency_id — disclosed gap, see this fn's doc comment
+            spx_client::SpxCookies::default(),
+            credential.username.into(),
+            password,
+        );
+        // CP-7 contract: `ensure_restored_then_spawn` awaits the durable
+        // restore BEFORE the first poll is ever scheduled — the ONLY
+        // production spawn path (see `schedule.rs`'s doc comment).
+        // `ensure_restored_then_spawn` does NOT insert into
+        // `PollerShared.accounts` itself (verified against its source and
+        // every existing caller, e.g. `poller/tests/watchdog.rs`'s respawn
+        // closure) — that is this loop's job, same as every other caller.
+        let handle = poller::ensure_restored_then_spawn(poller_shared.clone(), state).await;
+        poller_shared.accounts.insert(account_id, handle);
+    }
+
     AppState {
-        poller: Arc::new(poller_shared),
+        poller: poller_shared,
         ws_hub: ws_hub::Hub::new(),
         tenant_id,
         // Task 7: real exact-match allowlist from `CORS_ALLOWED_ORIGINS`
@@ -165,9 +328,106 @@ mod tests {
     use super::*;
     use http_body_util::BodyExt;
     use tower::ServiceExt;
+    use uuid::Uuid;
+
+    /// `app_role`'s password for every test in this module. Real deploys set
+    /// this exactly once via the operational step migration 0019's own
+    /// comment documents (`ALTER ROLE app_role PASSWORD '...'` run by a
+    /// superuser-authenticated script); a test re-runs the same idempotent
+    /// statement every time, which is harmless.
+    const APP_ROLE_TEST_PASSWORD: &str = "app_role_dev_only";
+
+    fn tower_superuser_url() -> String {
+        env_or(
+            "TOWER_SUPERUSER_DATABASE_URL",
+            "postgres://tower:tower_dev_only@127.0.0.1:15432/tower",
+        )
+    }
+
+    /// Runs migrations (DDL requires `tower` — `app_role` has no CREATE/
+    /// ALTER privileges of its own) and performs the one-time "set
+    /// `app_role`'s password" operational step migration 0019's comment
+    /// documents. Returns the `app_role`-flavored `DATABASE_URL`
+    /// `build_state()` is meant to use in production.
+    async fn prepare_app_role_database_url() -> String {
+        let tower_pool = store::connect(&tower_superuser_url())
+            .await
+            .expect("connect as tower (superuser) to run migrations");
+        store::run_migrations(&tower_pool)
+            .await
+            .expect("run migrations (incl. 0019's app_role LOGIN promotion)");
+        // `AssertSqlSafe`: sqlx 0.9's `query()` refuses a dynamic `String`
+        // by default (injection-audit guard). Safe here — the interpolated
+        // value is the fixed, code-level `APP_ROLE_TEST_PASSWORD` constant
+        // above, never external/user input.
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "ALTER ROLE app_role PASSWORD '{APP_ROLE_TEST_PASSWORD}'"
+        )))
+        .execute(&tower_pool)
+        .await
+        .expect("set app_role's test password (the one-time step migration 0019 documents)");
+        format!("postgres://app_role:{APP_ROLE_TEST_PASSWORD}@127.0.0.1:15432/tower")
+    }
+
+    /// Seeds a throwaway tenant (as `tower`, so RLS never gets in the way of
+    /// test setup — the same convention `store/src/lib.rs`'s own
+    /// `insert_test_tenant` helper uses) and returns its `(id, slug)`.
+    async fn seed_test_tenant() -> (Uuid, String) {
+        let tower_pool = store::connect(&tower_superuser_url())
+            .await
+            .expect("connect as tower");
+        let tenant_id = Uuid::new_v4();
+        let slug = format!("reactor-core-test-{tenant_id}");
+        sqlx::query("INSERT INTO tenants (id, name, slug) VALUES ($1, $2, $3)")
+            .bind(tenant_id)
+            .bind("Reactor-Core Boot Test Tenant")
+            .bind(&slug)
+            .execute(&tower_pool)
+            .await
+            .expect("insert test tenant");
+        (tenant_id, slug)
+    }
+
+    async fn cleanup_tenant(tenant_id: Uuid) {
+        if let Ok(pool) = store::connect(&tower_superuser_url()).await {
+            let _ = sqlx::query("DELETE FROM tenants WHERE id = $1")
+                .bind(tenant_id)
+                .execute(&pool)
+                .await;
+        }
+    }
+
+    /// Writes 32 bytes (two v4 UUIDs concatenated — no cryptographic quality
+    /// needed for a throwaway test key, just 32 real bytes) to a uniquely
+    /// named temp file and returns its path: a real
+    /// `MasterKey::load_from_file`-loadable key, matching the Docker-secret
+    /// file's own shape (see Docker/.env.example).
+    fn write_test_master_key() -> std::path::PathBuf {
+        let mut bytes = [0u8; 32];
+        bytes[..16].copy_from_slice(Uuid::new_v4().as_bytes());
+        bytes[16..].copy_from_slice(Uuid::new_v4().as_bytes());
+        let path = std::env::temp_dir().join(format!("tower_master_key_test_{}", Uuid::new_v4()));
+        std::fs::write(&path, bytes).expect("write test master key");
+        path
+    }
 
     #[tokio::test]
     async fn healthz_returns_ok_status() {
+        let database_url = prepare_app_role_database_url().await;
+        let (tenant_id, tenant_slug) = seed_test_tenant().await;
+        let master_key_path = write_test_master_key();
+
+        // This tenant has zero `agency_credentials` rows, so the bootstrap
+        // loop is a no-op (no live poller task, no SPX_BASE_URL touched) —
+        // this test's sole purpose is proving the REST of `build_state()`
+        // (app_role pool, tenant resolution, master key load, Redis
+        // publisher) still boots a working router end to end. The
+        // credential-decryption bootstrap loop itself is covered by
+        // `boot_smoke_malformed_credential_is_skipped_not_fatal` below.
+        std::env::set_var("DATABASE_URL", &database_url);
+        std::env::set_var("TENANT_SLUG", &tenant_slug);
+        std::env::set_var("TOWER_MASTER_KEY_PATH", master_key_path.to_str().unwrap());
+
         let state = build_state().await;
 
         let response = app(state)
@@ -186,5 +446,114 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["status"], "ok");
         assert_eq!(json["service"], "api-gateway");
+
+        let _ = std::fs::remove_file(&master_key_path);
+        cleanup_tenant(tenant_id).await;
+    }
+
+    /// Step 4's real boot smoke test: seeds one well-formed
+    /// `agency_credentials` row and one DELIBERATELY MALFORMED row (garbage
+    /// ciphertext that will never AEAD-decrypt) against real Postgres, boots
+    /// the ACTUAL assembled router (not a stub) through the real
+    /// `build_state()`/`app()` production path, and asserts (a) `/healthz`
+    /// still returns 200 — the malformed row must not have panicked the
+    /// whole boot (Aturan Keras #10 applied at boot-time bootstrap, not just
+    /// the steady-state watchdog) — and (b) the well-formed account WAS
+    /// spawned while the malformed one was skipped, not silently spawned
+    /// with garbage credentials.
+    ///
+    /// `SPX_BASE_URL`/`AUTH_SIDECAR_URL` are pointed at `127.0.0.1:1` (a
+    /// port nothing listens on — the same "guaranteed-unreachable, fails
+    /// fast" placeholder `poller/tests/watchdog.rs` already uses for
+    /// `SidecarClient::new`) rather than the real SPX origin: the
+    /// well-formed account's spawn starts a REAL live poll loop
+    /// (`schedule::spawn_account_loop`), and this test must never make an
+    /// actual outbound request to a real third-party domain.
+    #[tokio::test]
+    async fn boot_smoke_malformed_credential_is_skipped_not_fatal() {
+        let database_url = prepare_app_role_database_url().await;
+        let (tenant_id, tenant_slug) = seed_test_tenant().await;
+        let master_key_path = write_test_master_key();
+
+        let tower_pool = store::connect(&tower_superuser_url())
+            .await
+            .expect("connect as tower");
+        let master_key =
+            spx_client::crypto::envelope::MasterKey::load_from_file(&master_key_path)
+                .expect("load test master key back");
+
+        let good_username = format!("good-agent-{}", Uuid::new_v4().simple());
+        let ct = spx_client::crypto::envelope::encrypt_agency_password(
+            &master_key,
+            tenant_id,
+            "s3cr3t-pw",
+        )
+        .expect("encrypt test password");
+        sqlx::query(
+            "INSERT INTO agency_credentials \
+             (tenant_id, label, username, ciphertext, nonce, key_version) \
+             VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(tenant_id)
+        .bind("good")
+        .bind(&good_username)
+        .bind(&ct.bytes)
+        .bind(&ct.nonce[..])
+        .bind(spx_client::crypto::envelope::KEY_VERSION)
+        .execute(&tower_pool)
+        .await
+        .expect("insert well-formed agency_credentials row");
+
+        let bad_username = format!("bad-agent-{}", Uuid::new_v4().simple());
+        sqlx::query(
+            "INSERT INTO agency_credentials \
+             (tenant_id, label, username, ciphertext, nonce, key_version) \
+             VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(tenant_id)
+        .bind("bad")
+        .bind(&bad_username)
+        .bind(vec![0xDE_u8, 0xAD, 0xBE, 0xEF, 0x00, 0x01, 0x02, 0x03]) // never AEAD-decrypts
+        .bind(vec![0u8; 12]) // syntactically valid-length nonce, wrong content
+        .bind(spx_client::crypto::envelope::KEY_VERSION)
+        .execute(&tower_pool)
+        .await
+        .expect("insert malformed agency_credentials row");
+
+        std::env::set_var("DATABASE_URL", &database_url);
+        std::env::set_var("TENANT_SLUG", &tenant_slug);
+        std::env::set_var("TOWER_MASTER_KEY_PATH", master_key_path.to_str().unwrap());
+        std::env::set_var("SPX_BASE_URL", "http://127.0.0.1:1");
+        std::env::set_var("AUTH_SIDECAR_URL", "http://127.0.0.1:1");
+
+        let state = build_state().await;
+        let accounts = state.poller.accounts.clone();
+
+        let response = app(state)
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/healthz")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::OK,
+            "the malformed credential must not have panicked the boot"
+        );
+
+        assert!(
+            accounts.contains_key(&good_username),
+            "the well-formed credential must have been decrypted and spawned"
+        );
+        assert!(
+            !accounts.contains_key(&bad_username),
+            "the malformed credential must be skipped (warn + continue), never spawned"
+        );
+
+        let _ = std::fs::remove_file(&master_key_path);
+        cleanup_tenant(tenant_id).await;
     }
 }

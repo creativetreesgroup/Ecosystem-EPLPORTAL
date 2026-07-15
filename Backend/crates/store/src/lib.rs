@@ -1,3 +1,4 @@
+pub mod agency_credentials;
 pub mod bookings;
 pub mod models;
 pub mod pool;
@@ -1561,6 +1562,90 @@ mod tests {
             .ok();
         sqlx::query("DELETE FROM tenants WHERE id = $1")
             .bind(tenant_b)
+            .execute(&pool)
+            .await
+            .ok();
+    }
+
+    /// `agency_credentials::list_all` (Fase 6a Task 9, the account-bootstrap
+    /// loop's own query): returns every row for the given tenant, isolates
+    /// by tenant like every other `begin_tenant_tx`-backed lookup in this
+    /// module, and returns an empty `Vec` (not an error) for a tenant with
+    /// zero credentials.
+    #[tokio::test]
+    async fn agency_credentials_list_all_isolates_by_tenant() {
+        let pool = connect(&test_database_url()).await.expect("connect");
+        run_migrations(&pool).await.expect("migrate");
+
+        let tenant_a = insert_test_tenant(&pool).await;
+        let tenant_b = insert_test_tenant(&pool).await;
+
+        for (label, username) in [("primary", "agent-a-1"), ("secondary", "agent-a-2")] {
+            sqlx::query(
+                "INSERT INTO agency_credentials \
+                 (tenant_id, label, username, ciphertext, nonce, key_version) \
+                 VALUES ($1, $2, $3, $4, $5, 1)",
+            )
+            .bind(tenant_a)
+            .bind(label)
+            .bind(username)
+            .bind(vec![0xAA_u8, 0xBB])
+            .bind(vec![0u8; 12])
+            .execute(&pool)
+            .await
+            .expect("insert tenant a credential");
+        }
+        sqlx::query(
+            "INSERT INTO agency_credentials \
+             (tenant_id, label, username, ciphertext, nonce, key_version) \
+             VALUES ($1, 'primary', 'agent-b-1', $2, $3, 1)",
+        )
+        .bind(tenant_b)
+        .bind(vec![0xCC_u8, 0xDD])
+        .bind(vec![1u8; 12])
+        .execute(&pool)
+        .await
+        .expect("insert tenant b credential");
+
+        let rows_a = agency_credentials::list_all(&pool, tenant_a)
+            .await
+            .expect("list_all tenant a");
+        assert_eq!(rows_a.len(), 2, "tenant a must see exactly its own 2 rows");
+        assert!(rows_a.iter().all(|r| r.tenant_id == tenant_a));
+        assert!(rows_a.iter().any(|r| r.username == "agent-a-1"));
+        assert!(rows_a.iter().any(|r| r.username == "agent-a-2"));
+        assert!(
+            rows_a.iter().all(|r| r.username != "agent-b-1"),
+            "tenant a must not see tenant b's row"
+        );
+
+        let rows_b = agency_credentials::list_all(&pool, tenant_b)
+            .await
+            .expect("list_all tenant b");
+        assert_eq!(rows_b.len(), 1);
+        assert_eq!(rows_b[0].username, "agent-b-1");
+
+        let tenant_c = insert_test_tenant(&pool).await;
+        let rows_c = agency_credentials::list_all(&pool, tenant_c)
+            .await
+            .expect("list_all tenant c");
+        assert!(
+            rows_c.is_empty(),
+            "a tenant with zero agency_credentials rows must get an empty Vec, not an error"
+        );
+
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_a)
+            .execute(&pool)
+            .await
+            .ok();
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_b)
+            .execute(&pool)
+            .await
+            .ok();
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_c)
             .execute(&pool)
             .await
             .ok();

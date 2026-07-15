@@ -1,0 +1,34 @@
+-- Fase 6a Task 9: promote `app_role` (created NOLOGIN in migration 0008) to
+-- LOGIN so `reactor-core`'s production Postgres pool can finally connect AS
+-- app_role instead of the `tower` superuser — closing the Fase-2-flagged
+-- silent-RLS-bypass gap (superusers unconditionally bypass row security; see
+-- migration 0016's own comment and `store/src/lib.rs`'s
+-- `rls_blocks_cross_tenant_*` test docs for why that gap mattered).
+--
+-- Deliberately NO PASSWORD is set here (Aturan Keras #5 — a real secret must
+-- never live in a migration file checked into git). `ALTER ROLE ... LOGIN`
+-- only grants the CAPABILITY to authenticate; a role with LOGIN but no
+-- password configured still cannot actually connect via password auth, so
+-- this migration alone does not make `app_role` reachable.
+--
+-- The password itself is set OUT-OF-BAND, once, by an operator/deploy script
+-- holding superuser credentials — mirroring this project's existing
+-- `tower`-password convention exactly: `POSTGRES_PASSWORD` in
+-- `Docker/.env.example` is a plain env var with a dev-only default, never a
+-- value baked into a committed file. The equivalent one-time step for
+-- `app_role`:
+--
+--   psql "$TOWER_SUPERUSER_DATABASE_URL" \
+--     -c "ALTER ROLE app_role PASSWORD '<APP_ROLE_PASSWORD value>';"
+--
+-- See `Docker/.env.example`'s new `APP_ROLE_PASSWORD` entry for the exact
+-- dev-only default and command. `reactor-core`'s own `DATABASE_URL` (see
+-- `bin/reactor-core/src/main.rs::build_state`) then connects at runtime as
+-- `postgres://app_role:<APP_ROLE_PASSWORD>@<host>/tower` — never as `tower`.
+--
+-- (An automated `docker-entrypoint-initdb.d` hook was considered instead but
+-- rejected: those scripts run ONCE, at Postgres's very first cluster
+-- bootstrap, which happens BEFORE any application migration has ever run —
+-- `app_role` itself does not exist yet at that point (it's created by
+-- migration 0008), so a first-boot initdb script has nothing to ALTER.)
+ALTER ROLE app_role LOGIN;
