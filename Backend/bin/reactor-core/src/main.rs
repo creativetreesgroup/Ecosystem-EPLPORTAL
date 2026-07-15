@@ -1,3 +1,4 @@
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use api_gateway::AppState;
@@ -128,10 +129,28 @@ async fn main() {
         .await
         .expect("bind 0.0.0.0:8081");
 
-    axum::serve(listener, app(state))
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .expect("server error");
+    // `.into_make_service_with_connect_info::<SocketAddr>()` (not the plain
+    // `Router`, and not `.into_make_service()`): Task 8's per-IP rate
+    // limiter on `/auth/portal-login` uses `tower_governor`'s
+    // `SmartIpKeyExtractor`, which reads `X-Forwarded-For`/`X-Real-Ip`
+    // (set by the TLS-terminating edge proxy this deployment's architecture
+    // assumes in front of reactor-core — see `state.rs`'s `cookie_secure`
+    // doc comment) but FALLS BACK to the raw TCP peer address
+    // (`ConnectInfo<SocketAddr>`) when none of those headers are present —
+    // e.g. a local dev setup that reaches reactor-core directly, the same
+    // carve-out `COOKIE_SECURE=false` already exists for. Without this,
+    // that fallback path has nothing to read (axum does NOT populate
+    // `ConnectInfo` automatically) and every `/auth/portal-login` request
+    // would fail key extraction and 500 instead of being rate-limited — see
+    // `tower_governor`'s own README "Common pitfalls" section and
+    // `rate_limit.rs`'s doc comment for the full explanation.
+    axum::serve(
+        listener,
+        app(state).into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await
+    .expect("server error");
 }
 
 async fn shutdown_signal() {

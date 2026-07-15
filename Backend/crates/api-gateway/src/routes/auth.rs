@@ -162,6 +162,14 @@ async fn logout(
 /// that establishes a session); `/me` and `/logout` are nested under a
 /// sub-router with `session_auth` applied via `route_layer` so only those
 /// two require an existing session.
+///
+/// `/portal-login` instead gets its own `route_layer`
+/// (`middleware::login_rate_limit_layer`, Task 8): a per-IP ~20/min budget
+/// scoped to JUST this route via the same `route_layer`-on-a-sub-router
+/// pattern `protected` already uses for `session_auth` below — never applied
+/// to `/me`/`/logout`, and never mounted globally in `build_router`. A login
+/// POST is a credential-stuffing target; `/me`/`/logout` are
+/// already-authenticated traffic that doesn't need this stricter budget.
 pub fn auth_router(state: AppState) -> Router<AppState> {
     let protected = Router::new()
         .route("/me", get(me))
@@ -171,7 +179,9 @@ pub fn auth_router(state: AppState) -> Router<AppState> {
             session_auth,
         ));
 
-    Router::new()
+    let login = Router::new()
         .route("/portal-login", post(portal_login))
-        .merge(protected)
+        .route_layer(crate::middleware::login_rate_limit_layer());
+
+    login.merge(protected)
 }

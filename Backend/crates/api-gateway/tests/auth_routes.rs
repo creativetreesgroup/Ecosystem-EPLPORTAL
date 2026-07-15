@@ -100,15 +100,30 @@ async fn build_state(pool: PgPool, tenant_id: Uuid) -> AppState {
 /// Spawns a real `axum::serve` instance (the SAME `build_router` as
 /// `reactor-core`'s `app()`) on an ephemeral loopback port and returns its
 /// base URL.
+///
+/// `.into_make_service_with_connect_info::<SocketAddr>()` (Task 8): every
+/// test in this file sends at least one `POST /auth/portal-login`, which is
+/// now behind `middleware::login_rate_limit_layer`'s `SmartIpKeyExtractor` —
+/// it needs SOME way to identify the caller. This test's `reqwest::Client`
+/// never sends an `X-Forwarded-For` header, so the extractor falls back to
+/// `ConnectInfo<SocketAddr>`, which (per `axum-0.8.9`'s `routing/mod.rs` and
+/// `tower_governor`'s own README "Common pitfalls" #2) is only populated
+/// with this connect-info wiring, never by the plain `Router` `axum::serve`
+/// used pre-Task-8. Without it every `/auth/portal-login` request in this
+/// file would fail key extraction and 500, not the status each test asserts.
 async fn spawn_server(state: AppState) -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind ephemeral port");
     let addr = listener.local_addr().expect("local_addr");
     tokio::spawn(async move {
-        axum::serve(listener, api_gateway::build_router(state))
-            .await
-            .unwrap();
+        axum::serve(
+            listener,
+            api_gateway::build_router(state)
+                .into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .await
+        .unwrap();
     });
     format!("http://{addr}")
 }

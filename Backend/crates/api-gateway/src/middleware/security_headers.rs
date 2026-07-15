@@ -15,7 +15,10 @@ pub async fn security_headers(req: Request, next: Next) -> Response {
         HeaderValue::from_static("max-age=31536000; includeSubDomains"),
     );
     h.insert("X-Frame-Options", HeaderValue::from_static("DENY"));
-    h.insert("X-Content-Type-Options", HeaderValue::from_static("nosniff"));
+    h.insert(
+        "X-Content-Type-Options",
+        HeaderValue::from_static("nosniff"),
+    );
     h.insert("X-XSS-Protection", HeaderValue::from_static("0"));
     h.insert(
         "Referrer-Policy",

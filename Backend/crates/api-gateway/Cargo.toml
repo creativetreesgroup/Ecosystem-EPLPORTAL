@@ -10,6 +10,16 @@ axum-extra = { version = "0.12.6", features = ["cookie"] }
 chrono = { version = "0.4.45", features = ["serde"] }
 core-domain = { version = "0.1.0", path = "../core-domain" }
 executor = { version = "0.1.0", path = "../executor" }
+# NOT in the task brief's `cargo add` list, added here for the same
+# extern-prelude reason as the `sqlx` entry below: `tower_governor` re-exports
+# its OWN types (`GovernorLayer`, `GovernorConfigBuilder`, key extractors) but
+# NOT `governor::middleware::NoOpMiddleware` — `rate_limit.rs`'s
+# `login_rate_limit_layer` return type needs to name that middleware marker
+# type explicitly, and Rust 2021's extern prelude only exposes DIRECT
+# dependencies. Version pinned to match the one `tower_governor 0.8.0`
+# actually resolves (`Cargo.lock`), so Cargo unifies a single `governor`
+# build.
+governor = "0.10.4"
 notifier = { version = "0.1.0", path = "../notifier" }
 poller = { version = "0.1.0", path = "../poller" }
 serde = { version = "1.0.228", features = ["derive"] }
@@ -29,6 +39,17 @@ sqlx = { version = "0.9.0", features = ["postgres", "runtime-tokio", "tls-rustls
 store = { version = "0.1.0", path = "../store" }
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros"] }
 tower-http = { version = "0.7.0", features = ["cors", "limit"] }
+# Task 8: per-IP rate limiting on `/auth/portal-login`. Resolved version is
+# 0.8.0 (verified against its docs.rs page + `~/.cargo/registry` source, not
+# the task brief's best-effort snippet — see `rate_limit.rs`'s doc comment for
+# the specific API differences found). `default-features = false` drops the
+# crate's default `tonic` feature (gRPC support this workspace has no use
+# for, and would otherwise pull in the `tonic`/`prost` dependency tree for
+# nothing); `axum` is required for the `GovernorLayer`/key-extractor axum
+# integration this crate actually uses, and `tracing` reuses the
+# already-direct `tracing` dependency below for rate-limit-exceeded log lines
+# rather than adding a second, silent observability path.
+tower_governor = { version = "0.8.0", default-features = false, features = ["axum", "tracing"] }
 tracing = "0.1.44"
 uuid = { version = "1.23.5", features = ["v4", "serde"] }
 ws-hub = { version = "0.1.0", path = "../ws-hub" }
