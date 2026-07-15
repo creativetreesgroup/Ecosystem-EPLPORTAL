@@ -510,6 +510,100 @@ mod tests {
             .ok();
     }
 
+    /// Proves migration 0020's actual motivation (see its own doc comment):
+    /// the OLD `bookings_tenant_spx_id_unique UNIQUE (tenant_id, spx_id)`
+    /// constraint meant a given `spx_id` could only ever have ONE row per
+    /// tenant, no matter which sibling account saw it. The NEW
+    /// `bookings_tenant_account_spx_id_unique UNIQUE (tenant_id, account_id,
+    /// spx_id)` constraint fixes that: two different accounts under the same
+    /// tenant must each get their own row for the same `spx_id`, while a
+    /// genuine re-upsert of the SAME `(tenant_id, account_id, spx_id)` triple
+    /// must still hit `ON CONFLICT` and not create a third row.
+    #[tokio::test]
+    async fn bookings_same_spx_id_across_different_accounts_creates_separate_rows() {
+        let pool = connect(&test_database_url()).await.expect("connect");
+        run_migrations(&pool).await.expect("migrate");
+        let tenant_id = insert_test_tenant(&pool).await;
+
+        upsert_booking(
+            &pool,
+            tenant_id,
+            &BookingUpsert {
+                account_id: "acct-a".to_string(),
+                spx_id: "shared-spx-id".to_string(),
+                status: "pending".to_string(),
+                is_coc: false,
+                raw_data: serde_json::json!({}),
+            },
+        )
+        .await
+        .expect("upsert acct-a");
+
+        upsert_booking(
+            &pool,
+            tenant_id,
+            &BookingUpsert {
+                account_id: "acct-b".to_string(),
+                spx_id: "shared-spx-id".to_string(),
+                status: "pending".to_string(),
+                is_coc: false,
+                raw_data: serde_json::json!({}),
+            },
+        )
+        .await
+        .expect("upsert acct-b (same spx_id, different account, must NOT be rejected)");
+
+        let live = bookings::list_live(&pool, tenant_id, 50, 0)
+            .await
+            .expect("list_live");
+        assert_eq!(
+            live.len(),
+            2,
+            "the same spx_id seen by two different accounts must produce two separate rows"
+        );
+        let accounts: std::collections::HashSet<&str> =
+            live.iter().map(|b| b.account_id.as_str()).collect();
+        assert!(accounts.contains("acct-a"));
+        assert!(accounts.contains("acct-b"));
+        assert!(
+            live.iter().all(|b| b.spx_id == "shared-spx-id"),
+            "both rows must share the same spx_id"
+        );
+
+        // Supplementary: prove the OLD (tenant_id, spx_id)-only behavior is
+        // gone AND the new 3-column constraint still does its job — a
+        // genuine re-upsert of the SAME (tenant_id, account_id, spx_id)
+        // triple must hit ON CONFLICT, not create a third row.
+        upsert_booking(
+            &pool,
+            tenant_id,
+            &BookingUpsert {
+                account_id: "acct-a".to_string(),
+                spx_id: "shared-spx-id".to_string(),
+                status: "pending".to_string(),
+                is_coc: false,
+                raw_data: serde_json::json!({}),
+            },
+        )
+        .await
+        .expect("re-upsert acct-a (same triple, must hit ON CONFLICT)");
+
+        let live_after_reupsert = bookings::list_live(&pool, tenant_id, 50, 0)
+            .await
+            .expect("list_live after re-upsert");
+        assert_eq!(
+            live_after_reupsert.len(),
+            2,
+            "re-upserting the same (tenant_id, account_id, spx_id) triple must not create a third row"
+        );
+
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_id)
+            .execute(&pool)
+            .await
+            .ok();
+    }
+
     /// Proves `accept_events` is append-only at the DB permission level, not
     /// just by application convention. Table owners bypass GRANT/REVOKE
     /// entirely, so this test `SET ROLE app_role` before attempting the

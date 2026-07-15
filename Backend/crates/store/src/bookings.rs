@@ -2,6 +2,9 @@
 //! Booking lifecycle writes for the poller: upsert (enrichment-preserving) +
 //! the two anti-drift transitions. Ported from spx-portal-ref db.ts
 //! (upsertBooking, expireStaleBookings, resurrectPending). No schema change.
+//! Also home to the three read queries backing the manual-accept routes —
+//! `list_live` (`/bookings/live`), `list_history` (`/bookings/history`), and
+//! `get_detail` (`/bookings/:id/detail`) — added in Fase 6c.
 //!
 //! Two deliberate deviations from the reference SQL, both required by the
 //! REAL schema already shipped in Fase 2 (`migrations/0007_bookings.sql`),
