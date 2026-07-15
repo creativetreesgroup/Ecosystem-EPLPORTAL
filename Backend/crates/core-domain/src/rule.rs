@@ -103,7 +103,7 @@ pub struct RuleSanitizeResult {
 /// dedupe booking-ids/lanes and — critically — reused verbatim by `matches_rule`'s booking_id
 /// mode and `matched_booking_id_for` so the two can never disagree (see the module-level
 /// warning in Task 7/10's brief about the historical production incident this prevents).
-pub(crate) fn norm_id(s: &str) -> String {
+pub fn norm_id(s: &str) -> String {
     s.to_lowercase()
         .chars()
         .filter(char::is_ascii_alphanumeric)
@@ -535,6 +535,18 @@ mod tests {
                 Some(5_000_000_000.0)
             );
             assert_eq!(result.rules[0].conditions.max_weight, Some(4_500_000_000.0));
+        }
+    }
+
+    mod norm_id_visibility_tests {
+        // `super::super::norm_id` would work from inside the crate regardless of visibility —
+        // this test instead calls it via the CRATE ROOT path a downstream crate (`store`) would
+        // use, which only compiles once `norm_id` is `pub` and re-exported from `lib.rs`.
+        use crate::norm_id;
+
+        #[test]
+        fn norm_id_reachable_from_crate_root() {
+            assert_eq!(norm_id("SPXID_VM_001397509"), "spxidvm001397509");
         }
     }
 
