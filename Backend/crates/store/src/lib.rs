@@ -1,14 +1,30 @@
 pub mod bookings;
 pub mod models;
 pub mod pool;
+pub mod portal_sessions;
+pub mod portal_users;
 pub mod quota;
+pub mod tenants;
 
 pub use bookings::{
     expire_stale_bookings, resurrect_pending, update_booking_status, upsert_booking,
     BookingStatusUpdate, BookingUpsert, StaleOutcome,
 };
 pub use pool::{begin_tenant_tx, connect, run_migrations};
+// `create`/`delete` are deliberately aliased rather than re-exported bare —
+// `store::create`/`store::delete` would be an unhelpfully generic top-level
+// name (and a future collision risk once other tenant-scoped modules land
+// their own CRUD verbs); `find_valid_by_hash`/`touch_last_seen` are already
+// unambiguous. Callers may also always reach these via the qualified
+// `store::portal_sessions::...` path regardless (see the Fase 6a design
+// doc's own middleware description, which uses that qualified form).
+pub use portal_sessions::{
+    create as create_portal_session, delete as delete_portal_session, find_valid_by_hash,
+    touch_last_seen,
+};
+pub use portal_users::find_by_username;
 pub use quota::{consume_rule_quota, QuotaConsumeOutcome};
+pub use tenants::find_by_slug;
 // Re-export so downstream crates (e.g. executor) can name the pool type without
 // a direct `sqlx` dependency.
 pub use sqlx::PgPool;
@@ -1410,5 +1426,382 @@ mod tests {
             assert!(!enabled, "{table} must NOT have RLS enabled");
             assert!(!forced, "{table} must NOT have RLS forced");
         }
+    }
+
+    // -- Fase 6a Task 2: tenants / portal_users / portal_sessions queries --
+
+    #[tokio::test]
+    async fn tenants_find_by_slug_finds_seeded_and_none_for_unknown() {
+        let pool = connect(&test_database_url()).await.expect("connect");
+        run_migrations(&pool).await.expect("migrate");
+        let tenant_id = insert_test_tenant(&pool).await;
+        let slug = format!("test-{tenant_id}");
+
+        let found = tenants::find_by_slug(&pool, &slug)
+            .await
+            .expect("find_by_slug query")
+            .expect("seeded tenant must be found");
+        assert_eq!(found.id, tenant_id);
+        assert_eq!(found.slug, slug);
+
+        let missing = tenants::find_by_slug(&pool, "no-such-tenant-slug-at-all")
+            .await
+            .expect("find_by_slug query for unknown slug");
+        assert!(missing.is_none(), "unknown slug must return None");
+
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_id)
+            .execute(&pool)
+            .await
+            .ok();
+    }
+
+    /// `tenants` has no RLS policy (`rls_excludes_tenants_and_archive_runs`),
+    /// but until migration `0017_tenants_app_role_grant.sql` `app_role` had
+    /// no GRANT on it at all — a lookup equivalent to `find_by_slug` would
+    /// have failed with `permission denied for table tenants` the moment
+    /// Fase 6a Task 9 switches the production pool to `app_role`. Proves
+    /// that gap is actually closed, under the exact role / no-tenant-context
+    /// conditions `find_by_slug` runs under for real (this is what Task 2's
+    /// required RLS investigation resolved for `tenants`).
+    ///
+    /// Exercised on one acquired connection with `SET ROLE app_role`
+    /// directly (same reasoning as `app_role_tenant_tx`'s doc comment) —
+    /// `find_by_slug` itself takes `&PgPool`, which hands out an arbitrary
+    /// pooled connection per call, so it cannot be pinned to one
+    /// role-switched connection from a test; this runs the identical SQL
+    /// shape `find_by_slug` executes instead.
+    #[tokio::test]
+    async fn tenants_lookup_works_for_app_role_with_no_tenant_context() {
+        let pool = connect(&test_database_url()).await.expect("connect");
+        run_migrations(&pool).await.expect("migrate");
+        let tenant_id = insert_test_tenant(&pool).await;
+        let slug = format!("test-{tenant_id}");
+
+        let mut conn = pool.acquire().await.expect("acquire");
+        sqlx::query("SET ROLE app_role")
+            .execute(&mut *conn)
+            .await
+            .expect("set role app_role");
+
+        let found: Option<models::Tenant> =
+            sqlx::query_as("SELECT id, name, slug, created_at FROM tenants WHERE slug = $1")
+                .bind(&slug)
+                .fetch_optional(&mut *conn)
+                .await
+                .expect("find_by_slug-equivalent query as app_role");
+        assert!(
+            found.is_some(),
+            "app_role must be able to read tenants with no app.tenant_id set at all"
+        );
+
+        sqlx::query("RESET ROLE").execute(&mut *conn).await.ok();
+        drop(conn);
+
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_id)
+            .execute(&pool)
+            .await
+            .ok();
+    }
+
+    /// Seeds the SAME username under two different tenants and proves
+    /// `find_by_username` only ever returns the caller's own tenant's row —
+    /// proves the query's tenant filter actually isolates, not just "the
+    /// query runs and returns something."
+    #[tokio::test]
+    async fn portal_users_find_by_username_isolates_by_tenant() {
+        let pool = connect(&test_database_url()).await.expect("connect");
+        run_migrations(&pool).await.expect("migrate");
+
+        let tenant_a = insert_test_tenant(&pool).await;
+        let tenant_b = insert_test_tenant(&pool).await;
+
+        let user_a: (uuid::Uuid,) = sqlx::query_as(
+            "INSERT INTO portal_users (tenant_id, username, password_hash, display_name)
+             VALUES ($1, 'shared-username', 'hash-a', 'Tenant A User') RETURNING id",
+        )
+        .bind(tenant_a)
+        .fetch_one(&pool)
+        .await
+        .expect("insert tenant a user");
+
+        let user_b: (uuid::Uuid,) = sqlx::query_as(
+            "INSERT INTO portal_users (tenant_id, username, password_hash, display_name)
+             VALUES ($1, 'shared-username', 'hash-b', 'Tenant B User') RETURNING id",
+        )
+        .bind(tenant_b)
+        .fetch_one(&pool)
+        .await
+        .expect("insert tenant b user");
+
+        let found_a = portal_users::find_by_username(&pool, tenant_a, "shared-username")
+            .await
+            .expect("find_by_username tenant a")
+            .expect("tenant a must find its own user");
+        assert_eq!(found_a.id, user_a.0);
+        assert_eq!(found_a.password_hash, "hash-a");
+
+        let found_b = portal_users::find_by_username(&pool, tenant_b, "shared-username")
+            .await
+            .expect("find_by_username tenant b")
+            .expect("tenant b must find its own user");
+        assert_eq!(found_b.id, user_b.0);
+        assert_eq!(found_b.password_hash, "hash-b");
+
+        let cross = portal_users::find_by_username(&pool, tenant_a, "nonexistent-username")
+            .await
+            .expect("find_by_username unknown username");
+        assert!(cross.is_none());
+
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_a)
+            .execute(&pool)
+            .await
+            .ok();
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_b)
+            .execute(&pool)
+            .await
+            .ok();
+    }
+
+    /// Round-trip proof for `portal_sessions::{create, find_valid_by_hash,
+    /// delete}`: a freshly created session is found by its hash; an EXPIRED
+    /// session (created with a negative TTL) is NOT found even though the
+    /// row genuinely exists; and after `delete`, the (still valid) session
+    /// is no longer found.
+    #[tokio::test]
+    async fn portal_session_create_find_valid_by_hash_delete_round_trip() {
+        let pool = connect(&test_database_url()).await.expect("connect");
+        run_migrations(&pool).await.expect("migrate");
+        let tenant_id = insert_test_tenant(&pool).await;
+
+        let portal_user_id: (uuid::Uuid,) = sqlx::query_as(
+            "INSERT INTO portal_users (tenant_id, username, password_hash, display_name)
+             VALUES ($1, 'session-owner', 'hash', 'Session Owner') RETURNING id",
+        )
+        .bind(tenant_id)
+        .fetch_one(&pool)
+        .await
+        .expect("insert portal_user");
+
+        let valid_hash = [7u8; 32];
+        let created = portal_sessions::create(
+            &pool,
+            tenant_id,
+            portal_user_id.0,
+            valid_hash,
+            Some("203.0.113.9"),
+            Some("test-agent"),
+            chrono::Duration::hours(1),
+        )
+        .await
+        .expect("create session");
+        assert_eq!(created.tenant_id, tenant_id);
+        assert_eq!(created.portal_user_id, portal_user_id.0);
+
+        let found = portal_sessions::find_valid_by_hash(&pool, valid_hash)
+            .await
+            .expect("find_valid_by_hash query")
+            .expect("just-created, non-expired session must be found");
+        assert_eq!(found.id, created.id);
+
+        // Expired session (negative TTL) must NOT be found, even though the
+        // row genuinely exists.
+        let expired_hash = [8u8; 32];
+        let expired = portal_sessions::create(
+            &pool,
+            tenant_id,
+            portal_user_id.0,
+            expired_hash,
+            None,
+            None,
+            chrono::Duration::seconds(-1),
+        )
+        .await
+        .expect("create expired session");
+        let row_exists: (i64,) =
+            sqlx::query_as("SELECT count(*) FROM portal_sessions WHERE id = $1")
+                .bind(expired.id)
+                .fetch_one(&pool)
+                .await
+                .expect("count expired row");
+        assert_eq!(row_exists.0, 1, "expired session row must actually exist");
+        let expired_lookup = portal_sessions::find_valid_by_hash(&pool, expired_hash)
+            .await
+            .expect("find_valid_by_hash query for expired session");
+        assert!(
+            expired_lookup.is_none(),
+            "expired session must not be found by find_valid_by_hash"
+        );
+
+        // delete then find_valid_by_hash returns None.
+        portal_sessions::delete(&pool, tenant_id, created.id)
+            .await
+            .expect("delete session");
+        let after_delete = portal_sessions::find_valid_by_hash(&pool, valid_hash)
+            .await
+            .expect("find_valid_by_hash query after delete");
+        assert!(
+            after_delete.is_none(),
+            "deleted session must not be found by find_valid_by_hash"
+        );
+
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_id)
+            .execute(&pool)
+            .await
+            .ok();
+    }
+
+    #[tokio::test]
+    async fn portal_sessions_touch_last_seen_advances_timestamp() {
+        let pool = connect(&test_database_url()).await.expect("connect");
+        run_migrations(&pool).await.expect("migrate");
+        let tenant_id = insert_test_tenant(&pool).await;
+
+        let portal_user_id: (uuid::Uuid,) = sqlx::query_as(
+            "INSERT INTO portal_users (tenant_id, username, password_hash, display_name)
+             VALUES ($1, 'touch-owner', 'hash', 'Touch Owner') RETURNING id",
+        )
+        .bind(tenant_id)
+        .fetch_one(&pool)
+        .await
+        .expect("insert portal_user");
+
+        let created = portal_sessions::create(
+            &pool,
+            tenant_id,
+            portal_user_id.0,
+            [9u8; 32],
+            None,
+            None,
+            chrono::Duration::hours(1),
+        )
+        .await
+        .expect("create session");
+
+        // Backdate rather than sleeping, so the assertion is unambiguous
+        // regardless of clock granularity.
+        sqlx::query(
+            "UPDATE portal_sessions SET last_seen_at = now() - interval '1 hour' WHERE id = $1",
+        )
+        .bind(created.id)
+        .execute(&pool)
+        .await
+        .expect("backdate last_seen_at");
+
+        portal_sessions::touch_last_seen(&pool, tenant_id, created.id)
+            .await
+            .expect("touch_last_seen");
+
+        let refetched: models::PortalSession =
+            sqlx::query_as("SELECT * FROM portal_sessions WHERE id = $1")
+                .bind(created.id)
+                .fetch_one(&pool)
+                .await
+                .expect("refetch session");
+        assert!(
+            refetched.last_seen_at > created.last_seen_at,
+            "touch_last_seen must advance last_seen_at forward from its backdated value"
+        );
+
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_id)
+            .execute(&pool)
+            .await
+            .ok();
+    }
+
+    /// Proves the RLS carve-out added in migration
+    /// `0018_portal_sessions_lookup_by_hash_fn.sql`: `portal_sessions` IS
+    /// RLS-protected (unlike `tenants`), so once Fase 6a Task 9 switches the
+    /// production pool to `app_role`, a plain `SELECT ... WHERE
+    /// token_hash = $1` against the base table would see zero rows with no
+    /// `app.tenant_id` set — silently breaking every login. The
+    /// `portal_sessions_find_valid_by_hash` SQL function is `SECURITY
+    /// DEFINER` specifically so it keeps working for `app_role` under
+    /// exactly those conditions.
+    ///
+    /// Exercised via `app_role` (same reasoning as `app_role_tenant_tx`'s
+    /// doc comment: `tower` is a superuser and bypasses RLS regardless, so a
+    /// version of this test against the raw pool would prove nothing about
+    /// the carve-out actually being necessary or working). Includes a
+    /// sanity control: a plain `SELECT` against the base table, same role,
+    /// same missing tenant context, must be blocked — otherwise this test
+    /// would pass even if RLS on `portal_sessions` were silently disabled.
+    #[tokio::test]
+    async fn portal_sessions_find_valid_by_hash_fn_works_for_app_role_with_no_tenant_context() {
+        let pool = connect(&test_database_url()).await.expect("connect");
+        run_migrations(&pool).await.expect("migrate");
+        let tenant_id = insert_test_tenant(&pool).await;
+
+        let portal_user_id: (uuid::Uuid,) = sqlx::query_as(
+            "INSERT INTO portal_users (tenant_id, username, password_hash, display_name)
+             VALUES ($1, 'app-role-session-owner', 'hash', 'App Role Session Owner') RETURNING id",
+        )
+        .bind(tenant_id)
+        .fetch_one(&pool)
+        .await
+        .expect("insert portal_user");
+
+        let hash = [42u8; 32];
+        let created = portal_sessions::create(
+            &pool,
+            tenant_id,
+            portal_user_id.0,
+            hash,
+            None,
+            None,
+            chrono::Duration::hours(1),
+        )
+        .await
+        .expect("create session");
+
+        let mut conn = pool.acquire().await.expect("acquire");
+        sqlx::query("SET ROLE app_role")
+            .execute(&mut *conn)
+            .await
+            .expect("set role app_role");
+
+        // Sanity control: a plain SELECT against the base table, as
+        // app_role, with NO app.tenant_id set, must see nothing — proving
+        // RLS really does apply to portal_sessions for app_role (and that
+        // the carve-out below is doing real work, not papering over a
+        // no-op).
+        let blocked: Vec<(uuid::Uuid,)> =
+            sqlx::query_as("SELECT id FROM portal_sessions WHERE token_hash = $1")
+                .bind(hash.as_slice())
+                .fetch_all(&mut *conn)
+                .await
+                .expect("plain select as app_role");
+        assert_eq!(
+            blocked.len(),
+            0,
+            "a plain SELECT against the base table must be blocked by RLS for app_role with no tenant context"
+        );
+
+        // The carve-out function, called the exact same way, must find it.
+        let via_fn: Option<models::PortalSession> =
+            sqlx::query_as("SELECT * FROM portal_sessions_find_valid_by_hash($1)")
+                .bind(hash.as_slice())
+                .fetch_optional(&mut *conn)
+                .await
+                .expect("carve-out function as app_role");
+        assert_eq!(
+            via_fn.map(|s| s.id),
+            Some(created.id),
+            "SECURITY DEFINER carve-out must find the session for app_role with no tenant context"
+        );
+
+        sqlx::query("RESET ROLE").execute(&mut *conn).await.ok();
+        drop(conn);
+
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_id)
+            .execute(&pool)
+            .await
+            .ok();
     }
 }

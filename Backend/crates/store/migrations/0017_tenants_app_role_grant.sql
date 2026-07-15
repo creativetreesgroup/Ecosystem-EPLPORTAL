@@ -1,0 +1,16 @@
+-- `tenants` carries no `tenant_id` column (it IS the tenant) and is
+-- deliberately excluded from migration 0016's RLS loop — see that
+-- migration's own comment and the `rls_excludes_tenants_and_archive_runs`
+-- test in `store/src/lib.rs`. So no RLS policy carve-out is needed for
+-- `store::tenants::find_by_slug` to read it.
+--
+-- But `app_role` (the non-superuser role Fase 6a Task 9 promotes to LOGIN
+-- and switches `reactor-core`'s production pool to use, closing the
+-- Fase-2-flagged silent-RLS-bypass gap — see the Fase 6a design doc) has
+-- never been granted ordinary table privileges on `tenants`: migration
+-- 0016's GRANT loop only covers the 12 RLS-enabled tables, and no earlier
+-- migration grants `tenants` to it either. Without this grant,
+-- `find_by_slug` would fail loudly with `permission denied for table
+-- tenants` (42501) the first time it ran under `app_role` — a gap Fase 6a
+-- Task 2 is required to resolve now, not leave for Task 9 to discover.
+GRANT SELECT ON tenants TO app_role;
