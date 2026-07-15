@@ -56,7 +56,7 @@ Full context: [`Docs/tower-master-spec.md`](../../tower-master-spec.md) and the 
 - `pub async fn portal_users::list_all(pool: &PgPool, tenant_id: Uuid) -> Result<Vec<PortalUser>, sqlx::Error>`.
 - `pub async fn portal_users::delete(pool: &PgPool, tenant_id: Uuid, id: Uuid) -> Result<bool, sqlx::Error>`.
 
-- [ ] **Step 1: Add `redis` as a direct `api-gateway` dependency**
+- [x] **Step 1: Add `redis` as a direct `api-gateway` dependency**
 
 ```bash
 cd Backend
@@ -66,7 +66,7 @@ cd ..
 
 Match the version to what's ALREADY resolved elsewhere in the workspace (`redis = "1.3.0"` per `executor`/`poller`'s `Cargo.toml` — if `cargo add` resolves something different, pin explicitly; a duplicate `redis` major version is a real problem to avoid).
 
-- [ ] **Step 2: `agency_credentials.rs` — add CRUD**
+- [x] **Step 2: `agency_credentials.rs` — add CRUD**
 
 ```rust
 // Add to Backend/crates/store/src/agency_credentials.rs, below the existing `list_all`.
@@ -158,7 +158,7 @@ pub async fn delete(pool: &PgPool, tenant_id: Uuid, label: &str) -> Result<bool,
 }
 ```
 
-- [ ] **Step 3: `portal_users.rs` — add CRUD**
+- [x] **Step 3: `portal_users.rs` — add CRUD**
 
 ```rust
 // Add to Backend/crates/store/src/portal_users.rs, below the existing `find_by_id`.
@@ -214,21 +214,21 @@ pub async fn delete(pool: &PgPool, tenant_id: Uuid, id: Uuid) -> Result<bool, sq
 }
 ```
 
-- [ ] **Step 4: Wire `lib.rs` re-exports**
+- [x] **Step 4: Wire `lib.rs` re-exports**
 
 Add `create`/`update`/`delete`/`find_by_label` and `create`/`list_all`/`delete` to the existing `pub use agency_credentials::{...}`/`pub use portal_users::{...}` blocks in `store/src/lib.rs` (they exist already for the current functions — extend, don't duplicate).
 
-- [ ] **Step 5: `AppState` + `reactor-core` wiring**
+- [x] **Step 5: `AppState` + `reactor-core` wiring**
 
 `state.rs`: add the two new fields with doc comments matching this file's existing style (see `cookie_secure`'s doc comment for the tone/detail level expected).
 
 `main.rs`'s `build_state()`: the `MasterKey` is ALREADY loaded (read the current code — Task 9 loads it locally inside the account-bootstrap section) — lift that load to happen once, earlier, and store the result in `AppState.master_key` (an `Arc::new(master_key)`) INSTEAD OF (or in addition to, if the bootstrap loop's own borrow needs restructuring — read the actual current code to decide the minimal-diff approach) using a separately-loaded copy; do not load the master key file twice. Add a new `redis` connection: `let redis = redis::Client::open(redis_url.as_str())?.get_connection_manager().await` — handle a Redis-unreachable-at-boot condition the SAME way `RedisPublisher::connect`'s caller already does elsewhere in this file (check whether that's a hard `.expect()` or a graceful `None`/retry — match the established convention for a similarly-critical-but-not-boot-blocking dependency; OTP requests genuinely need Redis to function, so a hard `.expect()` on initial connect is likely correct here, unlike `RedisPublisher`'s optional-at-boot design — use your judgment and disclose which you chose and why).
 
-- [ ] **Step 6: Tests**
+- [x] **Step 6: Tests**
 
 New tests in `store`'s existing test module (or a new `tests/agency_credentials_crud.rs` / `tests/portal_users_crud.rs` file if that fits this crate's established file-vs-inline-module convention better — check first): round-trip `create`→`find_by_label`→`update`→`find_by_label` (confirm updated fields)→`delete`→`find_by_label` (confirm `None`) for `agency_credentials`; the same shape for `portal_users` via `create`→`list_all`(confirm present)→`delete`→`list_all`(confirm absent). A duplicate-label `create` and a duplicate-username `create` each assert the real Postgres `23505` error comes back (not a different error code — confirm via `sqlx::Error::Database` + `.code()`). Tenant-isolation test: seed the same label/username under two different tenants, confirm each tenant's `list_all`/`find_by_label`/`find_by_username` only sees its own row.
 
-- [ ] **Step 7: Test, clippy, commit**
+- [x] **Step 7: Test, clippy, commit**
 
 ```bash
 cd Backend
@@ -253,7 +253,7 @@ git commit -m "feat(store,api-gateway): agency_credentials/portal_users CRUD, Ap
 - `PUT /:label` → upsert (create-or-update by label; body `{username: String, password: String}`), `require_permission(ManageSpxCredentials)`, encrypts via `encrypt_agency_password`, returns the same `{label, username}` shape (201 on create, 200 on update — check the label existed first via `find_by_label` to pick the status code, or just always return 200 if `PUT`'s semantics as "idempotent upsert" don't need to distinguish — your call, document it).
 - `DELETE /:label` → `require_permission(ManageSpxCredentials)`, `204` on success, `404` if the label didn't exist.
 
-- [ ] **Step 1: Write `routes/spx_credentials.rs`**
+- [x] **Step 1: Write `routes/spx_credentials.rs`**
 
 ```rust
 // Backend/crates/api-gateway/src/routes/spx_credentials.rs
@@ -344,15 +344,15 @@ pub fn spx_credentials_router(state: AppState) -> Router<AppState> {
 >
 > `existing.is_some()` then a SEPARATE `update`/`create` call is a benign TOCTOU (another request could create the row between the check and the write) — the `create` branch's `23505` would then surface as `ApiError::Conflict`, which is an ACCEPTABLE outcome for a rare race on an admin-only, low-traffic endpoint (not a security issue, just a slightly confusing error on a very unlikely double-submit) — do not over-engineer a transactional upsert (`INSERT ... ON CONFLICT DO UPDATE`) unless you judge it trivially easy to add; if you do, use it instead of the two-step check, but do not spend excessive effort here.
 
-- [ ] **Step 2: Wire `routes/mod.rs` + `lib.rs`**
+- [x] **Step 2: Wire `routes/mod.rs` + `lib.rs`**
 
 `routes/mod.rs`: add `pub mod spx_credentials;`. `lib.rs`'s `build_router`: `.nest("/auth/spx-credentials", routes::spx_credentials::spx_credentials_router(state.clone()))`.
 
-- [ ] **Step 3: Route-level tests**
+- [x] **Step 3: Route-level tests**
 
 New `Backend/crates/api-gateway/tests/spx_credentials_routes.rs`, following `auth_routes.rs`'s established real-server + real-client pattern. Seed a real tenant + main-account user + session. Cases: (1) `PUT /auth/spx-credentials/agency1` with a valid body → 200/201, response body has `{label, username}` and NO password/ciphertext field anywhere (parse the response as JSON and assert the keys present are EXACTLY `label`/`username`, not just "doesn't contain the string"); (2) `GET /` → the created credential appears, `username` correct, still no password; (3) a SUB-USER (non-main-account) session attempting `PUT`/`DELETE` → 403 (`require_permission` rejection) — but the SAME sub-user's `GET /` still succeeds (200) confirming the read/write RBAC split; (4) `DELETE /agency1` then `GET /` → the credential is gone; `DELETE` on a nonexistent label → 404. (5) Round-trip verification: after `PUT`, directly query `store::agency_credentials::find_by_label` and `spx_client::crypto::envelope::decrypt_agency_password` the stored ciphertext with the SAME master key the test server used — assert the decrypted password matches what was PUT, proving the encryption round-trip genuinely works end-to-end through the HTTP layer, not just that SOME bytes got stored.
 
-- [ ] **Step 4: Test, clippy, commit**
+- [x] **Step 4: Test, clippy, commit**
 
 ```bash
 cd Backend
@@ -376,7 +376,7 @@ git commit -m "feat(api-gateway): GET/PUT/DELETE /auth/spx-credentials (envelope
 **Interfaces produced:**
 - `POST /auth/spx-login/:label` → `{ok: bool, tier: Option<String>}` — `require_permission(ManageSpxCredentials)`.
 
-- [ ] **Step 1: Write `routes/spx_login.rs`**
+- [x] **Step 1: Write `routes/spx_login.rs`**
 
 ```rust
 // Backend/crates/api-gateway/src/routes/spx_login.rs
@@ -438,15 +438,15 @@ pub fn spx_login_router(state: AppState) -> Router<AppState> {
 
 > Verify `spx_client::SpxClient::{api_login, form_login, fetch_spx_cid}`'s exact signatures against the real source (`Backend/crates/spx-client/src/client.rs` or wherever `poller::login::auto_login` calls them from — read that call site, since it already uses these exact methods correctly) before finalizing — the snippet above is written from `poller::login::auto_login`'s known shape but confirm argument order/types match exactly (e.g. does `api_login` take `&str, &str` or something else).
 
-- [ ] **Step 2: Wire `routes/mod.rs` + `lib.rs`**
+- [x] **Step 2: Wire `routes/mod.rs` + `lib.rs`**
 
 `routes/mod.rs`: add `pub mod spx_login;`. `lib.rs`: `.nest("/auth/spx-login", routes::spx_login::spx_login_router(state.clone()))`.
 
-- [ ] **Step 3: Route-level tests**
+- [x] **Step 3: Route-level tests**
 
 New `Backend/crates/api-gateway/tests/spx_login_routes.rs`. Use `wiremock` to stand up a fake SPX server (mirroring however `spx-client`'s OWN tests already mock login endpoints — check `spx-client/tests/login_mock.rs` for the established request/response shape and REUSE that mocking pattern, don't invent a new one). Seed a real encrypted credential via `store::agency_credentials::create` (test-side, using the SAME master key the test server's `AppState` uses). Cases: (1) wiremock returns a successful API-login response → `{ok: true, tier: "api"}`; (2) wiremock returns failure on all tiers → `{ok: false, tier: null}`; (3) a nonexistent label → 404; (4) a sub-user (non-main-account) → 403.
 
-- [ ] **Step 4: Test, clippy, commit**
+- [x] **Step 4: Test, clippy, commit**
 
 ```bash
 cd Backend
@@ -473,7 +473,7 @@ git commit -m "feat(api-gateway): POST /auth/spx-login/:label (tier 2/3 connecti
   - `pub async fn verify(redis: &mut redis::aio::ConnectionManager, tenant_id: Uuid, portal_user_id: Uuid, submitted_code: &str) -> Result<(), OtpVerifyError>` — increments the attempt counter (rejecting with `OtpVerifyError::TooManyAttempts` at 5), compares the submitted code against the stored one (constant-time-ish — mirror this project's established `verify_password`-style non-short-circuiting comparison intent, or note if Rust's `==` on two SAME-LENGTH short strings is judged an acceptable risk here given this project's OWN established precedent — a 6-digit numeric OTP has vastly lower entropy than a password and the 5-attempt cap is the PRIMARY defense either way; document your reasoning either way, don't silently pick one without justifying it), and on success DELETES the code+attempt-counter keys (single-use) and WRITES the `spx:pwverify:<tenant_id>:<portal_user_id>` proof (`EX 120`).
   - `#[derive(Debug)] pub enum OtpRequestError { TooSoon, Redis(redis::RedisError) }`, `pub enum OtpVerifyError { NoActiveCode, WrongCode, TooManyAttempts, Redis(redis::RedisError) }` — both need `impl From<...> for ApiError` (or the route handler maps them manually — your call, pick whichever is cleaner given this crate's established `ApiError` conventions).
 
-- [ ] **Step 1: Add `wa_number` to `BotSettings`**
+- [x] **Step 1: Add `wa_number` to `BotSettings`**
 
 ```rust
 // Backend/crates/notifier/src/lib.rs — extend the existing struct, don't redefine it
@@ -497,7 +497,7 @@ pub struct BotSettings {
 
 Check every EXISTING test in `notifier` that constructs a `BotSettings` literal (`..Default::default()` users are unaffected; any EXHAUSTIVE field-by-field literal needs the new field added) — grep `BotSettings {` across the crate's tests and fix any that would fail to compile.
 
-- [ ] **Step 2: Write `otp.rs`**
+- [x] **Step 2: Write `otp.rs`**
 
 ```rust
 // Backend/crates/api-gateway/src/otp.rs
@@ -618,15 +618,15 @@ pub async fn verify(
 
 > **Verify `redis` 1.3.0's actual `set_options`/`SetOptions`/`SetExpiry`/`ExistenceCheck` API** (best-effort above) against the resolved version — this crate's exact `SET NX EX` builder API has had real shape changes across versions; check the installed source (`~/.cargo/registry`) or docs.rs for `redis` 1.3.0 specifically before finalizing. If the builder API differs, a raw `redis::cmd("SET").arg(&cooldown).arg("1").arg("NX").arg("EX").arg(RESEND_COOLDOWN_SECS).query_async(redis)` is an always-available fallback — use whichever is idiomatic for the actual resolved version. Also verify `getrandom` is reachable here (check `api-gateway/Cargo.toml` — it may need `cargo add getrandom` if not already a transitive dep this crate can name directly; Rust's extern-prelude only exposes DIRECT dependencies).
 
-- [ ] **Step 3: Wire `lib.rs`**
+- [x] **Step 3: Wire `lib.rs`**
 
 Add `pub mod otp;`.
 
-- [ ] **Step 4: Unit tests (real Redis, no HTTP)**
+- [x] **Step 4: Unit tests (real Redis, no HTTP)**
 
 New `Backend/crates/api-gateway/tests/otp_module.rs` (or `#[cfg(test)]` inline in `otp.rs` if this crate's convention prefers that for non-route-level logic — check `Permission`'s own test placement from Fase 6a Task 4 for precedent). Real Redis (`redis://127.0.0.1:16379`), a fresh `redis::Client::open(...).get_connection_manager().await` per test, unique `tenant_id`/`user_id` `Uuid::new_v4()` per test (no cross-test collision risk). Cases: (1) `request` succeeds, returns a 6-digit numeric string; (2) an immediate second `request` for the SAME user → `TooSoon`; (3) `verify` with the correct code → `Ok(())`, and a subsequent `verify` with the SAME (now-deleted) code → `NoActiveCode`; (4) `verify` with a wrong code 5 times → the 6th attempt (or whichever exact count the implementation enforces — confirm against the actual `MAX_ATTEMPTS` boundary) → `TooManyAttempts`; (5) after a successful `verify`, directly read `spx:pwverify:<tenant>:<user>` from Redis and confirm it exists with the expected TTL ballpark (`TTL` command, assert it's `> 0` and `<= 120`).
 
-- [ ] **Step 5: Test, clippy, commit**
+- [x] **Step 5: Test, clippy, commit**
 
 ```bash
 cd Backend
@@ -651,7 +651,7 @@ git commit -m "feat(notifier,api-gateway): BotSettings.wa_number + Redis-backed 
 - `POST /auth/request-aa-otp` → `require_permission(ArmAutoAccept)`, `{ok: true}` on success, maps `OtpRequestError::TooSoon` to a `409 Conflict` (or `429` — your call, document which and why; `429 Too Many Requests` arguably fits a resend-cooldown better than `409`, but this project doesn't have an established precedent for this exact case — pick one, disclose it), a missing/malformed bot config to a clear `500`-with-safe-message or a `400` if you judge "OTP delivery not configured" is more a client-facing config problem than a server fault (your call).
 - `POST /auth/verify-aa-otp` → body `{code: String}`, `require_permission(ArmAutoAccept)`, `{ok: true}` on success, maps `OtpVerifyError` variants to appropriate statuses (`WrongCode`/`NoActiveCode` → `401` or `400` — pick one consistently, matching the SAME "don't distinguish exact failure reason in a way that helps an attacker" caution Task 5's login route already established for password checks, though a 6-digit OTP's threat model is different — disclose your reasoning; `TooManyAttempts` → `429`).
 
-- [ ] **Step 1: Write `routes/otp.rs`**
+- [x] **Step 1: Write `routes/otp.rs`**
 
 ```rust
 // Backend/crates/api-gateway/src/routes/otp.rs
@@ -741,15 +741,15 @@ pub fn otp_router(state: AppState) -> Router<AppState> {
 
 > **The `load_bot_settings` function is explicitly a `todo!()` stub in this snippet — you must write it for real.** Steps: (1) grep the codebase for the exact `site_settings.key` string Fase 3's `waha_settings_pg.rs` test already established for bot/WAHA config (do not invent a new key name); (2) `store` has no dedicated `site_settings` query module yet — add a minimal one (`store::site_settings::get_json(pool, tenant_id, key) -> Result<Option<serde_json::Value>, sqlx::Error>` inside `begin_tenant_tx`, mirroring this plan's Task 1 CRUD style) as part of THIS task, since it's genuinely needed here and is a small, focused addition — do not build a full site_settings CRUD (that's 6d's job, this is just a read helper); (3) deserialize the JSONB value's fields into a `BotSettings` (check what shape the reference/Fase-3 test actually stored — `waha_url`, `waha_api_key` (ENCRYPTED — decrypt via `spx_client::crypto::envelope::decrypt_waha_key`), `waha_session`, `wa_group`, `wa_number`, `webhook_url`, `portal_label`, `enabled`); (4) if the row doesn't exist at all (expected in THIS sub-phase, since 6d's write route doesn't exist yet), return a clear, disclosed error (`ApiError::BadRequest("OTP delivery is not configured for this tenant")` — the SAME message the stub's caller already checks for on an empty `wa_number`, so consolidate into one code path rather than two separate empty-config checks).
 
-- [ ] **Step 2: Wire `routes/mod.rs` + `lib.rs`**
+- [x] **Step 2: Wire `routes/mod.rs` + `lib.rs`**
 
 `routes/mod.rs`: add `pub mod otp;` (note: this is `crate::routes::otp`, distinct from the ALREADY-existing `crate::otp` module from Task 4 — the route HANDLERS live in `routes::otp`, the Redis LOGIC lives in the top-level `otp` module; make sure the module paths don't collide/shadow confusingly, and use clear `use` aliases if needed). `lib.rs`: `.nest("/auth", routes::otp::otp_router(state.clone()))` (mounted at `/auth` directly, not a further sub-path, since the routes are already named `/request-aa-otp`/`/verify-aa-otp` in full).
 
-- [ ] **Step 3: Route-level tests**
+- [x] **Step 3: Route-level tests**
 
 New `Backend/crates/api-gateway/tests/otp_routes.rs`. Seed a real tenant + main-account user + session, AND a real `site_settings` row (direct `sqlx::query` INSERT, using the exact key/shape Step 1's `load_bot_settings` reads) pointing `waha_url` at a `wiremock` server, `wa_number` at a test phone-number-shaped string. Cases: (1) `POST /request-aa-otp` → 200, wiremock recorded exactly one `/api/sendText` call whose body's `chatId` matches the configured `wa_number` (not `wa_group`); (2) an IMMEDIATE second request → 409/429 (whichever you chose) from the cooldown; (3) `POST /verify-aa-otp` with the WRONG code → uniform rejection status; (4) with the RIGHT code (you'll need to intercept/know the code — either read it directly from Redis in the test after step 1's request, matching the "verify via direct backend read" pattern this project's tests already use elsewhere, or refactor `request_otp` to make the code retrievable in test builds — pick whichever is less invasive) → 200, and a direct Redis read confirms `spx:pwverify:<tenant>:<user>` now exists; (5) a sub-user (non-main-account) → 403 on BOTH routes.
 
-- [ ] **Step 4: Test, clippy, commit**
+- [x] **Step 4: Test, clippy, commit**
 
 ```bash
 cd Backend
@@ -773,7 +773,7 @@ git commit -m "feat(api-gateway): POST /auth/request-aa-otp + /auth/verify-aa-ot
 - `POST /auth/portal-users` → body `{username, password, display_name, is_main_account: bool}`, `require_permission(ManageSubUsers)`, hashes the password via `hash_password`, `201` with the same summary shape (never the hash).
 - `DELETE /auth/portal-users/:id` → `require_permission(ManageSubUsers)`, `204`/`404`. Guard: a user must NOT be able to delete their OWN account via this route (a real, if edge-case, self-lockout risk) — reject with `400`/`403` if `id == user.portal_user_id`.
 
-- [ ] **Step 1: Write `routes/portal_users.rs`**
+- [x] **Step 1: Write `routes/portal_users.rs`**
 
 ```rust
 // Backend/crates/api-gateway/src/routes/portal_users.rs
@@ -860,15 +860,15 @@ pub fn portal_users_router(state: AppState) -> Router<AppState> {
 }
 ```
 
-- [ ] **Step 2: Wire `routes/mod.rs` + `lib.rs`**
+- [x] **Step 2: Wire `routes/mod.rs` + `lib.rs`**
 
 `routes/mod.rs`: add `pub mod portal_users;`. `lib.rs`: `.nest("/auth/portal-users", routes::portal_users::portal_users_router(state.clone()))`.
 
-- [ ] **Step 3: Route-level tests**
+- [x] **Step 3: Route-level tests**
 
 New `Backend/crates/api-gateway/tests/portal_users_routes.rs`. Cases: (1) main-account session `POST`s a new sub-user → 200, response has no `password_hash` field; the created user can then actually LOG IN with the submitted password (round-trip through Task 5's `POST /auth/portal-login` from Fase 6a, or directly via `store::portal_users::find_by_username` + `verify_password`, whichever is a cleaner cross-crate test dependency — your call); (2) `GET /` lists both the main account and the new sub-user; (3) a SUB-USER session attempting `POST`/`DELETE` → 403, but `GET /` still 200; (4) `DELETE /:id` for the sub-user → 204, then `GET /` no longer lists them; (5) a main-account user attempting to `DELETE` THEIR OWN `id` → 400 (self-lockout guard).
 
-- [ ] **Step 4: Test, clippy, deny, commit**
+- [x] **Step 4: Test, clippy, deny, commit**
 
 ```bash
 cd Backend
@@ -886,7 +886,7 @@ git commit -m "feat(api-gateway): GET/POST/DELETE /auth/portal-users (sub-user C
 
 **Files:** None created — verification + plan checkbox sign-off only.
 
-- [ ] **Step 1: Full workspace verification**
+- [x] **Step 1: Full workspace verification**
 
 ```bash
 cd Docker && docker compose up -d tower-postgres tower-redis && cd ..
@@ -900,11 +900,11 @@ cd ..
 
 Note: `api-gateway`'s `tests/cors_and_body_limit.rs::oversized_body_gets_413` is a KNOWN, previously-disclosed pre-existing flake under heavy parallel test load (macOS `ConnectionReset` timing race, unrelated to any 6a/6b code) — if ONLY that test fails, re-run it in isolation to confirm, note in your report, do not treat as a new regression. Any OTHER failure is real.
 
-- [ ] **Step 2: Cross-check this plan's scope against the design doc's DoD — 6b's own slice only**
+- [x] **Step 2: Cross-check this plan's scope against the design doc's DoD — 6b's own slice only**
 
 6b closes real progress on design-doc DoD #1 (spx-creds/spx-login/sub-user routes are now real, per the reference route inventory), #3 (the OTP gate's REQUEST/VERIFY mechanics — the FULL DoD #3 also needs 6c's consumption of the `spx:pwverify` proof in `PUT /bookings/settings`, which is NOT this sub-phase's job; do not claim #3 fully closed). Do NOT claim #2/#4/#5 (already 6a's, unaffected) or #6/#8 (6c-6e's) as newly closed by this plan.
 
-- [ ] **Step 3: Mark this plan's checkboxes — same corruption-risk warning as every prior sign-off**
+- [x] **Step 3: Mark this plan's checkboxes — same corruption-risk warning as every prior sign-off**
 
 Convert ONLY lines matching `^- \[ \] \*\*Step` to `- [x] **Step`. Do NOT use a blind find/replace. Guard:
 ```bash
@@ -914,7 +914,7 @@ echo "steps:   $(grep -cE '^- \[.\] \*\*Step' Docs/superpowers/plans/2026-07-16-
 ```
 `git diff` and manually eyeball every changed line before committing.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add Backend Docs/superpowers/plans/2026-07-16-fase-6b-spx-creds-otp-gate.md
