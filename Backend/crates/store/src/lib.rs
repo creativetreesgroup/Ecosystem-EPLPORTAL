@@ -1,3 +1,4 @@
+pub mod accept_events;
 pub mod accept_rules;
 pub mod agency_credentials;
 pub mod automation_settings;
@@ -18,6 +19,13 @@ pub mod tenants;
 // `create`/`delete` re-exports just below. `find_by_label` is already
 // unambiguous. Callers may also always reach these via the qualified
 // `store::agency_credentials::...` path regardless.
+// `insert`/`list_for_tenant` aliased the same way as this crate's other
+// tenant-scoped CRUD modules (see `agency_credentials`'s re-exports below) —
+// `list_for_tenant` bare would collide with `rule_booking_targets::list_for_tenant`'s
+// own re-export just below.
+pub use accept_events::{
+    insert as insert_accept_event, list_for_tenant as list_accept_events, NewAcceptEvent,
+};
 pub use accept_rules::{
     list_all as list_accept_rules, replace_all as replace_accept_rules, NewAcceptRule,
 };
@@ -809,6 +817,44 @@ mod tests {
         assert_eq!(fetched.detail, detail);
         assert!(fetched.booking_id.is_none());
         assert!(fetched.rule_id.is_none());
+
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_id)
+            .execute(&pool)
+            .await
+            .ok();
+    }
+
+    #[tokio::test]
+    async fn accept_events_insert_then_list_newest_first() {
+        let pool = connect(&test_database_url()).await.expect("connect");
+        run_migrations(&pool).await.expect("migrate");
+        let tenant_id = insert_test_tenant(&pool).await;
+
+        for outcome in ["accepted", "skipped", "failed"] {
+            accept_events::insert(
+                &pool,
+                tenant_id,
+                &accept_events::NewAcceptEvent {
+                    booking_id: None,
+                    rule_id: None,
+                    outcome: outcome.to_string(),
+                    local_dispatch_us: Some(120),
+                    accept_e2e_ms: Some(45),
+                    detail: serde_json::json!({"note": outcome}),
+                },
+            )
+            .await
+            .unwrap_or_else(|e| panic!("insert {outcome}: {e}"));
+        }
+
+        let listed = accept_events::list_for_tenant(&pool, tenant_id, 50, 0)
+            .await
+            .expect("list_for_tenant");
+        assert_eq!(listed.len(), 3);
+        // newest first: the last-inserted ("failed") must come first.
+        assert_eq!(listed[0].outcome, "failed");
+        assert_eq!(listed[2].outcome, "accepted");
 
         sqlx::query("DELETE FROM tenants WHERE id = $1")
             .bind(tenant_id)
