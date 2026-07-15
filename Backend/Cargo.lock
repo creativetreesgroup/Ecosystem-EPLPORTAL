@@ -4429,14 +4429,19 @@ name = "ws-hub"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "chrono",
  "dashmap",
  "futures",
  "redis",
  "serde",
  "serde_json",
+ "spx-client",
+ "sqlx",
+ "store",
  "tokio",
  "tokio-tungstenite 0.30.0",
  "tracing",
+ "uuid",
  "ws-hub",
 ]
 

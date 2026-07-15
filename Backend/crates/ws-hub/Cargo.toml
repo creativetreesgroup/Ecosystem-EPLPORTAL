@@ -23,6 +23,17 @@ tracing = "0.1.44"
 test-helpers = []
 
 [dev-dependencies]
+# Task 10's `session_validated_ws.rs`: seeds a real `tenants`/`portal_users`/
+# `portal_sessions` row against real Postgres (same pattern as
+# `api-gateway/tests/session_auth.rs` and `store`'s own test module) to back
+# the `SessionValidator` closure under test with a genuine session, and
+# generates its plaintext token via `spx_client`'s real token helper — never
+# a hand-rolled/fake token shape.
+chrono = "0.4.45"
+spx-client = { version = "0.1.0", path = "../spx-client" }
+sqlx = { version = "0.9.0", features = ["postgres", "runtime-tokio", "tls-rustls-ring-native-roots", "macros", "uuid", "chrono"] }
+store = { version = "0.1.0", path = "../store" }
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "time", "sync"] }
 tokio-tungstenite = "0.30.0"
+uuid = { version = "1.23.5", features = ["v4"] }
 ws-hub = { path = ".", features = ["test-helpers"] }

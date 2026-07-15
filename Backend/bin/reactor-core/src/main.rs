@@ -318,8 +318,42 @@ async fn build_state() -> AppState {
     }
 }
 
+/// Builds the `ws_hub::SessionValidator` the validated ws upgrade path
+/// (Task 10) needs: hash the plaintext `?session=` query value exactly like
+/// `session_auth` middleware hashes the cookie (`hash_session_token`) — the
+/// ws query param IS the same plaintext session token as the cookie, per the
+/// design doc's note that ws-hub's channel-naming already uses the session
+/// id directly — then look it up via `store::portal_sessions::find_valid_by_hash`,
+/// which already filters `expires_at > now()` (migration 0018's
+/// `SECURITY DEFINER` function): `Ok(Some(_))` therefore means "exists AND
+/// unexpired", nothing further to check here. Authentication only — no
+/// `is_main_account`/RBAC check, per the task brief: any valid, logged-in
+/// session may open a WS connection.
+fn session_validator(pool: store::PgPool) -> ws_hub::SessionValidator {
+    Arc::new(move |token: String| {
+        let pool = pool.clone();
+        Box::pin(async move {
+            let hash = spx_client::crypto::session_token::hash_session_token(&token);
+            matches!(
+                store::portal_sessions::find_valid_by_hash(&pool, hash).await,
+                Ok(Some(_))
+            )
+        })
+    })
+}
+
+/// Mounts the Task 10 validated ws router (`/ws`, real session validation)
+/// alongside `api_gateway::build_router`'s REST surface on the same
+/// top-level `Router`. Both are already-`.with_state(..)`-applied
+/// `Router<()>`s by the time they're merged (`build_router` calls
+/// `.with_state` internally; `ws_router_with_auth` does too), so `.merge`
+/// needs no further state reconciliation.
 fn app(state: AppState) -> Router {
-    api_gateway::build_router(state)
+    let ws_router = ws_hub::ws_router_with_auth(
+        state.ws_hub.clone(),
+        session_validator(state.poller.pool.clone()),
+    );
+    api_gateway::build_router(state).merge(ws_router)
 }
 
 #[tokio::main]

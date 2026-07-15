@@ -8,4 +8,7 @@ pub mod hub;
 
 pub use bridge::spawn_bridge;
 pub use events::WsEvent;
-pub use hub::{ws_handler, ws_router, Hub, WsQuery};
+pub use hub::{
+    ws_handler, ws_handler_with_auth, ws_router, ws_router_with_auth, Hub, SessionValidator,
+    WsQuery,
+};

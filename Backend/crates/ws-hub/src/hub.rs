@@ -9,9 +9,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use std::future::Future;
+use std::pin::Pin;
+
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Query, State};
-use axum::response::Response;
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
 use dashmap::DashMap;
@@ -181,4 +185,52 @@ async fn handle_socket(socket: WebSocket, hub: Arc<Hub>, q: WsQuery) {
 
 pub fn ws_router(hub: Arc<Hub>) -> Router {
     Router::new().route("/ws", get(ws_handler)).with_state(hub)
+}
+
+// --- Session-validated upgrade path (Fase 6a Task 10) ----------------------
+//
+// Additive alongside `ws_handler`/`ws_router` above (Fase 5, Task 12/13):
+// those keep their existing no-auth signature/behavior UNCHANGED (their own
+// tests — `local_broadcast.rs`, `redis_bridge.rs`, `registry_cleanup.rs` —
+// call `ws_router(hub)` directly and must keep compiling and passing
+// unmodified). A caller that wants real session validation opts into the
+// NEW functions below instead.
+
+/// Takes the plaintext `?session=` query value and resolves whether it names
+/// a currently valid (existing, unexpired) session. A boxed async closure
+/// rather than a trait: this hook has exactly one production caller
+/// (`reactor-core`'s `main()`, wiring `store::portal_sessions::find_valid_by_hash`)
+/// and one test caller, so a full trait hierarchy would be over-engineering
+/// for a single call site — see the task brief's own sketch, which this
+/// mirrors. The boxed future lets the closure `.await` a real `sqlx` query
+/// without `ws_handler_with_auth`/`ws_router_with_auth` needing to be generic
+/// over the future type.
+pub type SessionValidator =
+    Arc<dyn Fn(String) -> Pin<Box<dyn Future<Output = bool> + Send>> + Send + Sync>;
+
+/// Validated upgrade path. Rejects with `401 Unauthorized` BEFORE
+/// `ws.on_upgrade` ever runs for a missing/empty/invalid/expired `?session=`
+/// — the WS handshake never completes in that case, rather than accepting
+/// the connection and immediately closing it, per the task brief's
+/// requirement that the client see a clean non-101 HTTP response.
+pub async fn ws_handler_with_auth(
+    ws: WebSocketUpgrade,
+    State((hub, validator)): State<(Arc<Hub>, SessionValidator)>,
+    Query(q): Query<WsQuery>,
+) -> Response {
+    if q.session.is_empty() || !(validator)(q.session.clone()).await {
+        return (StatusCode::UNAUTHORIZED, "invalid session").into_response();
+    }
+    ws.on_upgrade(move |socket| handle_socket(socket, hub, q))
+}
+
+/// Same `/ws` route shape as `ws_router` (existing, unchanged, no-auth) but
+/// requiring `validator` to confirm `?session=` names a valid session before
+/// the handshake completes. This is authentication only — no
+/// `is_main_account`/RBAC check here, per the task brief: any valid,
+/// logged-in session may open a WS connection.
+pub fn ws_router_with_auth(hub: Arc<Hub>, validator: SessionValidator) -> Router {
+    Router::new()
+        .route("/ws", get(ws_handler_with_auth))
+        .with_state((hub, validator))
 }
