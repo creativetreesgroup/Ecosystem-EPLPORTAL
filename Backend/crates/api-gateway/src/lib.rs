@@ -6,6 +6,7 @@
 //! stack. Later sub-phases (6b-6e) add route modules here.
 pub mod auth;
 pub mod error;
+pub mod middleware;
 pub mod routes;
 pub mod state;
 
@@ -21,6 +22,11 @@ pub fn build_router(state: AppState) -> Router {
         .route("/healthz", get(healthz))
         .nest("/auth", routes::auth::auth_router(state.clone()))
         .with_state(state)
+        // Outermost layer: runs on EVERY response this router produces,
+        // including `ApiError`-derived error responses (401/404/etc — see
+        // `error.rs`) and `/healthz`, since it wraps the whole `Router`
+        // rather than being scoped to any one route or nested sub-router.
+        .layer(axum::middleware::from_fn(middleware::security_headers))
 }
 
 async fn healthz() -> Json<Value> {
