@@ -32,7 +32,11 @@ pub struct CredentialSummary {
     pub username: String,
 }
 
-#[derive(Debug, Deserialize)]
+/// No `Debug` derive: this struct carries the plaintext `password` from the
+/// request body, and a `Debug`/`{:?}` impl is exactly the kind of thing a
+/// future `tracing::debug!(?body)` could reach for without realizing it logs
+/// a raw credential (review finding — Fase 6b Task 2).
+#[derive(Deserialize)]
 pub struct UpsertCredential {
     pub username: String,
     pub password: String,
