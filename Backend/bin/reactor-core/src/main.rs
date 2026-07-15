@@ -49,9 +49,25 @@ fn cors_origins_from_env() -> Vec<String> {
 /// that incremental build-up; this task's own diff is the tenant resolution,
 /// the master key + `RedisPublisher` wiring, and the bootstrap loop below.
 ///
-/// Two DISCLOSED, intentional gaps remain (both explicitly sanctioned by the
-/// Task 9 brief as acceptable for this task's scope — NOT silently invented):
+/// Three DISCLOSED, intentional gaps remain (all explicitly sanctioned as
+/// acceptable for this task's scope — NOT silently invented):
 ///
+/// - `poller::spawn_watchdog` (Fase 5) is NOT called anywhere in this file.
+///   The account-bootstrap loop below only ever calls
+///   `ensure_restored_then_spawn` — it never starts the durable-primary
+///   watchdog task that would recreate that account's poll loop if it dies
+///   at runtime. This means the steady-state half of Aturan Keras #10 ("one
+///   account's failure can't take down the process, and the durable primary
+///   self-heals") is not wired up yet: if the durable-primary account's poll
+///   loop panics after boot, nothing respawns it until the whole process is
+///   restarted. This is deferred, not forgotten — `spawn_watchdog`'s respawn
+///   closure needs to rebuild a full, correct `PollerState` for the
+///   restarted account, including `rules`/`rule_meta` and a real
+///   `agency_id`, and both of those are currently placeholder/empty per the
+///   next two disclosed gaps below. Wiring the watchdog now would either
+///   respawn with that same incomplete state or require pulling forward work
+///   that belongs to a later sub-phase (6c). Tracked for a near-future 6a/6b
+///   follow-up once rules/agency_id have real sources.
 /// - Every spawned `PollerState.rules`/`rule_meta` starts EMPTY
 ///   (`PollerState::new`'s own default). Accounts poll and dedupe correctly
 ///   but match no accept rules until Fase 6c's rules-CRUD route lets an
@@ -183,6 +199,11 @@ async fn build_state() -> AppState {
     // ciphertext/nonce, anything) must skip ONLY that account, never abort
     // the whole boot — Aturan Keras #10 applied at boot-time bootstrap, not
     // just the steady-state watchdog Fase 5 already built.
+    //
+    // NOTE: that steady-state watchdog (`poller::spawn_watchdog`) is NOT
+    // called anywhere below, or anywhere else in this file — see this fn's
+    // own doc comment above (`build_state`'s "Three DISCLOSED, intentional
+    // gaps") for why that's deliberate-but-deferred, not an oversight.
     let credentials = store::agency_credentials::list_all(&pool, tenant_id)
         .await
         .expect("reactor-core: list agency_credentials");
@@ -232,6 +253,32 @@ async fn build_state() -> AppState {
             tracing::warn!(
                 credential_id = %credential.id,
                 "agency_credentials row has an empty/whitespace-only username — skipping"
+            );
+            continue;
+        }
+
+        // `agency_credentials`'s only uniqueness constraint is `UNIQUE
+        // (tenant_id, label)` (see `migrations/0004_agency_credentials.sql`)
+        // — `username` is NOT unique, so two rows (different `label`s) CAN
+        // legitimately share the same lowercased `account_id` derived above.
+        // If both were spawned, the second `poller_shared.accounts.insert`
+        // below would silently OVERWRITE the first row's `AccountHandle` in
+        // the map — dropping a `JoinHandle` does not abort the underlying
+        // Tokio task, so the first loop would keep running forever,
+        // untracked and unstoppable (no handle left pointing to it), and two
+        // concurrent poll loops for the same SPX account could thrash each
+        // other's login sessions server-side. Guard against that here,
+        // same continue-based skip pattern as the malformed-nonce/
+        // decrypt-failure/empty-username checks above — enforcing real
+        // uniqueness at the DB/schema level is explicitly out of scope for
+        // this task (6b's CRUD scope).
+        if poller_shared.accounts.contains_key(&account_id) {
+            tracing::warn!(
+                account_id = %account_id,
+                credential_id = %credential.id,
+                label = %credential.label,
+                "duplicate account_id (same username, different label) already bootstrapped \
+                 in this boot — skipping this row to avoid orphaning the first row's poll loop"
             );
             continue;
         }
@@ -551,6 +598,105 @@ mod tests {
         assert!(
             !accounts.contains_key(&bad_username),
             "the malformed credential must be skipped (warn + continue), never spawned"
+        );
+
+        let _ = std::fs::remove_file(&master_key_path);
+        cleanup_tenant(tenant_id).await;
+    }
+
+    /// Review-finding regression test: `agency_credentials`'s only
+    /// uniqueness constraint is `UNIQUE (tenant_id, label)` (see
+    /// `migrations/0004_agency_credentials.sql`) — `username` is NOT
+    /// unique, so two rows CAN legitimately share the same
+    /// lowercased-`username` `account_id` the bootstrap loop derives.
+    /// Without a guard, both rows would be bootstrapped and the SECOND
+    /// `poller_shared.accounts.insert` call would silently overwrite the
+    /// first row's `AccountHandle` in the `DashMap` — orphaning the first
+    /// row's live poll loop forever (dropping a `JoinHandle` does not abort
+    /// the underlying Tokio task).
+    ///
+    /// Seeds TWO well-formed, decryptable `agency_credentials` rows under
+    /// the same tenant with the SAME username (different `label`s), boots
+    /// the ACTUAL assembled router through the real production
+    /// `build_state()`/`app()` path (same pattern as
+    /// `boot_smoke_malformed_credential_is_skipped_not_fatal` above), and
+    /// asserts: exactly ONE account ends up in `poller_shared.accounts` for
+    /// that `account_id` (not two — the DashMap key can only ever hold one
+    /// entry, so this also proves the second row didn't get a chance to
+    /// clobber the first row's still-running handle — and not zero, i.e.
+    /// the guard didn't accidentally skip BOTH), and `/healthz` still
+    /// returns 200 (no panic).
+    #[tokio::test]
+    async fn boot_smoke_duplicate_username_skips_second_row() {
+        let database_url = prepare_app_role_database_url().await;
+        let (tenant_id, tenant_slug) = seed_test_tenant().await;
+        let master_key_path = write_test_master_key();
+
+        let tower_pool = store::connect(&tower_superuser_url())
+            .await
+            .expect("connect as tower");
+        let master_key =
+            spx_client::crypto::envelope::MasterKey::load_from_file(&master_key_path)
+                .expect("load test master key back");
+
+        let shared_username = format!("dup-agent-{}", Uuid::new_v4().simple());
+
+        for label in ["dup-first", "dup-second"] {
+            let ct = spx_client::crypto::envelope::encrypt_agency_password(
+                &master_key,
+                tenant_id,
+                "s3cr3t-pw",
+            )
+            .expect("encrypt test password");
+            sqlx::query(
+                "INSERT INTO agency_credentials \
+                 (tenant_id, label, username, ciphertext, nonce, key_version) \
+                 VALUES ($1, $2, $3, $4, $5, $6)",
+            )
+            .bind(tenant_id)
+            .bind(label)
+            .bind(&shared_username)
+            .bind(&ct.bytes)
+            .bind(&ct.nonce[..])
+            .bind(spx_client::crypto::envelope::KEY_VERSION)
+            .execute(&tower_pool)
+            .await
+            .unwrap_or_else(|e| panic!("insert agency_credentials row (label={label}): {e}"));
+        }
+
+        std::env::set_var("DATABASE_URL", &database_url);
+        std::env::set_var("TENANT_SLUG", &tenant_slug);
+        std::env::set_var("TOWER_MASTER_KEY_PATH", master_key_path.to_str().unwrap());
+        std::env::set_var("SPX_BASE_URL", "http://127.0.0.1:1");
+        std::env::set_var("AUTH_SIDECAR_URL", "http://127.0.0.1:1");
+
+        let state = build_state().await;
+        let accounts = state.poller.accounts.clone();
+
+        let response = app(state)
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/healthz")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::OK,
+            "the duplicate-username second row must not have panicked the boot"
+        );
+
+        assert!(
+            accounts.contains_key(&shared_username),
+            "the first row's account must have been bootstrapped"
+        );
+        assert_eq!(
+            accounts.len(),
+            1,
+            "exactly one AccountHandle must exist for the shared account_id — the second \
+             row must be skipped, never overwrite the first row's still-running handle"
         );
 
         let _ = std::fs::remove_file(&master_key_path);
