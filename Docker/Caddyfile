@@ -1,9 +1,25 @@
+# Security note (Fase 6a Task 8 review finding): `header_up X-Forwarded-For
+# {remote_host}` below OVERWRITES the header with Caddy's real, non-spoofable
+# observed peer address (`{remote_host}` is the documented shorthand for
+# `{http.request.remote.host}`) instead of Caddy's bare `reverse_proxy`
+# default, which only AUGMENTS/appends to any client-supplied value. Without
+# this override, a client could set `X-Forwarded-For: <anything>` and have it
+# forwarded as `<anything>, <real-ip>` — `reactor-core`'s
+# `middleware/rate_limit.rs` login rate limiter keys on the LEFTMOST value via
+# `tower_governor::SmartIpKeyExtractor`, so an unsanitized header would let an
+# attacker rotate it per request for an unlimited rate-limit budget, defeating
+# the limiter entirely. Do not remove this directive without also revisiting
+# `rate_limit.rs`'s trust-invariant doc comment.
 :80 {
 	handle_path /api/* {
-		reverse_proxy tower-reactor-core:8081
+		reverse_proxy tower-reactor-core:8081 {
+			header_up X-Forwarded-For {remote_host}
+		}
 	}
 
 	handle {
-		reverse_proxy tower-web:3000
+		reverse_proxy tower-web:3000 {
+			header_up X-Forwarded-For {remote_host}
+		}
 	}
 }

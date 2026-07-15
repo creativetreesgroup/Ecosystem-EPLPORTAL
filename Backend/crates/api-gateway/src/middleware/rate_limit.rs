@@ -51,6 +51,32 @@
 //! none of those headers are present — exactly the "sane default for an app
 //! running behind a reverse proxy" its own doc comment describes.
 //!
+//! ### Trust invariant this depends on (review finding, addressed)
+//!
+//! `SmartIpKeyExtractor` takes the **leftmost** parseable IP out of
+//! `X-Forwarded-For`, with **zero validation** that the request actually came
+//! through a trusted proxy hop — this is documented, standard behavior for
+//! this class of extractor (the crate's own docs: "Only use if you can
+//! ensure these headers are set by a trusted provider"). That means this is
+//! safe **ONLY** because the edge proxy in front of `reactor-core` — Caddy
+//! locally, Traefik on the Fase 8 VPS overlay, per `Docker/Caddyfile` — is
+//! configured to **OVERWRITE** `X-Forwarded-For` with the real observed peer
+//! address, never append a client-supplied value onto it. `Docker/Caddyfile`
+//! enforces this today via `header_up X-Forwarded-For {remote_host}` on both
+//! `reverse_proxy` blocks (the security-critical one being the
+//! `tower-reactor-core` block) — see that file for the actual directive and
+//! its own comment explaining why.
+//!
+//! If `reactor-core` is ever exposed without going through a proxy that
+//! enforces this invariant (e.g. a bare `reverse_proxy` with no `header_up`
+//! override, or a Traefik config using `forwardedHeaders.insecure` instead of
+//! a correctly-scoped `forwardedHeaders.trustedIPs`), `SmartIpKeyExtractor`
+//! becomes bypassable: an attacker sends a spoofed `X-Forwarded-For` and
+//! rotates its value on every request, and each rotation buys a fresh
+//! rate-limit budget — unlimited login attempts, defeating this entire task.
+//! Before relying on this extractor in any new deployment topology, verify
+//! the fronting proxy still overwrites (not appends to) this header.
+//!
 //! ## The `ConnectInfo<SocketAddr>` fallback requires opt-in wiring
 //!
 //! Both key extractors' peer-IP fallback need `axum::extract::ConnectInfo`
