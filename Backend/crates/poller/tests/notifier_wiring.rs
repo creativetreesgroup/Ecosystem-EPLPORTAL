@@ -218,11 +218,11 @@ async fn win_then_agency_loss_then_none_drive_waha_calls_correctly() {
         .get_connection_manager()
         .await
         .expect("connect redis");
-    let logs = notifier::bot_log::list(&mut redis, 10).await;
+    let logs = notifier::bot_log::list(&mut redis, tenant_id, 10).await;
     assert_eq!(logs.len(), 1, "finalize_win must record exactly one bot_log entry");
     assert_eq!(logs[0].log_type, "success");
     assert_eq!(logs[0].kind.as_deref(), Some("accept"));
-    let _: () = redis::AsyncCommands::del(&mut redis, "spx:bot:logs").await.unwrap_or(());
+    notifier::bot_log::clear(&mut redis, tenant_id).await;
 
     // ── Case 2: a SEPARATE booking driven to AgencyDup -> LostToAgency spawns
     // exactly one (new, cumulative 2nd) WAHA call, with the rival's email in

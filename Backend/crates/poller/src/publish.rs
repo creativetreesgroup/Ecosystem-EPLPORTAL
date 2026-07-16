@@ -40,9 +40,10 @@ impl RedisPublisher {
     /// Records one bot-activity log entry (Fase 6d Task 7) — reuses this struct's own
     /// `ConnectionManager`, same `.clone()`-then-use pattern every other method here already
     /// follows. `poller` already depends on `notifier` (`PollerShared.notifier`), so this adds
-    /// no new Cargo.toml entry.
-    pub async fn record_bot_log(&self, entry: &notifier::bot_log::BotLogEntry) {
+    /// no new Cargo.toml entry. `tenant_id` tenant-scopes the underlying Redis key (review
+    /// finding — a single global key let any tenant read every other tenant's bot logs).
+    pub async fn record_bot_log(&self, tenant_id: uuid::Uuid, entry: &notifier::bot_log::BotLogEntry) {
         let mut con = self.con.clone();
-        notifier::bot_log::record(&mut con, entry).await;
+        notifier::bot_log::record(&mut con, tenant_id, entry).await;
     }
 }

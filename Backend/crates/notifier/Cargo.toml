@@ -29,6 +29,10 @@ serde_json = "1.0.150"
 thiserror = "2"
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "time"] }
 tracing = "0.1.44"
+# Pinned to the EXACT version already resolved elsewhere in this workspace (poller's
+# Cargo.toml) — reuses the one `uuid` crate instance already in the dependency graph
+# instead of introducing a second version.
+uuid = { version = "1.23.5", features = ["v4"] }
 web-push-native = "0.4.0"
 # Pinned to the EXACT version spx-client/poller use (=6.0.0-rc.29). Plain
 # `cargo add wreq` (unpinned) resolves to the latest stable release (5.3.0),

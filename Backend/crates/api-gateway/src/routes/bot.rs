@@ -226,7 +226,7 @@ async fn get_logs(
     Extension(user): Extension<CurrentUser>,
 ) -> Result<Json<Vec<notifier::bot_log::BotLogEntry>>, ApiError> {
     require_permission(&user, Permission::ManageBotSettings)?;
-    Ok(Json(notifier::bot_log::list(&mut state.redis, 200).await))
+    Ok(Json(notifier::bot_log::list(&mut state.redis, user.tenant_id, 200).await))
 }
 
 async fn delete_logs(
@@ -234,7 +234,7 @@ async fn delete_logs(
     Extension(user): Extension<CurrentUser>,
 ) -> Result<axum::http::StatusCode, ApiError> {
     require_permission(&user, Permission::ManageBotSettings)?;
-    notifier::bot_log::clear(&mut state.redis).await;
+    notifier::bot_log::clear(&mut state.redis, user.tenant_id).await;
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
 

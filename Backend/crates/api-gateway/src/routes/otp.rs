@@ -82,6 +82,7 @@ async fn request_otp(
     }
     notifier::bot_log::record(
         &mut state.redis,
+        user.tenant_id,
         &notifier::bot_log::BotLogEntry {
             ts: chrono::Utc::now().timestamp_millis(),
             log_type: if sent > 0 { "success".to_string() } else { "error".to_string() },

@@ -151,7 +151,7 @@ pub async fn dispatch_booking(
                         });
                     }
                     if let Some(pub_) = &shared.redis {
-                        pub_.record_bot_log(&notifier::bot_log::BotLogEntry {
+                        pub_.record_bot_log(st.tenant_id, &notifier::bot_log::BotLogEntry {
                             ts: chrono::Utc::now().timestamp_millis(),
                             log_type: "error".to_string(),
                             kind: Some("agency_loss".to_string()),
@@ -289,7 +289,7 @@ async fn finalize_win(
             }),
         )
         .await;
-        pub_.record_bot_log(&notifier::bot_log::BotLogEntry {
+        pub_.record_bot_log(st.tenant_id, &notifier::bot_log::BotLogEntry {
             ts: chrono::Utc::now().timestamp_millis(),
             log_type: "success".to_string(),
             kind: Some("accept".to_string()),

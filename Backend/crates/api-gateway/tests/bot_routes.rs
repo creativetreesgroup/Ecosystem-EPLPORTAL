@@ -223,7 +223,7 @@ async fn bot_logs_records_from_otp_and_can_be_cleared() {
 
     let state = build_state(pool.clone(), tenant_id).await;
     let mut redis_check = test_redis_manager().await;
-    notifier::bot_log::clear(&mut redis_check).await;
+    notifier::bot_log::clear(&mut redis_check, tenant_id).await;
 
     let base = spawn_server(state).await;
     let http = reqwest::Client::new();
