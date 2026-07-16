@@ -200,6 +200,12 @@ pub struct ManualAcceptResponse {
 /// | 'agency_dup_unverified'`, migration 0008) — `Skipped`/`Rejected` never occur on THIS path
 /// (this route only reaches `accept_booking` after `try_claim_manual` already returned `Ok`),
 /// so only the remaining 4 variants are mapped.
+///
+/// `AgencyDup` is deliberately treated as an unconditional failure here, UNLIKE the auto-accept
+/// path (`poller::dispatch::dispatch_booking`), which runs `executor::verify_agency_dup` and can
+/// still resolve `AgencyDup` to a win (`Ours`/`Inconclusive`). A manual accept skips that
+/// verification — the `agency_dup_unverified` outcome name says so honestly, and this is a
+/// disclosed scope simplification (review finding, Task 10), not an oversight.
 fn outcome_for(reason: spx_client::AcceptReason) -> &'static str {
     match reason {
         spx_client::AcceptReason::Ok => "accepted",
