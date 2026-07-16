@@ -1,6 +1,7 @@
 // Backend/crates/api-gateway/src/routes/mod.rs
 pub mod auth;
 pub mod bookings;
+pub mod bot;
 pub mod locations;
 pub mod otp;
 pub mod portal_users;

@@ -119,16 +119,17 @@ async fn verify_otp(
 /// own INSERT uses this exact constant, not a string literal, so there is no
 /// ambiguity about the established key convention).
 ///
-/// `WahaSettings` (Fase 3) only carries WAHA connection info (URL, session,
-/// encrypted API key) plus this task's own `wa_number` addition — it has no
-/// `wa_group`/`webhook_url`/`portal_label`/`enabled` fields, because those
-/// remain unmanaged by any route until 6d's `site_settings` CRUD ships. This
-/// fn defaults all four to their zero value on the constructed `BotSettings`
-/// rather than guessing at a shape 6d hasn't defined yet — this route only
-/// ever sends a personal-number OTP text (`bot.wa_number`), never touches
-/// `wa_group`/`webhook_url`/`enabled`/`portal_label` (`send_to_waha_many` is
-/// called directly here, not `notifier::notify_*`, so the `enabled` kill
-/// switch those wrapper fns gate on is irrelevant to this call path).
+/// `WahaSettings` (Fase 3, extended by Fase 6d Task 6) now carries all of
+/// `wa_group`/`webhook_url`/`portal_label`/`enabled` alongside its original
+/// connection info (URL, session, encrypted API key) and Fase 6b's own
+/// `wa_number` addition — `GET/PUT /bot/settings` (6d) is those four fields'
+/// first real read+write path. This route only ever sends a personal-number
+/// OTP text (`bot.wa_number`), never touches `wa_group`/`webhook_url`/
+/// `enabled`/`portal_label` itself (`send_to_waha_many` is called directly
+/// here, not `notifier::notify_*`, so the `enabled` kill switch those
+/// wrapper fns gate on is irrelevant to this call path) — they're still
+/// copied through here so `notifier::BotSettings` always reflects the
+/// tenant's real configuration, not a stale zero value.
 async fn load_bot_settings(
     state: &AppState,
     tenant_id: uuid::Uuid,
@@ -145,14 +146,14 @@ async fn load_bot_settings(
         .map_err(|e| ApiError::Internal(format!("failed to decrypt waha api key: {e:?}")))?;
 
     Ok(notifier::BotSettings {
-        enabled: false,
-        webhook_url: String::new(),
-        wa_group: String::new(),
+        enabled: waha.enabled,
+        webhook_url: waha.webhook_url,
+        wa_group: waha.wa_group,
         wa_number: waha.wa_number,
         waha_url: waha.waha_url,
         waha_api_key: api_key.expose_secret().to_string(),
         waha_session: waha.waha_session,
-        portal_label: String::new(),
+        portal_label: waha.portal_label,
     })
 }
 

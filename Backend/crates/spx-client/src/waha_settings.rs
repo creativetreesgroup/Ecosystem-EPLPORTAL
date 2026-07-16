@@ -33,6 +33,18 @@ pub struct WahaSettings {
     /// real reader.
     #[serde(default)]
     pub wa_number: String,
+    /// Fase 6d Task 6 additions — `#[serde(default)]` for the same forward-compat reason as
+    /// `wa_number` (Fase 6b): a `site_settings` row encoded before this field existed still
+    /// decodes cleanly (as its zero value). `otp.rs::load_bot_settings` (6b) is no longer the
+    /// only reader — `GET/PUT /bot/settings` (6d) is this field's first real read+write path.
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub webhook_url: String,
+    #[serde(default)]
+    pub wa_group: String,
+    #[serde(default)]
+    pub portal_label: String,
     /// base64(STANDARD) of the AES-256-GCM ciphertext of the API key.
     pub api_key_ciphertext_b64: String,
     /// base64(STANDARD) of the 12-byte nonce.
@@ -64,6 +76,10 @@ impl WahaSettings {
             // directly afterward — it's `pub`, so `settings.wa_number = ...`
             // needs no new constructor or builder method.
             wa_number: String::new(),
+            enabled: false,
+            webhook_url: String::new(),
+            wa_group: String::new(),
+            portal_label: String::new(),
             api_key_ciphertext_b64: STANDARD.encode(&ct.bytes),
             api_key_nonce_b64: STANDARD.encode(ct.nonce),
             key_version: KEY_VERSION,
