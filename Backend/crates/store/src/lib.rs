@@ -8,6 +8,7 @@ pub mod pool;
 pub mod portal_sessions;
 pub mod portal_users;
 pub mod quota;
+pub mod route_locations;
 pub mod route_prices;
 pub mod rule_booking_targets;
 pub mod site_settings;
@@ -60,6 +61,10 @@ pub use portal_users::{
     list_all as list_all_portal_users,
 };
 pub use quota::{consume_rule_quota, QuotaConsumeOutcome};
+pub use route_locations::{
+    create as create_route_location, delete as delete_route_location,
+    list_all as list_route_locations,
+};
 pub use route_prices::{
     create as create_route_price, delete as delete_route_price, list_all as list_route_prices,
     update as update_route_price, NewRoutePrice,
@@ -2998,6 +3003,40 @@ mod tests {
         let deleted = route_prices::delete(&pool, tenant_id, created.id).await.expect("delete");
         assert!(deleted);
         let after = route_prices::list_all(&pool, tenant_id).await.expect("list_all after delete");
+        assert_eq!(after.len(), 0);
+
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_id)
+            .execute(&pool)
+            .await
+            .ok();
+    }
+
+    #[tokio::test]
+    async fn route_locations_create_list_delete_round_trip() {
+        let pool = connect(&test_database_url()).await.expect("connect");
+        run_migrations(&pool).await.expect("migrate");
+        let tenant_id = insert_test_tenant(&pool).await;
+
+        let created = route_locations::create(&pool, tenant_id, "Padang DC")
+            .await
+            .expect("create");
+        assert_eq!(created.name, "Padang DC");
+
+        let dup = route_locations::create(&pool, tenant_id, "Padang DC").await;
+        assert!(dup.is_err(), "duplicate (tenant_id, name) must fail");
+        let db_err = dup.unwrap_err();
+        assert_eq!(
+            db_err.as_database_error().and_then(|e| e.code().map(|c| c.to_string())),
+            Some("23505".to_string())
+        );
+
+        let listed = route_locations::list_all(&pool, tenant_id).await.expect("list_all");
+        assert_eq!(listed.len(), 1);
+
+        let deleted = route_locations::delete(&pool, tenant_id, created.id).await.expect("delete");
+        assert!(deleted);
+        let after = route_locations::list_all(&pool, tenant_id).await.expect("list_all after delete");
         assert_eq!(after.len(), 0);
 
         sqlx::query("DELETE FROM tenants WHERE id = $1")
