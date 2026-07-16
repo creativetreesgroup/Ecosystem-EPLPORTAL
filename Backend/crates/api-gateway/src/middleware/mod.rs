@@ -8,11 +8,13 @@
 //! in `build_router` — it's route-scoped to just `POST /auth/portal-login`
 //! via `.route_layer(...)` in `routes/auth.rs::auth_router`, since a
 //! login-attempt budget would be wrong for `/me`/`/logout` or any other
-//! route.
+//! route. `rate_limit::public_rate_limit_layer` (Fase 6d Task 4) is likewise
+//! NOT global — it's route-scoped to just `GET /prices`'s public half via
+//! `routes/prices.rs::prices_router`'s own `.route_layer(...)`.
 pub mod cors;
 pub mod rate_limit;
 pub mod security_headers;
 
 pub use cors::cors_layer;
-pub use rate_limit::login_rate_limit_layer;
+pub use rate_limit::{login_rate_limit_layer, public_rate_limit_layer};
 pub use security_headers::security_headers;

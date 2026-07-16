@@ -3,6 +3,7 @@ pub mod auth;
 pub mod bookings;
 pub mod otp;
 pub mod portal_users;
+pub mod prices;
 pub mod rules;
 pub mod spx_credentials;
 pub mod spx_login;

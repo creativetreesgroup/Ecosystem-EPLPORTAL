@@ -1,11 +1,13 @@
 // Backend/crates/api-gateway/src/middleware/rate_limit.rs
-//! Per-IP rate limiting via `tower_governor`, applied ONLY to
+//! Per-IP rate limiting via `tower_governor`, applied route-scoped only —
+//! never globally in `build_router`. `login_rate_limit_layer` gates ONLY
 //! `POST /auth/portal-login` (see `routes/auth.rs::auth_router`'s
 //! `.route_layer(...)`, scoped to just that one route — never global, never
-//! `/me`/`/logout`). Login gets a stricter budget (~20/min/IP) than the
-//! reference's undifferentiated public-GET limiter (120/min, which 6d's
-//! `prices`/`branding` routes will use) — a login POST is a
-//! credential-stuffing target, a different threat model than a public read.
+//! `/me`/`/logout`) with a stricter budget (~20/min/IP) than
+//! `public_rate_limit_layer`'s undifferentiated public-GET budget (120/min,
+//! used by 6d's `routes/prices.rs::prices_router`'s public half, and Task 8's
+//! `GET /branding` + friends) — a login POST is a credential-stuffing target,
+//! a different threat model than a public read.
 //!
 //! ## Verified against the ACTUALLY-resolved `tower_governor = 0.8.0`
 //!
@@ -132,5 +134,35 @@ pub fn login_rate_limit_layer(
         // Only `None` when burst_size or period is zero — both are
         // non-zero `const`s above, so this can never actually panic.
         .expect("LOGIN_BURST_SIZE and LOGIN_REPLENISH_PERIOD_SECS are both non-zero");
+    GovernorLayer::new(config)
+}
+
+/// ~120 requests/minute/IP for public reads (`GET /prices`, and Task 8's `GET /branding` +
+/// friends) — the reference's own "undifferentiated public-GET limiter" figure, matching the
+/// design doc's binding constant. A burst of 120 immediately, replenishing one element every
+/// 500ms thereafter (120 elements/60s steady-state) — the SAME `SmartIpKeyExtractor` as
+/// `login_rate_limit_layer` (see that fn's own doc comment for the X-Forwarded-For trust
+/// invariant this depends on; identical here, not re-derived).
+///
+/// `per_millisecond` verified to exist on `GovernorConfigBuilder` in the resolved
+/// `tower_governor = 0.8.0` (`~/.cargo/registry/src/.../tower_governor-0.8.0/src/governor.rs`,
+/// alongside `per_second`/`per_nanosecond`/their `const_*` counterparts) — no substitution
+/// needed, unlike the brief's own flagged uncertainty.
+const PUBLIC_BURST_SIZE: u32 = 120;
+const PUBLIC_REPLENISH_PERIOD_MS: u64 = 500;
+
+/// Builds the route-scoped rate-limit layer for public GET routes. Applied via `.route_layer(...)`
+/// on the specific public sub-router (e.g. `routes/prices.rs::prices_router`'s public half) —
+/// never mounted globally, never applied to session-authenticated traffic.
+pub fn public_rate_limit_layer(
+) -> GovernorLayer<SmartIpKeyExtractor, NoOpMiddleware, axum::body::Body> {
+    let config = GovernorConfigBuilder::default()
+        .key_extractor(SmartIpKeyExtractor)
+        .per_millisecond(PUBLIC_REPLENISH_PERIOD_MS)
+        .burst_size(PUBLIC_BURST_SIZE)
+        .finish()
+        // Only `None` when burst_size or period is zero — both are
+        // non-zero `const`s above, so this can never actually panic.
+        .expect("PUBLIC_BURST_SIZE and PUBLIC_REPLENISH_PERIOD_MS are both non-zero");
     GovernorLayer::new(config)
 }
