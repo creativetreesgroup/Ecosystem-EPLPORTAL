@@ -160,3 +160,56 @@ async fn ssrf_guard_rejects_internal_hosts() {
 
     cleanup(&pool, tenant_id).await;
 }
+
+/// Security-review finding, fixed post-Task-6: the original hand-rolled string-parsing SSRF
+/// guard had two real bypasses — userinfo confusion (a real HTTP client connects to whatever
+/// follows `@`, ignoring the "safe-looking" text before it) and IPv6 bracket notation (the naive
+/// split-on-first-`:` truncated inside `[::1]`, never matching the literal `"::1"` check). Both
+/// are now rejected via a real `url::Url` parse + `Host` enum inspection — this test locks that in.
+#[tokio::test]
+async fn ssrf_guard_rejects_userinfo_confusion_and_ipv6_bracket_notation() {
+    let pool = store::connect(&database_url()).await.expect("connect");
+    store::run_migrations(&pool).await.expect("migrate");
+    let tenant_id = insert_tenant(&pool).await;
+    insert_portal_user(&pool, tenant_id, "owner", true).await;
+
+    let state = build_state(pool.clone(), tenant_id).await;
+    let base = spawn_server(state).await;
+    let http = reqwest::Client::new();
+    let cookie = login_cookie(&http, &base, "owner").await;
+
+    let bad_urls = [
+        // Userinfo confusion: a real client connects to 169.254.169.254 (the cloud metadata
+        // endpoint), ignoring "looks-safe.example" before the '@'.
+        "http://looks-safe.example@169.254.169.254/",
+        "http://looks-safe.example@127.0.0.1/",
+        // IPv6 loopback/link-local/unique-local in bracket notation.
+        "http://[::1]:3000",
+        "http://[fe80::1]:3000",
+        "http://[fc00::1]:3000",
+        // IPv4-mapped IPv6 loopback.
+        "http://[::ffff:127.0.0.1]:3000",
+    ];
+    for bad_url in bad_urls {
+        let resp = http
+            .put(format!("{base}/bot/settings"))
+            .header("Cookie", &cookie)
+            .json(&serde_json::json!({"waha_url": bad_url, "waha_api_key": "k"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 400, "waha_url={bad_url} must be rejected");
+    }
+
+    // A genuinely external, safe URL must still be accepted (the guard isn't over-broad).
+    let good_resp = http
+        .put(format!("{base}/bot/settings"))
+        .header("Cookie", &cookie)
+        .json(&serde_json::json!({"waha_url": "https://waha.example.com:3000", "waha_api_key": "k"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(good_resp.status(), 200, "a genuinely external host must still be accepted");
+
+    cleanup(&pool, tenant_id).await;
+}

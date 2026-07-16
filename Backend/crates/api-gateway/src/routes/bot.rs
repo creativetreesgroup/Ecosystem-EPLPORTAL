@@ -48,38 +48,75 @@ pub struct BotSettingsRequest {
 }
 
 /// Ports the reference's `isSafeOutboundUrl` SSRF guard, applied to BOTH `waha_url` and
-/// `webhook_url` before storing. No `url`-crate dependency — plain string parsing (scheme prefix
-/// plus host substring up to the first `/`/`:`/`?`/`#`) is sufficient for this narrow check and
-/// adds no new Cargo.toml entry. Empty string is considered safe ("disabled"/"keep previous").
+/// `webhook_url` before storing.
+///
+/// **Security-review correction (post-Task-6 fix):** the original implementation of this fn used
+/// hand-rolled string parsing (find the host as the substring up to the first `/`/`:`/`?`/`#`
+/// after the scheme prefix) instead of a real URL parser. An automated security review correctly
+/// flagged two real bypasses that hand-rolled parsing cannot catch:
+/// 1. **Userinfo confusion**: `http://looks-safe.example@169.254.169.254/` — the substring up to
+///    the first `/`/`:`/`?`/`#` is `looks-safe.example@169.254.169.254`, which matches none of
+///    the blocklist patterns, so the OLD check passed it — but a real HTTP client parses
+///    `169.254.169.254` (the part AFTER `@`) as the actual connection target, i.e. the AWS/GCP
+///    metadata endpoint. The fix rejects any URL carrying userinfo outright.
+/// 2. **IPv6 bracket notation**: `http://[::1]:3000/` — IPv6 addresses contain `:` themselves, so
+///    splitting on the first `:` (intended to strip a port) instead truncated INSIDE the bracket
+///    notation, producing a garbled host string that never matched the literal `"::1"` check.
+///
+/// Now uses `url::Url::parse` (already resolved transitively in this workspace's dependency tree
+/// via `reqwest`/`wreq` — promoting it to a direct dependency here changes nothing about the
+/// resolved dependency graph) and inspects the parsed `Host` enum directly, using `std::net`'s own
+/// well-tested `is_loopback`/`is_private`/`is_link_local`/`is_unspecified` predicates instead of
+/// hand-rolled octet comparisons. Empty string is considered safe ("disabled"/"keep previous").
 fn is_safe_outbound_url(raw: &str) -> bool {
     let s = raw.trim();
     if s.is_empty() {
         return true;
     }
-    let after_scheme = if let Some(rest) = s.strip_prefix("https://") {
-        rest
-    } else if let Some(rest) = s.strip_prefix("http://") {
-        rest
-    } else {
+    let Ok(url) = url::Url::parse(s) else {
         return false;
     };
-    let host_end = after_scheme.find(['/', ':', '?', '#']).unwrap_or(after_scheme.len());
-    let host = after_scheme[..host_end].to_lowercase();
-    if host.is_empty() {
+    if url.scheme() != "http" && url.scheme() != "https" {
         return false;
     }
-    if host == "localhost" || host == "::1" || host.ends_with(".local") || host == "0.0.0.0" {
+    // Reject embedded credentials outright — `url::Url` correctly separates userinfo from host,
+    // but a URL that specifies userinfo at all has no legitimate use here, and different HTTP
+    // clients have historically disagreed on how ambiguous userinfo is handled — safer to reject
+    // than to trust "the parsed host field looks fine so we're safe."
+    if !url.username().is_empty() || url.password().is_some() {
         return false;
     }
-    if let Ok(ip) = host.parse::<std::net::Ipv4Addr>() {
-        let o = ip.octets();
-        if o[0] == 127
-            || o[0] == 10
-            || (o[0] == 192 && o[1] == 168)
-            || (o[0] == 169 && o[1] == 254)
-            || (o[0] == 172 && (16..=31).contains(&o[1]))
-        {
-            return false;
+    let Some(host) = url.host() else {
+        return false;
+    };
+    match host {
+        url::Host::Domain(d) => {
+            let dl = d.to_lowercase();
+            if dl == "localhost" || dl.ends_with(".local") {
+                return false;
+            }
+        }
+        url::Host::Ipv4(ip) => {
+            if ip.is_loopback() || ip.is_private() || ip.is_link_local() || ip.is_unspecified() {
+                return false;
+            }
+        }
+        url::Host::Ipv6(ip) => {
+            if ip.is_loopback() || ip.is_unspecified() {
+                return false;
+            }
+            let seg0 = ip.segments()[0];
+            // Unique-local fc00::/7 (top 7 bits 1111_110) and link-local fe80::/10.
+            if (seg0 & 0xfe00) == 0xfc00 || (seg0 & 0xffc0) == 0xfe80 {
+                return false;
+            }
+            // IPv4-mapped (::ffff:a.b.c.d) — check the embedded v4 address too.
+            if let Some(v4) = ip.to_ipv4_mapped() {
+                if v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified()
+                {
+                    return false;
+                }
+            }
         }
     }
     true

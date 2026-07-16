@@ -63,6 +63,13 @@ tower-http = { version = "0.7.0", features = ["cors", "limit"] }
 # rather than adding a second, silent observability path.
 tower_governor = { version = "0.8.0", default-features = false, features = ["axum", "tracing"] }
 tracing = "0.1.44"
+# NOT in the original Task 6 brief — added as a post-merge security-review fix. `routes/bot.rs`'s
+# `is_safe_outbound_url` SSRF guard originally hand-parsed URLs with string splitting, which had
+# two real bypasses (userinfo confusion, IPv6 bracket notation — see that fn's own doc comment).
+# `url` was already resolved TRANSITIVELY in this workspace's dependency tree (via
+# `reqwest`/`wreq`) at "2.5.8" — pinning to "2.5" here promotes it to a direct dependency without
+# changing the resolved version Cargo already unifies on.
+url = "2.5"
 uuid = { version = "1.23.5", features = ["v4", "serde"] }
 ws-hub = { version = "0.1.0", path = "../ws-hub" }
 
