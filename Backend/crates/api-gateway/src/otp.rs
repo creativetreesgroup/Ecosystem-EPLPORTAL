@@ -22,7 +22,7 @@ fn cooldown_key(tenant_id: Uuid, user_id: Uuid) -> String {
 fn attempts_key(tenant_id: Uuid, user_id: Uuid) -> String {
     format!("spx:aa_otp_att:{tenant_id}:{user_id}")
 }
-fn pwverify_key(tenant_id: Uuid, user_id: Uuid) -> String {
+pub(crate) fn pwverify_key(tenant_id: Uuid, user_id: Uuid) -> String {
     format!("spx:pwverify:{tenant_id}:{user_id}")
 }
 

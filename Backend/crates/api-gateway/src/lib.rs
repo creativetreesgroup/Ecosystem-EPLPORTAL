@@ -48,7 +48,8 @@ pub fn build_router(state: AppState) -> Router {
         )
         .nest(
             "/bookings",
-            routes::bookings::bookings_router(state.clone()),
+            routes::bookings::bookings_router(state.clone())
+                .merge(routes::rules::rules_router(state.clone())),
         )
         .with_state(state.clone())
         // CORS (Task 7): exact-match allowlist, applied to every route this
