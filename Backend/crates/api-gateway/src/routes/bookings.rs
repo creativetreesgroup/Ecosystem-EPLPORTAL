@@ -5,7 +5,7 @@
 //! see this file's own `require_permission` usage (Task 10's handler) for the one exception's
 //! rationale.
 use axum::extract::{Extension, Path, Query, State};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -188,6 +188,173 @@ async fn spx_log(
     Ok(Json(rows.into_iter().map(AcceptEventItem::from).collect()))
 }
 
+#[derive(Debug, Serialize)]
+pub struct ManualAcceptResponse {
+    pub ok: bool,
+    pub reason: String,
+    pub message: String,
+}
+
+/// Maps `spx_client::AcceptReason` to the SAME `outcome` vocabulary `accept_events.outcome`'s
+/// CHECK constraint allows (`'accepted' | 'rejected' | 'skipped' | 'taken_by_agency' | 'failed'
+/// | 'agency_dup_unverified'`, migration 0008) — `Skipped`/`Rejected` never occur on THIS path
+/// (this route only reaches `accept_booking` after `try_claim_manual` already returned `Ok`),
+/// so only the remaining 4 variants are mapped.
+fn outcome_for(reason: spx_client::AcceptReason) -> &'static str {
+    match reason {
+        spx_client::AcceptReason::Ok => "accepted",
+        spx_client::AcceptReason::AgencyDup => "agency_dup_unverified",
+        spx_client::AcceptReason::Taken => "taken_by_agency",
+        spx_client::AcceptReason::Transient
+        | spx_client::AcceptReason::Auth
+        | spx_client::AcceptReason::Error => "failed",
+    }
+}
+
+/// `POST /bookings/:id/accept` — manual accept. NO `require_permission` gate — only
+/// `session_auth` (any logged-in tenant member may manually accept); see this file's module doc
+/// for the disclosed rationale (matches Task 8/9's read routes' precedent).
+async fn accept(
+    State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<ManualAcceptResponse>, ApiError> {
+    let booking = store::bookings::get_detail(&state.poller.pool, user.tenant_id, id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+
+    if booking.status != "pending" {
+        return Err(ApiError::Conflict(format!(
+            "booking is not pending (status: {})",
+            booking.status
+        )));
+    }
+
+    let (dedup, manual_tx) = {
+        let handle = state
+            .poller
+            .accounts
+            .get(&booking.account_id)
+            .ok_or_else(|| {
+                ApiError::Conflict(
+                    "the account this booking belongs to is not currently connected".to_string(),
+                )
+            })?;
+        (handle.dedup.clone(), handle.manual_accept.clone())
+    };
+
+    match state
+        .poller
+        .executor
+        .try_claim_manual(&booking.account_id, &booking.spx_id, &dedup)
+        .await
+    {
+        executor::ManualClaimOutcome::AlreadyAccepted => {
+            return Err(ApiError::Conflict(
+                "booking is already claimed or accepted".to_string(),
+            ));
+        }
+        executor::ManualClaimOutcome::Ok => {}
+    }
+
+    let spx_booking = spx_client::normalize_booking(&booking.raw_data);
+    let booking_id_i64 = spx_booking.booking_id.parse::<i64>().unwrap_or(0);
+    let request_ids: Vec<i64> = spx_booking
+        .request_id
+        .parse::<i64>()
+        .ok()
+        .into_iter()
+        .collect();
+
+    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+    manual_tx
+        .send(poller::ManualAcceptRequest {
+            booking_id: booking_id_i64,
+            request_ids,
+            reply: reply_tx,
+        })
+        .await
+        .map_err(|_| {
+            ApiError::Internal("account task is not accepting manual requests".to_string())
+        })?;
+
+    let result = tokio::time::timeout(std::time::Duration::from_secs(15), reply_rx)
+        .await
+        .map_err(|_| ApiError::Internal("manual accept dispatch timed out".to_string()))?
+        .map_err(|_| ApiError::Internal("account task dropped the manual accept reply".to_string()))?;
+
+    let outcome = outcome_for(result.reason);
+
+    if matches!(result.reason, spx_client::AcceptReason::Ok) {
+        dedup.commit_accept(&booking.spx_id);
+        let _ = state
+            .poller
+            .executor
+            .record_durable_accept(&booking.account_id, &booking.spx_id)
+            .await;
+        let _ = store::update_booking_status(
+            &state.poller.pool,
+            user.tenant_id,
+            &booking.spx_id,
+            store::BookingStatusUpdate {
+                status: "accepted",
+                latency_ms: None,
+                auto_accepted: false,
+                rule_matched: None,
+                accept_reason: None,
+            },
+        )
+        .await;
+    } else {
+        // Best-effort: release the Layer-2 claim so a retry isn't blocked for the full 600s
+        // TTL. `rule_id: None` — manual accepts never populate the inflight quota set, so this
+        // is a harmless no-op SREM against a set that was never written to.
+        state
+            .poller
+            .executor
+            .release_claim_auto(&booking.account_id, &booking.spx_id, None)
+            .await;
+        dedup.abort_accept(&booking.spx_id);
+        let _ = store::update_booking_status(
+            &state.poller.pool,
+            user.tenant_id,
+            &booking.spx_id,
+            store::BookingStatusUpdate {
+                status: "failed",
+                latency_ms: None,
+                auto_accepted: false,
+                rule_matched: None,
+                accept_reason: Some("manual_accept_failed"),
+            },
+        )
+        .await;
+    }
+
+    let _ = store::insert_accept_event(
+        &state.poller.pool,
+        user.tenant_id,
+        &store::NewAcceptEvent {
+            booking_id: Some(booking.id),
+            rule_id: None,
+            outcome: outcome.to_string(),
+            local_dispatch_us: None,
+            accept_e2e_ms: None,
+            detail: serde_json::json!({
+                "manual": true,
+                "retcode": result.retcode,
+                "message": result.message,
+            }),
+        },
+    )
+    .await;
+
+    Ok(Json(ManualAcceptResponse {
+        ok: matches!(result.reason, spx_client::AcceptReason::Ok),
+        reason: outcome.to_string(),
+        message: result.message,
+    }))
+}
+
 /// Nested at `/bookings` by `build_router`. Task 10 appends `.route("/{id}/accept", post(...))`
 /// to this SAME function (do not create a second router for it — one `/bookings` prefix, one
 /// router, per this crate's established one-router-per-resource convention).
@@ -197,5 +364,6 @@ pub fn bookings_router(state: AppState) -> Router<AppState> {
         .route("/history", get(history))
         .route("/{id}/detail", get(detail))
         .route("/spx-log", get(spx_log))
+        .route("/{id}/accept", post(accept))
         .route_layer(axum::middleware::from_fn_with_state(state, session_auth))
 }

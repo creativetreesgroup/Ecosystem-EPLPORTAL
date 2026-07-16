@@ -1,9 +1,12 @@
 // Backend/crates/api-gateway/tests/bookings_routes.rs
-//! `GET /bookings/live`, `/history`, `/:id/detail`, `/spx-log` — session-auth-only read routes.
+//! `GET /bookings/live`, `/history`, `/:id/detail`, `/spx-log` — session-auth-only read routes,
+//! and (Task 10) `POST /bookings/:id/accept` — manual accept.
 use dashmap::DashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use uuid::Uuid;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use api_gateway::AppState;
 
@@ -128,6 +131,21 @@ async fn cleanup(pool: &sqlx::PgPool, tenant_id: Uuid) {
         .bind(tenant_id)
         .execute(pool)
         .await;
+}
+
+/// Unlike `cleanup` (Postgres — always a freshly random `tenant_id`, so no cross-run collision
+/// is possible), the manual-accept tests use FIXED `account_id`/`spx_id` strings, and Layer 2
+/// (`spx:claim:*`)/Layer 3 (`spx:accepted:*`) live in the SAME real Redis this whole test suite
+/// shares, outliving any one test run. Without this, a happy-path run's own
+/// `record_durable_accept` would make every LATER run of the same test see the ticket as already
+/// accepted (`try_claim_manual`'s Layer 3 check) and 409 instead of 200. Called BEFORE the test
+/// body (self-healing against a prior run's leftovers, including a panicked one) as well as
+/// after.
+async fn cleanup_redis_claim(account_id: &str, spx_id: &str) {
+    use redis::AsyncCommands;
+    let mut con = test_redis_manager().await;
+    let _: redis::RedisResult<()> = con.del(format!("spx:claim:{account_id}:{spx_id}")).await;
+    let _: redis::RedisResult<()> = con.zrem(format!("spx:accepted:{account_id}"), spx_id).await;
 }
 
 #[tokio::test]
@@ -310,6 +328,212 @@ async fn spx_log_lists_accept_events_newest_first() {
     let body: Vec<serde_json::Value> = resp.json().await.unwrap();
     assert_eq!(body.len(), 2);
     assert_eq!(body[0]["outcome"], "failed", "newest (last-inserted) first");
+
+    cleanup(&pool, tenant_id).await;
+}
+
+/// Builds `AppState` the same way `build_state` does, but spawns ONE real poller account
+/// (`account_id`) pointed at `mock`'s URI, so `POST /:id/accept` has a real `AccountHandle` to
+/// find in `state.poller.accounts`.
+async fn build_state_with_account(
+    pool: sqlx::PgPool,
+    tenant_id: Uuid,
+    account_id: &str,
+    spx_base_url: &str,
+) -> AppState {
+    let executor = executor::ExecutorHandle::connect(&redis_url())
+        .await
+        .expect("connect executor redis");
+    let client = spx_client::SpxClient::new(spx_base_url).expect("build SpxClient");
+    let sidecar = poller::SidecarClient::new("http://127.0.0.1:1".to_string());
+    let poller_shared = Arc::new(poller::PollerShared {
+        executor: Arc::new(executor),
+        client: Arc::new(client),
+        pool: pool.clone(),
+        config: poller::PollerConfig {
+            poll_interval_ms: 3_600_000,
+            ..poller::PollerConfig::default()
+        },
+        accounts: Arc::new(DashMap::new()),
+        sidecar: Arc::new(sidecar),
+        notifier: None,
+        redis: None,
+        rules_tx: tokio::sync::watch::channel(poller::RuleSet::empty()).0,
+    });
+
+    let mut state = poller::PollerState::new(
+        account_id.to_string(),
+        tenant_id,
+        555, // nonzero agency_id — this test exercises the REAL accept_booking call, not the
+             // agency_id<=0 short-circuit Task 6's note discloses for production today
+        spx_client::SpxCookies::default(),
+        "u".into(),
+        "p".into(),
+    );
+    state.agency_id = 555;
+    let handle = poller::ensure_restored_then_spawn(poller_shared.clone(), state).await;
+    poller_shared.accounts.insert(account_id.to_string(), handle);
+
+    AppState {
+        poller: poller_shared,
+        ws_hub: ws_hub::Hub::new(),
+        tenant_id,
+        cors_origins: Arc::new(vec![]),
+        session_cookie_name: Arc::from("spx_session"),
+        cookie_secure: false,
+        master_key: test_master_key(),
+        redis: test_redis_manager().await,
+    }
+}
+
+#[tokio::test]
+async fn manual_accept_happy_path_claims_dispatches_and_records() {
+    // Self-healing: a prior successful run of THIS test (fixed account_id/spx_id) durably
+    // recorded the accept in the shared Redis instance — see `cleanup_redis_claim`'s doc.
+    cleanup_redis_claim("manual-acct", "manual-1").await;
+
+    let mock = MockServer::start().await;
+    // Real spx-client endpoint paths (see `spx-client/src/client.rs`'s `PATH_BIDDING_LIST`/
+    // `PATH_ACCEPT` consts, and `crates/poller/tests/manual_accept_channel.rs`'s own deviation
+    // note) — NOT the `/api/marketplace/dc/acceptBooking` placeholder this task's brief used.
+    // The account's poll loop fires a sweep immediately on spawn (`spawn_account_loop` calls
+    // `poll_once` before its first `select!`), so the bidding-list endpoint must also be mocked
+    // (empty page) or every one of its rotating-window pages 404s — harmless (best-effort page
+    // failures) but noisy, so it's mocked the same way `manual_accept_channel.rs` already does.
+    Mock::given(method("POST"))
+        .and(path("/api/line_haul/agency/booking/bidding/list"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": { "list": [] }
+        })))
+        .mount(&mock)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/line_haul/agency/booking/bidding/accept"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "retcode": 0, "message": "ok"
+        })))
+        .mount(&mock)
+        .await;
+
+    let pool = store::connect(&database_url()).await.expect("connect");
+    let tenant_id = insert_tenant(&pool).await;
+    insert_portal_user(&pool, tenant_id, "owner").await;
+
+    store::upsert_booking(
+        &pool,
+        tenant_id,
+        &store::BookingUpsert {
+            account_id: "manual-acct".to_string(),
+            spx_id: "manual-1".to_string(),
+            status: "pending".to_string(),
+            is_coc: false,
+            raw_data: serde_json::json!({"booking_id": "778899", "request_id": "1"}),
+        },
+    )
+    .await
+    .expect("seed booking");
+
+    let state = build_state_with_account(pool.clone(), tenant_id, "manual-acct", &mock.uri()).await;
+    let base = spawn_server(state).await;
+    let http = reqwest::Client::new();
+    let cookie = login_cookie(&http, &base, "owner").await;
+
+    let live_resp = http
+        .get(format!("{base}/bookings/live"))
+        .header("Cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    let live_body: Vec<serde_json::Value> = live_resp.json().await.unwrap();
+    let id = live_body[0]["id"].as_str().unwrap().to_string();
+
+    let accept_resp = http
+        .post(format!("{base}/bookings/{id}/accept"))
+        .header("Cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(accept_resp.status(), 200);
+    let accept_body: serde_json::Value = accept_resp.json().await.unwrap();
+    assert_eq!(accept_body["ok"], true);
+    assert_eq!(accept_body["reason"], "accepted");
+
+    // DB status must now be 'accepted', not 'pending'.
+    let after = store::bookings::get_detail(&pool, tenant_id, Uuid::parse_str(&id).unwrap())
+        .await
+        .expect("get_detail")
+        .expect("row must still exist");
+    assert_eq!(after.status, "accepted");
+    assert!(!after.auto_accepted, "manual accept must record auto_accepted=false");
+
+    // A SECOND accept attempt on the same (now non-pending) booking must be rejected.
+    let second_resp = http
+        .post(format!("{base}/bookings/{id}/accept"))
+        .header("Cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(second_resp.status(), 409, "a non-pending booking must not be re-acceptable");
+
+    cleanup(&pool, tenant_id).await;
+    cleanup_redis_claim("manual-acct", "manual-1").await;
+}
+
+#[tokio::test]
+async fn manual_accept_404s_for_unknown_booking_and_409s_for_disconnected_account() {
+    let pool = store::connect(&database_url()).await.expect("connect");
+    let tenant_id = insert_tenant(&pool).await;
+    insert_portal_user(&pool, tenant_id, "owner").await;
+
+    // A booking whose account was never spawned in THIS process — `state.poller.accounts` is
+    // empty for it.
+    store::upsert_booking(
+        &pool,
+        tenant_id,
+        &store::BookingUpsert {
+            account_id: "never-spawned-acct".to_string(),
+            spx_id: "orphan-1".to_string(),
+            status: "pending".to_string(),
+            is_coc: false,
+            raw_data: serde_json::json!({}),
+        },
+    )
+    .await
+    .expect("seed booking");
+
+    let state = build_state(pool.clone(), tenant_id).await; // no account spawned
+    let base = spawn_server(state).await;
+    let http = reqwest::Client::new();
+    let cookie = login_cookie(&http, &base, "owner").await;
+
+    let missing_resp = http
+        .post(format!("{base}/bookings/{}/accept", Uuid::new_v4()))
+        .header("Cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(missing_resp.status(), 404);
+
+    let live_resp = http
+        .get(format!("{base}/bookings/live"))
+        .header("Cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    let live_body: Vec<serde_json::Value> = live_resp.json().await.unwrap();
+    let id = live_body[0]["id"].as_str().unwrap();
+
+    let disconnected_resp = http
+        .post(format!("{base}/bookings/{id}/accept"))
+        .header("Cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        disconnected_resp.status(),
+        409,
+        "a booking whose account has no running AccountHandle must not silently 500"
+    );
 
     cleanup(&pool, tenant_id).await;
 }
