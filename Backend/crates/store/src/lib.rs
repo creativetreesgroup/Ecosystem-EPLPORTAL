@@ -3045,4 +3045,47 @@ mod tests {
             .await
             .ok();
     }
+
+    #[tokio::test]
+    async fn site_settings_put_get_delete_round_trip() {
+        let pool = connect(&test_database_url()).await.expect("connect");
+        run_migrations(&pool).await.expect("migrate");
+        let tenant_id = insert_test_tenant(&pool).await;
+
+        let before = site_settings::get(&pool, tenant_id, "test_key").await.expect("get before put");
+        assert!(before.is_none());
+
+        site_settings::put(&pool, tenant_id, "test_key", &serde_json::json!({"a": 1}))
+            .await
+            .expect("first put (creates)");
+        let after_create = site_settings::get(&pool, tenant_id, "test_key")
+            .await
+            .expect("get after create")
+            .expect("row must exist");
+        assert_eq!(after_create, serde_json::json!({"a": 1}));
+
+        site_settings::put(&pool, tenant_id, "test_key", &serde_json::json!({"a": 2}))
+            .await
+            .expect("second put (updates)");
+        let after_update = site_settings::get(&pool, tenant_id, "test_key")
+            .await
+            .expect("get after update")
+            .expect("row must still exist");
+        assert_eq!(after_update, serde_json::json!({"a": 2}), "put must overwrite, not merge");
+
+        let listed = site_settings::list(&pool, tenant_id).await.expect("list");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].0, "test_key");
+
+        let deleted = site_settings::delete(&pool, tenant_id, "test_key").await.expect("delete");
+        assert!(deleted);
+        let after_delete = site_settings::get(&pool, tenant_id, "test_key").await.expect("get after delete");
+        assert!(after_delete.is_none());
+
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_id)
+            .execute(&pool)
+            .await
+            .ok();
+    }
 }
