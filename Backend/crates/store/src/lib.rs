@@ -3055,14 +3055,21 @@ mod tests {
         let before = site_settings::get(&pool, tenant_id, "test_key").await.expect("get before put");
         assert!(before.is_none());
 
-        site_settings::put(&pool, tenant_id, "test_key", &serde_json::json!({"a": 1}))
+        // First value carries a key ("b") the SECOND value deliberately lacks — this is what
+        // makes the next assertion actually distinguish a plain overwrite (`value = $3`) from a
+        // JSONB merge (`value = value || $3`): merge would preserve "b" from the first write,
+        // overwrite would not. A same-key-set pair (e.g. {"a":1} -> {"a":2}) can't tell the two
+        // apart, since both semantics converge on the same result when there's nothing to merge
+        // (review finding, Fase 6d Task 3) — Task 6/8 both depend on `put` staying a real
+        // overwrite, so this regression guard is load-bearing, not cosmetic.
+        site_settings::put(&pool, tenant_id, "test_key", &serde_json::json!({"a": 1, "b": 9}))
             .await
             .expect("first put (creates)");
         let after_create = site_settings::get(&pool, tenant_id, "test_key")
             .await
             .expect("get after create")
             .expect("row must exist");
-        assert_eq!(after_create, serde_json::json!({"a": 1}));
+        assert_eq!(after_create, serde_json::json!({"a": 1, "b": 9}));
 
         site_settings::put(&pool, tenant_id, "test_key", &serde_json::json!({"a": 2}))
             .await
@@ -3071,7 +3078,11 @@ mod tests {
             .await
             .expect("get after update")
             .expect("row must still exist");
-        assert_eq!(after_update, serde_json::json!({"a": 2}), "put must overwrite, not merge");
+        assert_eq!(
+            after_update,
+            serde_json::json!({"a": 2}),
+            "put must overwrite, not merge — a JSONB-merge bug would leave \"b\":9 behind"
+        );
 
         let listed = site_settings::list(&pool, tenant_id).await.expect("list");
         assert_eq!(listed.len(), 1);
