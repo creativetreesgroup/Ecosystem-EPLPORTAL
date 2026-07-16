@@ -37,7 +37,7 @@
 - Consumes: `crate::begin_tenant_tx(pool, tenant_id)` (`Backend/crates/store/src/pool.rs`), the existing `Booking` model (`Backend/crates/store/src/models/booking.rs`).
 - Produces (for Task 10 and Task 8/9): `store::bookings::list_live`, `store::bookings::list_history`, `store::bookings::get_detail` — exact signatures below. `BookingUpsert.account_id: String` — every future construction of `BookingUpsert` (only one call site exists today, `poller/src/schedule.rs::poll_once`) must supply it.
 
-- [ ] **Step 1: Write the migration**
+- [x] **Step 1: Write the migration**
 
 ```sql
 -- Backend/crates/store/migrations/0020_bookings_account_id.sql
@@ -58,12 +58,12 @@ ALTER TABLE bookings ADD CONSTRAINT bookings_tenant_account_spx_id_unique
   UNIQUE (tenant_id, account_id, spx_id);
 ```
 
-- [ ] **Step 2: Run it and confirm it applies cleanly**
+- [x] **Step 2: Run it and confirm it applies cleanly**
 
 Run: `cd Backend && export PATH="$HOME/.cargo/bin:$PATH" && cargo test -p store migrations_apply_and_tenant_round_trips -- --test-threads=1`
 Expected: PASS (this existing test runs `run_migrations`, which picks up the new file automatically via `sqlx::migrate!("./migrations")`).
 
-- [ ] **Step 3: Update the `Booking` model**
+- [x] **Step 3: Update the `Booking` model**
 
 ```rust
 // Backend/crates/store/src/models/booking.rs — add account_id after spx_id
@@ -88,7 +88,7 @@ pub struct Booking {
 }
 ```
 
-- [ ] **Step 4: Update `BookingUpsert` and `upsert_booking`**
+- [x] **Step 4: Update `BookingUpsert` and `upsert_booking`**
 
 ```rust
 // Backend/crates/store/src/bookings.rs — BookingUpsert gains account_id
@@ -126,7 +126,7 @@ pub async fn upsert_booking(
 }
 ```
 
-- [ ] **Step 5: Fix the one call site — `poller/src/schedule.rs::poll_once`**
+- [x] **Step 5: Fix the one call site — `poller/src/schedule.rs::poll_once`**
 
 Find the existing call (currently ~line 97-106 in `poll_once`):
 ```rust
@@ -145,12 +145,12 @@ Find the existing call (currently ~line 97-106 in `poll_once`):
 ```
 (Only `account_id: st.account_id.clone(),` is new — `st.account_id: String` is already a `PollerState` field, already in scope in this exact function.)
 
-- [ ] **Step 6: Run the workspace build to confirm no other call site broke**
+- [x] **Step 6: Run the workspace build to confirm no other call site broke**
 
 Run: `cargo build --workspace 2>&1 | grep -E "error|warning: unused"`
 Expected: no output (clean build) — `BookingUpsert` has exactly one production construction site (just fixed) and this crate's own tests construct it too; if any test file fails to compile, add `account_id: "test-account".to_string()` there.
 
-- [ ] **Step 7: Add `list_live`, `list_history`, `get_detail` to `store::bookings`**
+- [x] **Step 7: Add `list_live`, `list_history`, `get_detail` to `store::bookings`**
 
 ```rust
 // Backend/crates/store/src/bookings.rs — append
@@ -229,7 +229,7 @@ pub async fn get_detail(
 }
 ```
 
-- [ ] **Step 8: Re-export in `store::lib.rs`**
+- [x] **Step 8: Re-export in `store::lib.rs`**
 
 ```rust
 // Backend/crates/store/src/lib.rs — extend the existing `pub use bookings::{...}` block
@@ -241,7 +241,7 @@ pub use bookings::{
 ```
 (Aliased the same way every other multi-verb module in this file already is — a bare `store::list_live`/`get_detail` would be a collision risk against a future module's own `list_live`.)
 
-- [ ] **Step 9: Write the failing tests**
+- [x] **Step 9: Write the failing tests**
 
 ```rust
 // Backend/crates/store/src/lib.rs — inside `#[cfg(test)] mod tests`, near `booking_round_trips`
@@ -350,12 +350,12 @@ async fn bookings_get_detail_returns_none_for_wrong_tenant() {
 }
 ```
 
-- [ ] **Step 10: Run the tests to verify they pass**
+- [x] **Step 10: Run the tests to verify they pass**
 
 Run: `cargo test -p store bookings_list_live_returns_only_pending_newest_first bookings_get_detail_returns_none_for_wrong_tenant -- --test-threads=1`
 Expected: both PASS.
 
-- [ ] **Step 11: Full crate verification + commit**
+- [x] **Step 11: Full crate verification + commit**
 
 Run: `cargo test -p store -p poller -- --test-threads=1 && cargo clippy -p store -p poller --all-targets -- -D warnings`
 Expected: 0 failures, clean clippy.
@@ -381,7 +381,7 @@ git commit -m "feat(store,poller): bookings.account_id + list_live/list_history/
 - Consumes: `crate::begin_tenant_tx`, `crate::models::AcceptRule` (already exists, `Backend/crates/store/src/models/accept_rule.rs` — `id, tenant_id, name, enabled, priority, mode, service_types, max_weight, coc_only, non_coc_only, max_cod_amount, origin, destinations, booking_type, shift_types, trip_types, match_mode, min_deadline_min, max_accept_count, accepted_count, route_signature, created_at, updated_at`).
 - Produces (for Task 11): `accept_rules::list_all(pool, tenant_id) -> Result<Vec<AcceptRule>, sqlx::Error>`, `accept_rules::replace_all(pool, tenant_id, rows: &[NewAcceptRule]) -> Result<Vec<AcceptRule>, sqlx::Error>` (delete-then-insert-fresh inside one transaction — see Task 11's design note on why this project uses a replace-all strategy rather than per-rule upsert-by-client-id).
 
-- [ ] **Step 1: Write the module**
+- [x] **Step 1: Write the module**
 
 ```rust
 // Backend/crates/store/src/accept_rules.rs
@@ -504,7 +504,7 @@ pub async fn replace_all(
 }
 ```
 
-- [ ] **Step 2: Wire the module + re-exports**
+- [x] **Step 2: Wire the module + re-exports**
 
 ```rust
 // Backend/crates/store/src/lib.rs
@@ -515,7 +515,7 @@ pub mod accept_rules; // add alongside the other `pub mod` lines
 pub use accept_rules::{list_all as list_accept_rules, replace_all as replace_accept_rules, NewAcceptRule};
 ```
 
-- [ ] **Step 3: Write the failing test**
+- [x] **Step 3: Write the failing test**
 
 ```rust
 // Backend/crates/store/src/lib.rs — inside `#[cfg(test)] mod tests`
@@ -602,12 +602,12 @@ async fn accept_rules_replace_all_deletes_old_rows_and_inserts_fresh() {
 }
 ```
 
-- [ ] **Step 4: Run it**
+- [x] **Step 4: Run it**
 
 Run: `cargo test -p store accept_rules_replace_all_deletes_old_rows_and_inserts_fresh -- --test-threads=1`
 Expected: PASS.
 
-- [ ] **Step 5: Full crate verification + commit**
+- [x] **Step 5: Full crate verification + commit**
 
 Run: `cargo test -p store -- --test-threads=1 && cargo clippy -p store --all-targets -- -D warnings`
 Expected: 0 failures, clean.
@@ -633,7 +633,7 @@ git commit -m "feat(store): accept_rules CRUD (list_all, replace_all)"
 - Consumes: `core_domain::norm_id(s: &str) -> String` (after this task's visibility fix), `crate::models::RuleBookingTarget` (already exists — `id, tenant_id, rule_id, booking_id_raw, booking_id_norm, created_at`).
 - Produces (for Task 11): `rule_booking_targets::replace_for_rule(pool, tenant_id, rule_id, booking_ids: &[String]) -> Result<Vec<RuleBookingTarget>, sqlx::Error>`.
 
-- [ ] **Step 1: Write the failing test proving `norm_id` is reachable from outside the crate**
+- [x] **Step 1: Write the failing test proving `norm_id` is reachable from outside the crate**
 
 ```rust
 // Backend/crates/core-domain/src/rule.rs — inside the existing `#[cfg(test)] mod tests` block,
@@ -652,12 +652,12 @@ mod norm_id_visibility_tests {
 }
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `cd Backend && cargo test -p core-domain norm_id_reachable_from_crate_root -- --test-threads=1`
 Expected: FAIL — `crate::norm_id` does not exist yet (only `crate::rule::norm_id`, and even that path is `pub(crate)`-restricted outside this test's own crate).
 
-- [ ] **Step 3: Make the visibility fix**
+- [x] **Step 3: Make the visibility fix**
 
 ```rust
 // Backend/crates/core-domain/src/rule.rs — change the one line
@@ -678,12 +678,12 @@ pub use rule::{
 };
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `cargo test -p core-domain norm_id_reachable_from_crate_root -- --test-threads=1`
 Expected: PASS. Also run `cargo test -p core-domain -- --test-threads=1` to confirm nothing else in this crate broke (the fn body is unchanged, only its visibility).
 
-- [ ] **Step 5: Write `store::rule_booking_targets`**
+- [x] **Step 5: Write `store::rule_booking_targets`**
 
 ```rust
 // Backend/crates/store/src/rule_booking_targets.rs
@@ -768,7 +768,7 @@ pub async fn list_for_tenant(
 }
 ```
 
-- [ ] **Step 6: Wire the module**
+- [x] **Step 6: Wire the module**
 
 ```rust
 // Backend/crates/store/src/lib.rs
@@ -781,7 +781,7 @@ pub use rule_booking_targets::{
 ```
 Add `core-domain` as a dependency of `store` if it is not already one — check `Backend/crates/store/Cargo.toml`'s `[dependencies]` first; `store` already depends on nothing from `core-domain` today (verify via `grep core-domain Backend/crates/store/Cargo.toml`), so add `core-domain = { path = "../core-domain" }` if the grep is empty.
 
-- [ ] **Step 7: Write the failing test**
+- [x] **Step 7: Write the failing test**
 
 ```rust
 // Backend/crates/store/src/lib.rs — inside `#[cfg(test)] mod tests`
@@ -858,12 +858,12 @@ async fn rule_booking_targets_replace_for_rule_normalizes_and_replaces() {
 }
 ```
 
-- [ ] **Step 8: Run it**
+- [x] **Step 8: Run it**
 
 Run: `cargo test -p store rule_booking_targets_replace_for_rule_normalizes_and_replaces -- --test-threads=1`
 Expected: PASS.
 
-- [ ] **Step 9: Full verification + commit**
+- [x] **Step 9: Full verification + commit**
 
 Run: `cargo test -p core-domain -p store -- --test-threads=1 && cargo clippy -p core-domain -p store --all-targets -- -D warnings`
 Expected: 0 failures, clean.
@@ -887,7 +887,7 @@ git commit -m "feat(core-domain,store): export norm_id, add rule_booking_targets
 - Consumes: `crate::models::AutomationSettings` (already exists — `tenant_id, auto_accept_enabled, poll_interval_ms, smart_paused, smart_paused_until, smart_dry_run, smart_schedule, smart_blacklist, counter_reset_hour, counter_reset_last_at, updated_at`).
 - Produces (for Task 11): `automation_settings::get(pool, tenant_id) -> Result<Option<AutomationSettings>, sqlx::Error>`, `automation_settings::set_auto_accept_enabled(pool, tenant_id, enabled: bool) -> Result<AutomationSettings, sqlx::Error>`.
 
-- [ ] **Step 1: Write the module**
+- [x] **Step 1: Write the module**
 
 ```rust
 // Backend/crates/store/src/automation_settings.rs
@@ -945,7 +945,7 @@ pub async fn set_auto_accept_enabled(
 }
 ```
 
-- [ ] **Step 2: Wire the module**
+- [x] **Step 2: Wire the module**
 
 ```rust
 // Backend/crates/store/src/lib.rs
@@ -955,7 +955,7 @@ pub mod automation_settings;
 pub use automation_settings::{get as get_automation_settings, set_auto_accept_enabled};
 ```
 
-- [ ] **Step 3: Write the failing test**
+- [x] **Step 3: Write the failing test**
 
 ```rust
 // Backend/crates/store/src/lib.rs — inside `#[cfg(test)] mod tests`
@@ -998,12 +998,12 @@ async fn automation_settings_set_auto_accept_enabled_creates_then_updates() {
 }
 ```
 
-- [ ] **Step 4: Run it**
+- [x] **Step 4: Run it**
 
 Run: `cargo test -p store automation_settings_set_auto_accept_enabled_creates_then_updates -- --test-threads=1`
 Expected: PASS. (If the schema default for `poll_interval_ms` differs from `1000`, check `Backend/crates/store/migrations/0011_automation_settings.sql` and correct the assertion to match — do not change the migration.)
 
-- [ ] **Step 5: Full verification + commit**
+- [x] **Step 5: Full verification + commit**
 
 Run: `cargo test -p store -- --test-threads=1 && cargo clippy -p store --all-targets -- -D warnings`
 Expected: 0 failures, clean.
@@ -1025,7 +1025,7 @@ git commit -m "feat(store): automation_settings get/set_auto_accept_enabled"
 - Consumes: `crate::models::AcceptEvent` (already exists — `id, tenant_id, booking_id, rule_id, outcome, local_dispatch_us, accept_e2e_ms, detail, created_at`).
 - Produces (for Task 9 and Task 10): `accept_events::list_for_tenant(pool, tenant_id, limit, offset) -> Result<Vec<AcceptEvent>, sqlx::Error>`, `accept_events::insert(pool, tenant_id, new: &NewAcceptEvent) -> Result<AcceptEvent, sqlx::Error>`.
 
-- [ ] **Step 1: Write the module**
+- [x] **Step 1: Write the module**
 
 ```rust
 // Backend/crates/store/src/accept_events.rs
@@ -1102,7 +1102,7 @@ pub async fn list_for_tenant(
 }
 ```
 
-- [ ] **Step 2: Wire the module**
+- [x] **Step 2: Wire the module**
 
 ```rust
 // Backend/crates/store/src/lib.rs
@@ -1112,7 +1112,7 @@ pub mod accept_events;
 pub use accept_events::{insert as insert_accept_event, list_for_tenant as list_accept_events, NewAcceptEvent};
 ```
 
-- [ ] **Step 3: Write the failing test**
+- [x] **Step 3: Write the failing test**
 
 ```rust
 // Backend/crates/store/src/lib.rs — inside `#[cfg(test)] mod tests`
@@ -1155,12 +1155,12 @@ async fn accept_events_insert_then_list_newest_first() {
 }
 ```
 
-- [ ] **Step 4: Run it**
+- [x] **Step 4: Run it**
 
 Run: `cargo test -p store accept_events_insert_then_list_newest_first -- --test-threads=1`
 Expected: PASS.
 
-- [ ] **Step 5: Full verification + commit**
+- [x] **Step 5: Full verification + commit**
 
 Run: `cargo test -p store -- --test-threads=1 && cargo clippy -p store --all-targets -- -D warnings`
 Expected: 0 failures, clean.
@@ -1192,7 +1192,7 @@ This task adds all three pieces of plumbing (dedup exposure, the manual-accept c
 **Interfaces:**
 - Produces (for Task 7, Task 10, Task 11): `poller::RuleSet { rules: Arc<Vec<CompiledRule>>, rule_meta: Arc<Vec<RuleMeta>> }` + `RuleSet::empty()`; `AccountHandle.dedup: Arc<AccountDedupState>`; `AccountHandle.manual_accept: mpsc::Sender<ManualAcceptRequest>`; `poller::ManualAcceptRequest { booking_id: i64, request_ids: Vec<i64>, reply: oneshot::Sender<spx_client::AcceptResult> }`; `PollerShared.rules_tx: tokio::sync::watch::Sender<RuleSet>`; `PollerState.rules_rx: Option<tokio::sync::watch::Receiver<RuleSet>>`.
 
-- [ ] **Step 1: Add `RuleSet`, `ManualAcceptRequest`, and the new fields to `state.rs`**
+- [x] **Step 1: Add `RuleSet`, `ManualAcceptRequest`, and the new fields to `state.rs`**
 
 ```rust
 // Backend/crates/poller/src/state.rs — add near the top, after existing imports
@@ -1284,7 +1284,7 @@ pub struct AccountHandle {
     pub rules_tx: tokio::sync::watch::Sender<RuleSet>,
 ```
 
-- [ ] **Step 2: Update `schedule.rs`'s `spawn_account_loop`, `ensure_restored_then_spawn`, and `poll_once`**
+- [x] **Step 2: Update `schedule.rs`'s `spawn_account_loop`, `ensure_restored_then_spawn`, and `poll_once`**
 
 ```rust
 // Backend/crates/poller/src/schedule.rs — spawn_account_loop gains a 3rd select! arm.
@@ -1373,14 +1373,14 @@ pub async fn poll_once(shared: &PollerShared, st: &mut PollerState, woken_by_pok
 
 `spawn_account_loop` is called directly (not via `ensure_restored_then_spawn`) by several existing test files (per this crate's own doc comment: "kept `pub`... only because the single-flight tests exercise the loop SHAPE directly") — grep for `spawn_account_loop(` across `Backend/crates/poller/tests/` and add a 4th argument at every call site: `tokio::sync::mpsc::channel(8).1` (a throwaway receiver — those tests don't exercise manual accept).
 
-- [ ] **Step 3: Re-export `RuleSet` from `lib.rs`**
+- [x] **Step 3: Re-export `RuleSet` from `lib.rs`**
 
 ```rust
 // Backend/crates/poller/src/lib.rs — extend the existing `pub use state::{...}` line
 pub use state::{AccountHandle, PollerConfig, PollerShared, PollerState, RuleSet};
 ```
 
-- [ ] **Step 4: Fix every existing `PollerShared { ... }` struct-literal call site**
+- [x] **Step 4: Fix every existing `PollerShared { ... }` struct-literal call site**
 
 Run: `grep -rln "PollerShared {" Backend/crates Backend/bin`
 Expected output (verify against this exact list — if it differs, that's fine, just fix whatever the grep actually finds, this list is what the codebase contained at plan-writing time):
@@ -1414,7 +1414,7 @@ rules_tx: tokio::sync::watch::channel(poller::RuleSet::empty()).0,
 
 Any `AccountHandle { poke, join }` literal (if a test constructs one directly rather than via `ensure_restored_then_spawn`) needs `dedup`/`manual_accept` added too — grep `AccountHandle {` the same way and add `dedup: Arc::new(executor::AccountDedupState::new()), manual_accept: tokio::sync::mpsc::channel(8).0,`.
 
-- [ ] **Step 5: Write a real end-to-end test for the manual-accept channel**
+- [x] **Step 5: Write a real end-to-end test for the manual-accept channel**
 
 ```rust
 // Backend/crates/poller/tests/manual_accept_channel.rs (new file)
@@ -1511,12 +1511,12 @@ async fn manual_accept_request_reaches_the_running_accounts_own_client_and_repli
 }
 ```
 
-- [ ] **Step 6: Run it**
+- [x] **Step 6: Run it**
 
 Run: `cargo test -p poller manual_accept_request_reaches_the_running_accounts_own_client_and_replies -- --test-threads=1`
 Expected: PASS.
 
-- [ ] **Step 7: Full crate verification**
+- [x] **Step 7: Full crate verification**
 
 Run: `cargo build --workspace 2>&1 | grep -E "^error"`
 Expected: no output. If any file compiles-fails with "missing field `rules_tx`" (or `dedup`/`manual_accept`), that file was missed in Step 4 — add it there too (the compiler is an exhaustive checklist here: it cannot succeed with any site missed).
@@ -1550,12 +1550,12 @@ git commit -m "feat(poller): AccountHandle.dedup + manual-accept command channel
 - Consumes: `store::accept_rules::list_all`, `store::rule_booking_targets::list_for_tenant` (Tasks 2/3), `core_domain::{AcceptRule, CompiledRule, RuleConditions, RuleMode, RuleBookingType, RouteMatchMode}`, `poller::dispatch::RuleMeta`, `poller::RuleSet` (Task 6).
 - Produces: `poller::rules::load_compiled_rules(pool, tenant_id) -> Result<RuleSet, sqlx::Error>`.
 
-- [ ] **Step 1: Check the `store` dependency**
+- [x] **Step 1: Check the `store` dependency**
 
 Run: `grep -n "^store" Backend/crates/poller/Cargo.toml`
 Expected: a line like `store = { version = "0.1.0", path = "../store" }` — `poller` already depends on `store` (Task 5/6a's `store::upsert_booking` etc. calls prove this). No `Cargo.toml` change should be needed; if the grep is somehow empty, add that dependency line under `[dependencies]` matching the version/path style of the other path-dependencies already there (e.g. `core-domain`'s line from Task 6's Step 1).
 
-- [ ] **Step 2: Write `poller::rules`**
+- [x] **Step 2: Write `poller::rules`**
 
 ```rust
 // Backend/crates/poller/src/rules.rs
@@ -1664,7 +1664,7 @@ pub async fn load_compiled_rules(
 }
 ```
 
-- [ ] **Step 3: Wire `reactor-core`'s bootstrap loop**
+- [x] **Step 3: Wire `reactor-core`'s bootstrap loop**
 
 In `Backend/bin/reactor-core/src/main.rs`'s `build_state()`, find the existing `poller_shared` construction (currently right before the `// Account bootstrap:` comment) and the `for credential in credentials { ... }` loop right after it.
 
@@ -1726,7 +1726,7 @@ Then, inside the `for credential in credentials { ... }` loop, right after `let 
 ```
 (Note `let state` becomes `let mut state` — it is mutated three times before being moved into `ensure_restored_then_spawn`.)
 
-- [ ] **Step 4: Re-export from `lib.rs`**
+- [x] **Step 4: Re-export from `lib.rs`**
 
 ```rust
 // Backend/crates/poller/src/lib.rs
@@ -1736,7 +1736,7 @@ pub mod rules;
 pub use rules::load_compiled_rules;
 ```
 
-- [ ] **Step 5: Write the failing test — a real end-to-end reload**
+- [x] **Step 5: Write the failing test — a real end-to-end reload**
 
 ```rust
 // Backend/bin/reactor-core/src/main.rs — inside the existing `#[cfg(test)] mod tests` block,
@@ -1847,12 +1847,12 @@ async fn boot_smoke_seeds_rules_from_db_and_live_reload_reaches_running_account(
 }
 ```
 
-- [ ] **Step 6: Run it**
+- [x] **Step 6: Run it**
 
 Run: `cargo test -p reactor-core boot_smoke_seeds_rules_from_db_and_live_reload_reaches_running_account -- --test-threads=1`
 Expected: PASS.
 
-- [ ] **Step 7: Full workspace verification + commit**
+- [x] **Step 7: Full workspace verification + commit**
 
 Run: `cargo test --workspace -- --test-threads=1 && cargo clippy --workspace --all-targets -- -D warnings`
 Expected: 0 failures, clean (this is a natural workspace-wide checkpoint — Tasks 1-7 together are the full store+poller foundation the remaining route tasks build on).
@@ -1879,7 +1879,7 @@ git commit -m "feat(poller,reactor-core): load_compiled_rules + boot-time rule l
 - Consumes: `store::bookings::{list_live, list_history, get_detail}` (Task 1), `crate::auth::{session_auth, CurrentUser}`, `crate::error::ApiError`, `crate::state::AppState`.
 - Produces (for Task 10, same file): the `bookings_router` fn Task 10 adds its `POST /:id/accept` route onto.
 
-- [ ] **Step 1: Write the route module (list/detail only — Task 10 appends `POST /:id/accept` to the same file/router)**
+- [x] **Step 1: Write the route module (list/detail only — Task 10 appends `POST /:id/accept` to the same file/router)**
 
 ```rust
 // Backend/crates/api-gateway/src/routes/bookings.rs
@@ -2041,7 +2041,7 @@ pub fn bookings_router(state: AppState) -> Router<AppState> {
 }
 ```
 
-- [ ] **Step 2: Wire the module**
+- [x] **Step 2: Wire the module**
 
 ```rust
 // Backend/crates/api-gateway/src/routes/mod.rs
@@ -2052,7 +2052,7 @@ pub mod bookings;
         .nest("/bookings", routes::bookings::bookings_router(state.clone()))
 ```
 
-- [ ] **Step 3: Write the failing tests**
+- [x] **Step 3: Write the failing tests**
 
 ```rust
 // Backend/crates/api-gateway/tests/bookings_routes.rs (new file)
@@ -2305,17 +2305,17 @@ async fn detail_returns_full_raw_data_and_404s_for_unknown_id() {
 }
 ```
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `cd Backend && export PATH="$HOME/.cargo/bin:$PATH" && cargo test -p api-gateway --test bookings_routes -- --test-threads=1`
 Expected: both PASS. (If `store::portal_users::create`'s exact signature or `spx_client::crypto::password::hash_password`'s name differs slightly from what's used above, check `Backend/crates/api-gateway/tests/portal_users_routes.rs`'s own `insert_portal_user` helper for the verified-working call shape and match it exactly — that file already does this successfully.)
 
-- [ ] **Step 5: Full crate verification**
+- [x] **Step 5: Full crate verification**
 
 Run: `cargo test -p api-gateway -- --test-threads=1 && cargo clippy -p api-gateway --all-targets -- -D warnings`
 Expected: 0 failures, clean.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add Backend/crates/api-gateway/src/routes/bookings.rs Backend/crates/api-gateway/src/routes/mod.rs \
@@ -2334,7 +2334,7 @@ git commit -m "feat(api-gateway): GET /bookings/live, /history, /:id/detail"
 **Interfaces:**
 - Consumes: `store::accept_events::list_for_tenant` (Task 5), the `ListParams`/`clamp_limit`/`clamp_offset` helpers Task 8 already defined in this same file.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```rust
 // Backend/crates/api-gateway/tests/bookings_routes.rs — append
@@ -2381,12 +2381,12 @@ async fn spx_log_lists_accept_events_newest_first() {
 }
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `cargo test -p api-gateway --test bookings_routes spx_log_lists_accept_events_newest_first -- --test-threads=1`
 Expected: FAIL — no `/bookings/spx-log` route mounted yet.
 
-- [ ] **Step 3: Add the handler and route**
+- [x] **Step 3: Add the handler and route**
 
 ```rust
 // Backend/crates/api-gateway/src/routes/bookings.rs — append
@@ -2445,12 +2445,12 @@ pub fn bookings_router(state: AppState) -> Router<AppState> {
 }
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `cargo test -p api-gateway --test bookings_routes spx_log_lists_accept_events_newest_first -- --test-threads=1`
 Expected: PASS.
 
-- [ ] **Step 5: Full crate verification + commit**
+- [x] **Step 5: Full crate verification + commit**
 
 Run: `cargo test -p api-gateway -- --test-threads=1 && cargo clippy -p api-gateway --all-targets -- -D warnings`
 Expected: 0 failures, clean.
@@ -2475,7 +2475,7 @@ git commit -m "feat(api-gateway): GET /bookings/spx-log"
 **Interfaces:**
 - Consumes: `state.poller.accounts: Arc<DashMap<String, poller::AccountHandle>>`, `AccountHandle.{dedup, manual_accept}` (Task 6), `state.poller.executor.try_claim_manual`/`.record_durable_accept`/`.release_claim_auto` (Fase 4, confirmed signatures below), `spx_client::normalize_booking(&Value) -> SpxBooking`, `store::{update_booking_status, insert_accept_event, NewAcceptEvent}`.
 
-- [ ] **Step 1: Write the failing test — happy path against a real wiremock SPX + a real spawned account**
+- [x] **Step 1: Write the failing test — happy path against a real wiremock SPX + a real spawned account**
 
 ```rust
 // Backend/crates/api-gateway/tests/bookings_routes.rs — append
@@ -2674,12 +2674,12 @@ async fn manual_accept_404s_for_unknown_booking_and_409s_for_disconnected_accoun
 }
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `cargo test -p api-gateway --test bookings_routes manual_accept -- --test-threads=1`
 Expected: FAIL — no `POST /:id/accept` route mounted yet (404 on every request, including the ones that expect 200/409).
 
-- [ ] **Step 3: Add the handler and route**
+- [x] **Step 3: Add the handler and route**
 
 ```rust
 // Backend/crates/api-gateway/src/routes/bookings.rs — append imports at the top of the file
@@ -2866,17 +2866,17 @@ pub fn bookings_router(state: AppState) -> Router<AppState> {
 }
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `cargo test -p api-gateway --test bookings_routes manual_accept -- --test-threads=1`
 Expected: both PASS.
 
-- [ ] **Step 5: Full crate verification**
+- [x] **Step 5: Full crate verification**
 
 Run: `cargo test -p api-gateway -- --test-threads=1 && cargo clippy -p api-gateway --all-targets -- -D warnings`
 Expected: 0 failures, clean.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add Backend/crates/api-gateway/src/routes/bookings.rs Backend/crates/api-gateway/tests/bookings_routes.rs
@@ -2903,7 +2903,7 @@ git commit -m "feat(api-gateway): POST /bookings/:id/accept (manual accept via t
 **Interfaces:**
 - Consumes: `store::{accept_rules::{list_all, replace_all, NewAcceptRule}, rule_booking_targets::{list_for_tenant, replace_for_rule}, automation_settings::{get, set_auto_accept_enabled}}` (Tasks 2-4), `core_domain::{sanitize_accept_rules, dedupe_rules, RawAcceptRule, RawRuleConditions, AcceptRule, RuleMode, RuleBookingType, RouteMatchMode}`, `poller::rules::load_compiled_rules`, `crate::otp::pwverify_key` (this task, visibility fix), `crate::auth::permission::{require_permission, Permission::{ManageRules, ArmAutoAccept}}`.
 
-- [ ] **Step 1: Make `pwverify_key` reachable from this crate's other modules**
+- [x] **Step 1: Make `pwverify_key` reachable from this crate's other modules**
 
 ```rust
 // Backend/crates/api-gateway/src/otp.rs — change ONE line
@@ -2914,7 +2914,7 @@ pub(crate) fn pwverify_key(tenant_id: Uuid, user_id: Uuid) -> String {
 ```
 Run: `cargo build -p api-gateway 2>&1 | grep -E "^error"` — expected: no output (a visibility widening never breaks a caller).
 
-- [ ] **Step 2: Write the route module**
+- [x] **Step 2: Write the route module**
 
 ```rust
 // Backend/crates/api-gateway/src/routes/rules.rs
@@ -3213,7 +3213,7 @@ pub fn rules_router(state: AppState) -> Router<AppState> {
 }
 ```
 
-- [ ] **Step 3: Wire the module**
+- [x] **Step 3: Wire the module**
 
 ```rust
 // Backend/crates/api-gateway/src/routes/mod.rs
@@ -3230,7 +3230,7 @@ pub mod rules;
         )
 ```
 
-- [ ] **Step 4: Write the failing tests**
+- [x] **Step 4: Write the failing tests**
 
 ```rust
 // Backend/crates/api-gateway/tests/rules_routes.rs (new file)
@@ -3534,13 +3534,13 @@ async fn arming_auto_accept_consumes_the_pwverify_proof_exactly_once_and_broadca
 }
 ```
 
-- [ ] **Step 5: Run the tests to verify they fail, then implement, then pass**
+- [x] **Step 5: Run the tests to verify they fail, then implement, then pass**
 
 Run: `cargo test -p api-gateway --test rules_routes -- --test-threads=1`
 First run (before Step 2's handlers exist / before mounting in Step 3): FAIL — routes don't exist yet. After completing Steps 2-3: run again.
 Expected after implementation: all 5 tests PASS.
 
-- [ ] **Step 6: Full crate + workspace verification**
+- [x] **Step 6: Full crate + workspace verification**
 
 Run: `cargo test -p api-gateway -- --test-threads=1 && cargo clippy -p api-gateway --all-targets -- -D warnings`
 Expected: 0 failures, clean.
@@ -3548,7 +3548,7 @@ Expected: 0 failures, clean.
 Run: `cargo test --workspace -- --test-threads=1 && cargo clippy --workspace --all-targets -- -D warnings`
 Expected: 0 failures, clean — this is the natural full-workspace checkpoint before Task 12's formal sign-off.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add Backend/crates/api-gateway/src/otp.rs Backend/crates/api-gateway/src/routes/rules.rs \
@@ -3563,32 +3563,32 @@ git commit -m "feat(api-gateway): GET/PUT /bookings/settings (rules editor, OTP-
 
 **Files:** none (verification-only task, no new code).
 
-- [ ] **Step 1: Full workspace test suite**
+- [x] **Step 1: Full workspace test suite**
 
 Run: `cd Backend && export PATH="$HOME/.cargo/bin:$PATH" && cargo test --workspace -- --test-threads=1 2>&1 | tail -80`
 Expected: `0 failed` across every crate. `--test-threads=1` matters — several `store`/`poller`/`api-gateway` integration tests share the same Postgres/Redis instance and are not designed for parallel execution within a crate (established convention every prior fase's sign-off task has used).
 
-- [ ] **Step 2: Clippy, workspace-wide, warnings as errors**
+- [x] **Step 2: Clippy, workspace-wide, warnings as errors**
 
 Run: `cargo clippy --workspace --all-targets -- -D warnings`
 Expected: clean.
 
-- [ ] **Step 3: `cargo deny check`**
+- [x] **Step 3: `cargo deny check`**
 
 Run: `cargo deny check`
 Expected: `advisories ok, bans ok, licenses ok, sources ok` (exit code 0). The only expected non-error output is the pre-existing duplicate-crate-version info already present before this plan (e.g. `aead`/`aes` dual-version — unrelated to Fase 6c, do not attempt to fix as part of this sign-off).
 
-- [ ] **Step 4: `cargo tree` cross-dependency check (DoD #8)**
+- [x] **Step 4: `cargo tree` cross-dependency check (DoD #8)**
 
 Run: `cargo tree -p api-gateway | grep -E "^(store|executor|spx-client|poller|ws-hub|notifier|core-domain) v" | sort -u`
 Expected: all 7 crates present (api-gateway is the ONLY crate depending on all of them). Then run `cargo tree -p store -p executor -p spx-client -p poller -p ws-hub -p notifier -p core-domain --edges normal -i api-gateway 2>&1 | head -5` and confirm it reports no matching package (api-gateway must not be a dependency OF any of these — the direction only ever goes one way).
 
-- [ ] **Step 5: `reactor-core` boot smoke test (already covered by Task 7's own test, re-run here as part of the whole-branch checkpoint)**
+- [x] **Step 5: `reactor-core` boot smoke test (already covered by Task 7's own test, re-run here as part of the whole-branch checkpoint)**
 
 Run: `cargo test -p reactor-core -- --test-threads=1`
 Expected: all boot-smoke tests pass, including Task 7's `boot_smoke_seeds_rules_from_db_and_live_reload_reaches_running_account`.
 
-- [ ] **Step 6: Checkbox guard**
+- [x] **Step 6: Checkbox guard**
 
 This plan has checkbox (`- [ ]`) syntax throughout. Before merge, every REAL step checkbox across all 12 tasks must be converted to `- [x]` as its task completes during execution — this step is a final guard confirming none were missed. Run:
 ```bash
@@ -3596,7 +3596,7 @@ grep -c '^\- \[ \]' Docs/superpowers/plans/2026-07-16-fase-6c-bookings-rules.md
 ```
 Expected: `0` (all converted). If not, find and convert the remainder, then manually eyeball a `git diff` of the plan file to confirm only checkbox markers changed (`[ ]` → `[x]`) — no prose was accidentally altered in the process, matching this project's established checkbox-guard procedure (a repeatedly-violated failure mode in earlier fases, per the progress ledger's own notes on Fase 6b Task 7).
 
-- [ ] **Step 7: Definition of Done cross-check, scoped to THIS sub-phase's slice**
+- [x] **Step 7: Definition of Done cross-check, scoped to THIS sub-phase's slice**
 
 Re-read the shared design doc's Definition of Done list (`Docs/superpowers/specs/2026-07-15-fase-6-api-gateway-design.md`). Confirm 6c's contribution:
 - #1 (route-level parity coverage): `GET /bookings/live`, `/history`, `/:id/detail`, `/spx-log`, `POST /:id/accept`, `GET`/`PUT /bookings/settings` — all six now have TOWER routes with route-level tests proving status + body shape. Full #1 still needs 6d/6e's remaining route groups (prices/branding/locations/bot-settings/quick-accept) — not this sub-phase's job to close alone.
@@ -3606,11 +3606,11 @@ Re-read the shared design doc's Definition of Done list (`Docs/superpowers/specs
 
 Do NOT claim #4/#5/#6/#7 as closed by this sub-phase alone (docker-compose smoke test, security headers/CORS/rate-limit, quick-accept HMAC, and workspace-wide clean build respectively — the last one IS re-verified by Steps 1-2 above, but was not exclusively this sub-phase's to close).
 
-- [ ] **Step 8: Update the progress ledger**
+- [x] **Step 8: Update the progress ledger**
 
 Append one line per task (mirroring every prior sub-phase's ledger entries — see `.superpowers/sdd/progress.md`'s existing Fase 6b entries for the level of detail expected) plus a closing summary line: `Fase 6c (bookings + rules): all 12 tasks complete. Proceeding to final whole-branch review.`
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add -A
