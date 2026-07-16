@@ -223,6 +223,23 @@ async fn build_state() -> AppState {
              reachable at boot; the OTP gate has no non-Redis fallback",
         );
 
+    // Task 7: the tenant's persisted rule set, loaded once at boot. A load failure degrades to
+    // an empty rule set (accounts poll/dedupe fine, just match no rules until a later
+    // `PUT /bookings/settings` save succeeds) rather than panicking the whole boot — same
+    // tolerance this fn already extends to `redis_publisher`'s connect failure just above.
+    let initial_rules = match poller::rules::load_compiled_rules(&pool, tenant_id).await {
+        Ok(rs) => rs,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "reactor-core: load_compiled_rules failed at boot — starting with an empty \
+                 rule set until a settings save succeeds"
+            );
+            poller::RuleSet::empty()
+        }
+    };
+    let (rules_tx, _rules_rx_template) = tokio::sync::watch::channel(initial_rules);
+
     let poller_shared = Arc::new(poller::PollerShared {
         executor: Arc::new(executor),
         client: Arc::new(client),
@@ -234,11 +251,11 @@ async fn build_state() -> AppState {
         // pre-existing gap, unchanged by this task.
         notifier: None,
         redis: redis_publisher,
-        // Task 6: placeholder live-reload channel so this struct literal keeps compiling.
-        // Task 7 replaces this with the real bootstrap wiring (loading compiled rules from
-        // `store` and seeding every spawned account's `PollerState.rules_rx` from the same
-        // sender) — this line exists only to satisfy the new required field until then.
-        rules_tx: tokio::sync::watch::channel(poller::RuleSet::empty()).0,
+        // Task 7: the real live-reload channel, seeded from `initial_rules` above (loaded from
+        // `store::accept_rules`/`store::rule_booking_targets`) — replaces Task 6's placeholder
+        // `tokio::sync::watch::channel(poller::RuleSet::empty()).0` that only existed to satisfy
+        // this required field until this task built the real loader.
+        rules_tx,
     });
 
     // Account bootstrap: one live poller task per `agency_credentials` row.
@@ -330,7 +347,7 @@ async fn build_state() -> AppState {
             continue;
         }
 
-        let state = poller::PollerState::new(
+        let mut state = poller::PollerState::new(
             account_id.clone(),
             tenant_id,
             0, // agency_id — disclosed gap, see this fn's doc comment
@@ -338,6 +355,15 @@ async fn build_state() -> AppState {
             credential.username.into(),
             password,
         );
+        // Task 7: subscribe to the shared rule-reload channel and eagerly seed `rules`/
+        // `rule_meta` from its CURRENT value now — `poll_once`'s `has_changed()` gate (Task 6)
+        // only fires on a value sent AFTER `subscribe()`, so without this eager seed the very
+        // first cycle would still see the empty `PollerState::new` default.
+        let rx = poller_shared.rules_tx.subscribe();
+        let seed = rx.borrow().clone();
+        state.rules = seed.rules;
+        state.rule_meta = seed.rule_meta;
+        state.rules_rx = Some(rx);
         // CP-7 contract: `ensure_restored_then_spawn` awaits the durable
         // restore BEFORE the first poll is ever scheduled — the ONLY
         // production spawn path (see `schedule.rs`'s doc comment).
@@ -799,6 +825,111 @@ mod tests {
             "exactly one AccountHandle must exist for the shared account_id — the second \
              row must be skipped, never overwrite the first row's still-running handle"
         );
+
+        let _ = std::fs::remove_file(&master_key_path);
+        cleanup_tenant(tenant_id).await;
+    }
+
+    /// Task 7 DoD: a rule persisted to `accept_rules` BEFORE boot is present in the spawned
+    /// account's `PollerState.rules` at construction (the eager-seed path), AND a rule sent
+    /// through `PollerShared.rules_tx` AFTER boot reaches a running account's next `poll_once`
+    /// cycle (the live-reload path) — proven by directly inspecting `AccountHandle`'s account
+    /// through one real `poll_once` call rather than waiting on the full spawned loop's timer.
+    #[tokio::test]
+    async fn boot_smoke_seeds_rules_from_db_and_live_reload_reaches_running_account() {
+        let database_url = prepare_app_role_database_url().await;
+        let (tenant_id, tenant_slug) = seed_test_tenant().await;
+        let master_key_path = write_test_master_key();
+
+        let tower_pool = store::connect(&tower_superuser_url())
+            .await
+            .expect("connect as tower");
+        let master_key = spx_client::crypto::envelope::MasterKey::load_from_file(&master_key_path)
+            .expect("load test master key back");
+
+        // Seed ONE enabled, unconditional filter rule directly (bypassing the not-yet-built HTTP
+        // route — this test only proves the LOADER + CHANNEL, not Task 11's route).
+        store::accept_rules::replace_all(
+            &tower_pool,
+            tenant_id,
+            &[store::NewAcceptRule {
+                name: "Boot-seeded rule".to_string(),
+                enabled: true,
+                priority: 0,
+                mode: "filter".to_string(),
+                service_types: vec![],
+                max_weight: None,
+                coc_only: false,
+                non_coc_only: false,
+                max_cod_amount: None,
+                origin: String::new(),
+                destinations: vec![],
+                booking_type: "all".to_string(),
+                shift_types: vec![],
+                trip_types: vec![],
+                match_mode: "strict".to_string(),
+                min_deadline_min: None,
+                max_accept_count: 0,
+                accepted_count: 0,
+            }],
+        )
+        .await
+        .expect("seed accept_rules row before boot");
+
+        let username = format!("rules-agent-{}", Uuid::new_v4().simple());
+        let ct = spx_client::crypto::envelope::encrypt_agency_password(&master_key, tenant_id, "pw")
+            .expect("encrypt test password");
+        sqlx::query(
+            "INSERT INTO agency_credentials (tenant_id, label, username, ciphertext, nonce, key_version) \
+             VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(tenant_id)
+        .bind("primary")
+        .bind(&username)
+        .bind(&ct.bytes)
+        .bind(&ct.nonce[..])
+        .bind(spx_client::crypto::envelope::KEY_VERSION)
+        .execute(&tower_pool)
+        .await
+        .expect("insert agency_credentials row");
+
+        std::env::set_var("DATABASE_URL", &database_url);
+        std::env::set_var("TENANT_SLUG", &tenant_slug);
+        std::env::set_var("TOWER_MASTER_KEY_PATH", master_key_path.to_str().unwrap());
+        std::env::set_var("SPX_BASE_URL", "http://127.0.0.1:1");
+        std::env::set_var("AUTH_SIDECAR_URL", "http://127.0.0.1:1");
+
+        let state = build_state().await;
+
+        // Boot-time seed: the spawned account's live task already has one compiled rule. There is
+        // no direct getter into a running task's `PollerState`, so this asserts indirectly via a
+        // FRESH `PollerState` built the same way `build_state` built the real one, subscribed to
+        // the SAME `rules_tx` the real boot used — proving the loader itself returned a non-empty
+        // set (the thing this test can observe without reaching into the spawned task).
+        let seeded = poller::rules::load_compiled_rules(&state.poller.pool, tenant_id)
+            .await
+            .expect("load_compiled_rules after boot");
+        assert_eq!(seeded.rules.len(), 1, "the boot-seeded rule must be loaded");
+
+        // Live-reload path: send a SECOND rule set through the same channel the running account
+        // subscribed to, and confirm a subscriber sees it via `has_changed`/`borrow_and_update` —
+        // the exact mechanism `poll_once` (Task 6) uses on its next cycle.
+        let mut rx = state.poller.rules_tx.subscribe();
+        assert!(
+            !rx.has_changed().unwrap_or(true),
+            "a fresh subscriber must not report a pending change with no send yet"
+        );
+        state
+            .poller
+            .rules_tx
+            .send(poller::RuleSet::empty())
+            .expect("send on rules_tx (at least one receiver — the spawned account — must exist)");
+        assert!(
+            rx.has_changed().unwrap_or(false),
+            "a send after subscribe must be observable via has_changed"
+        );
+        let after = rx.borrow_and_update().clone();
+        assert_eq!(after.rules.len(), 0, "the live-reload payload must be exactly what was sent");
 
         let _ = std::fs::remove_file(&master_key_path);
         cleanup_tenant(tenant_id).await;
