@@ -8,6 +8,7 @@ pub mod pool;
 pub mod portal_sessions;
 pub mod portal_users;
 pub mod quota;
+pub mod route_prices;
 pub mod rule_booking_targets;
 pub mod site_settings;
 pub mod tenants;
@@ -59,6 +60,10 @@ pub use portal_users::{
     list_all as list_all_portal_users,
 };
 pub use quota::{consume_rule_quota, QuotaConsumeOutcome};
+pub use route_prices::{
+    create as create_route_price, delete as delete_route_price, list_all as list_route_prices,
+    update as update_route_price, NewRoutePrice,
+};
 pub use rule_booking_targets::{
     list_for_tenant as list_rule_booking_targets, replace_for_rule as replace_rule_booking_targets,
 };
@@ -2940,6 +2945,63 @@ mod tests {
             .ok();
         sqlx::query("DELETE FROM tenants WHERE id = $1")
             .bind(tenant_b)
+            .execute(&pool)
+            .await
+            .ok();
+    }
+
+    #[tokio::test]
+    async fn route_prices_create_update_delete_round_trip() {
+        let pool = connect(&test_database_url()).await.expect("connect");
+        run_migrations(&pool).await.expect("migrate");
+        let tenant_id = insert_test_tenant(&pool).await;
+
+        let created = route_prices::create(
+            &pool,
+            tenant_id,
+            &route_prices::NewRoutePrice {
+                route_code: "PDG-CGS".to_string(),
+                region: "Sumatra".to_string(),
+                origin: "Padang DC".to_string(),
+                destinations: serde_json::json!(["Cileungsi DC"]),
+                price: 1_500_000,
+                vehicle_type: "TRONTON".to_string(),
+            },
+        )
+        .await
+        .expect("create");
+        assert_eq!(created.price, 1_500_000);
+
+        let updated = route_prices::update(
+            &pool,
+            tenant_id,
+            created.id,
+            &route_prices::NewRoutePrice {
+                route_code: "PDG-CGS".to_string(),
+                region: "Sumatra".to_string(),
+                origin: "Padang DC".to_string(),
+                destinations: serde_json::json!(["Cileungsi DC", "Jakarta DC"]),
+                price: 1_750_000,
+                vehicle_type: "TRONTON".to_string(),
+            },
+        )
+        .await
+        .expect("update query")
+        .expect("row must exist");
+        assert_eq!(updated.price, 1_750_000);
+        assert_eq!(updated.id, created.id);
+
+        let listed = route_prices::list_all(&pool, tenant_id).await.expect("list_all");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].price, 1_750_000);
+
+        let deleted = route_prices::delete(&pool, tenant_id, created.id).await.expect("delete");
+        assert!(deleted);
+        let after = route_prices::list_all(&pool, tenant_id).await.expect("list_all after delete");
+        assert_eq!(after.len(), 0);
+
+        sqlx::query("DELETE FROM tenants WHERE id = $1")
+            .bind(tenant_id)
             .execute(&pool)
             .await
             .ok();
