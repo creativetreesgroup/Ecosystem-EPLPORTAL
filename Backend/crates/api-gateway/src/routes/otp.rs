@@ -80,6 +80,23 @@ async fn request_otp(
     if sent == 0 {
         tracing::warn!(tenant_id = %user.tenant_id, "OTP WAHA send reported zero delivered");
     }
+    notifier::bot_log::record(
+        &mut state.redis,
+        &notifier::bot_log::BotLogEntry {
+            ts: chrono::Utc::now().timestamp_millis(),
+            log_type: if sent > 0 { "success".to_string() } else { "error".to_string() },
+            kind: Some("otp".to_string()),
+            booking_id: None,
+            latency_ms: None,
+            rule: None,
+            error: if sent == 0 {
+                Some("zero WAHA sends delivered".to_string())
+            } else {
+                None
+            },
+        },
+    )
+    .await;
     Ok(Json(OtpOk { ok: true }))
 }
 

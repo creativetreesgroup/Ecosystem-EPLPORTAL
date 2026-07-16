@@ -19,6 +19,7 @@
 //! Message templates are ported from spx-portal-ref's
 //! `apps/api/src/services/webhook.ts` — see `message.rs` for field-by-field
 //! cross-check notes against the actual reference source.
+pub mod bot_log;
 pub mod message;
 pub mod push_vapid;
 pub mod waha;

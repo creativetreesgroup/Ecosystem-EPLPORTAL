@@ -36,4 +36,13 @@ impl RedisPublisher {
         let payload = serde_json::json!({ "type": "ticket_accepted", "data": data }).to_string();
         self.publish(&format!("acct:{}", account_id.to_lowercase()), &payload).await;
     }
+
+    /// Records one bot-activity log entry (Fase 6d Task 7) — reuses this struct's own
+    /// `ConnectionManager`, same `.clone()`-then-use pattern every other method here already
+    /// follows. `poller` already depends on `notifier` (`PollerShared.notifier`), so this adds
+    /// no new Cargo.toml entry.
+    pub async fn record_bot_log(&self, entry: &notifier::bot_log::BotLogEntry) {
+        let mut con = self.con.clone();
+        notifier::bot_log::record(&mut con, entry).await;
+    }
 }

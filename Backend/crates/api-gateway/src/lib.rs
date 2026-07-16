@@ -53,7 +53,7 @@ pub fn build_router(state: AppState) -> Router {
         )
         .nest("/prices", routes::prices::prices_router(state.clone()))
         .nest("/locations", routes::locations::locations_router(state.clone()))
-        .nest("/bot", routes::bot::bot_settings_router(state.clone()))
+        .nest("/bot", routes::bot::bot_router(state.clone()))
         .with_state(state.clone())
         // CORS (Task 7): exact-match allowlist, applied to every route this
         // router produces. Innermost of the three global layers below —

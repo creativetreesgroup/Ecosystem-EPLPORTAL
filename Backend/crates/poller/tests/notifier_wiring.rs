@@ -19,7 +19,7 @@ use core_domain::{CompiledRule, RuleBookingType, RuleConditions, RuleMode};
 use dashmap::DashMap;
 use executor::ExecutorHandle;
 use notifier::BotSettings;
-use poller::{dispatch_booking, DispatchResult, PollerShared, PollerState, RuleMeta, SidecarClient};
+use poller::{dispatch_booking, DispatchResult, PollerShared, PollerState, RedisPublisher, RuleMeta, SidecarClient};
 use secrecy::SecretString;
 use spx_client::{normalize_booking, SpxClient, SpxCookies};
 use uuid::Uuid;
@@ -146,6 +146,11 @@ async fn win_then_agency_loss_then_none_drive_waha_calls_correctly() {
             .await
             .expect("connect redis"),
     );
+    // Task 7: a real `RedisPublisher` so `finalize_win`'s `if let Some(pub_) = &shared.redis`
+    // block actually runs (proving the bot_log wiring, not just the WAHA notify wiring).
+    let redis_publisher = RedisPublisher::connect(&redis_url())
+        .await
+        .expect("connect redis publisher");
 
     // ONE WAHA mock server, shared across all three cases below, so the
     // cumulative request count directly proves each case's effect (1, then a
@@ -173,7 +178,7 @@ async fn win_then_agency_loss_then_none_drive_waha_calls_correctly() {
         config: poller::PollerConfig::default(),
         accounts: Arc::new(DashMap::new()),
         notifier: Some(bot_settings.clone()),
-        redis: None,
+        redis: Some(redis_publisher.clone()),
         sidecar: Arc::new(SidecarClient::new("http://127.0.0.1:0")),
         rules_tx: tokio::sync::watch::channel(poller::RuleSet::empty()).0,
     };
@@ -206,6 +211,18 @@ async fn win_then_agency_loss_then_none_drive_waha_calls_correctly() {
         1,
         "a win must spawn exactly one WAHA sendText call through PollerShared.notifier"
     );
+
+    // Task 7: the SAME finalize_win call must also have written a bot_log entry.
+    let mut redis = redis::Client::open(redis_url())
+        .expect("open redis client")
+        .get_connection_manager()
+        .await
+        .expect("connect redis");
+    let logs = notifier::bot_log::list(&mut redis, 10).await;
+    assert_eq!(logs.len(), 1, "finalize_win must record exactly one bot_log entry");
+    assert_eq!(logs[0].log_type, "success");
+    assert_eq!(logs[0].kind.as_deref(), Some("accept"));
+    let _: () = redis::AsyncCommands::del(&mut redis, "spx:bot:logs").await.unwrap_or(());
 
     // ── Case 2: a SEPARATE booking driven to AgencyDup -> LostToAgency spawns
     // exactly one (new, cumulative 2nd) WAHA call, with the rival's email in

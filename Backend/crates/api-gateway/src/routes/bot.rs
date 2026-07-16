@@ -221,8 +221,26 @@ async fn put_settings(
     Ok(Json(to_response(&waha)))
 }
 
-pub fn bot_settings_router(state: AppState) -> Router<AppState> {
+async fn get_logs(
+    State(mut state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
+) -> Result<Json<Vec<notifier::bot_log::BotLogEntry>>, ApiError> {
+    require_permission(&user, Permission::ManageBotSettings)?;
+    Ok(Json(notifier::bot_log::list(&mut state.redis, 200).await))
+}
+
+async fn delete_logs(
+    State(mut state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
+) -> Result<axum::http::StatusCode, ApiError> {
+    require_permission(&user, Permission::ManageBotSettings)?;
+    notifier::bot_log::clear(&mut state.redis).await;
+    Ok(axum::http::StatusCode::NO_CONTENT)
+}
+
+pub fn bot_router(state: AppState) -> Router<AppState> {
     Router::new()
         .route("/settings", get(get_settings).put(put_settings))
+        .route("/logs", get(get_logs).delete(delete_logs))
         .route_layer(axum::middleware::from_fn_with_state(state, session_auth))
 }

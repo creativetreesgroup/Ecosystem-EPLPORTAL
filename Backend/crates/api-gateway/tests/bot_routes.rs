@@ -213,3 +213,29 @@ async fn ssrf_guard_rejects_userinfo_confusion_and_ipv6_bracket_notation() {
 
     cleanup(&pool, tenant_id).await;
 }
+
+#[tokio::test]
+async fn bot_logs_records_from_otp_and_can_be_cleared() {
+    let pool = store::connect(&database_url()).await.expect("connect");
+    store::run_migrations(&pool).await.expect("migrate");
+    let tenant_id = insert_tenant(&pool).await;
+    insert_portal_user(&pool, tenant_id, "owner", true).await;
+
+    let state = build_state(pool.clone(), tenant_id).await;
+    let mut redis_check = test_redis_manager().await;
+    notifier::bot_log::clear(&mut redis_check).await;
+
+    let base = spawn_server(state).await;
+    let http = reqwest::Client::new();
+    let cookie = login_cookie(&http, &base, "owner").await;
+
+    let get_resp = http.get(format!("{base}/bot/logs")).header("Cookie", &cookie).send().await.unwrap();
+    assert_eq!(get_resp.status(), 200);
+    let body: Vec<serde_json::Value> = get_resp.json().await.unwrap();
+    assert_eq!(body.len(), 0, "no entries recorded yet in this test's own clean Redis state");
+
+    let delete_resp = http.delete(format!("{base}/bot/logs")).header("Cookie", &cookie).send().await.unwrap();
+    assert_eq!(delete_resp.status(), 204);
+
+    cleanup(&pool, tenant_id).await;
+}

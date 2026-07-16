@@ -150,6 +150,18 @@ pub async fn dispatch_booking(
                             notifier::notify_agency_loss(&settings, &spx_id, &rival, latency_ms_i64, Some(&rule_name)).await;
                         });
                     }
+                    if let Some(pub_) = &shared.redis {
+                        pub_.record_bot_log(&notifier::bot_log::BotLogEntry {
+                            ts: chrono::Utc::now().timestamp_millis(),
+                            log_type: "error".to_string(),
+                            kind: Some("agency_loss".to_string()),
+                            booking_id: Some(booking.id.clone()),
+                            latency_ms: Some(latency_ms as i64),
+                            rule: Some(meta.name.clone()),
+                            error: Some(format!("lost to {rival_email}")),
+                        })
+                        .await;
+                    }
                     DispatchResult::LostToAgency { rival: rival_email }
                 }
             }
@@ -276,6 +288,16 @@ async fn finalize_win(
                 "rule": meta.name,
             }),
         )
+        .await;
+        pub_.record_bot_log(&notifier::bot_log::BotLogEntry {
+            ts: chrono::Utc::now().timestamp_millis(),
+            log_type: "success".to_string(),
+            kind: Some("accept".to_string()),
+            booking_id: Some(booking.id.clone()),
+            latency_ms: Some(latency_ms as i64),
+            rule: Some(meta.name.clone()),
+            error: None,
+        })
         .await;
     }
 }
