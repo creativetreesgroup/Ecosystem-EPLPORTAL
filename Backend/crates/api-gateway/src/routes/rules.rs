@@ -252,6 +252,15 @@ async fn put_settings(
     let sanitized = core_domain::sanitize_accept_rules(&raw_rules);
     let deduped = core_domain::dedupe_rules(&sanitized.rules);
 
+    // Review finding (Task 11): the three writes below are NOT one atomic transaction —
+    // `replace_all` is its own transaction, each `replace_for_rule` call below is a SEPARATE
+    // transaction per rule, and `set_auto_accept_enabled` is a third. A mid-loop failure can
+    // leave `accept_rules` fully replaced but some `BookingId` rules missing their
+    // `rule_booking_targets`, with `auto_accept_enabled` never flipped. This is fail-safe by
+    // construction, not silently assumed away: the arm never completes (no broadcast below
+    // runs), nothing inconsistent is left reachable by a live poller account, and the very next
+    // successful `PUT` self-heals (`replace_all` wipes every existing row fresh regardless of
+    // this call's partial state).
     let new_rows: Vec<store::NewAcceptRule> = deduped.iter().map(to_new_accept_rule).collect();
     let inserted =
         store::accept_rules::replace_all(&state.poller.pool, user.tenant_id, &new_rows).await?;
