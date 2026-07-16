@@ -62,7 +62,6 @@ pub async fn create(
 }
 
 /// `None` when no row matches `(tenant_id, id)` — caller maps that to `404`.
-#[allow(clippy::too_many_arguments)]
 pub async fn update(
     pool: &PgPool,
     tenant_id: Uuid,
