@@ -27,7 +27,12 @@ pub struct BotSettingsResponse {
     pub waha_api_key_set: bool,
 }
 
-#[derive(Debug, Deserialize)]
+/// No `Debug` derive: this struct carries the plaintext `waha_api_key` from the request body,
+/// and a `Debug`/`{:?}` impl is exactly the kind of thing a future `tracing::debug!(?body)`
+/// could reach for without realizing it logs a raw credential (review finding — same footgun
+/// class already fixed for `UpsertCredential`, Fase 6b Task 2, and `notifier::BotSettings`,
+/// Fase 6b's whole-branch-review fix).
+#[derive(Deserialize)]
 pub struct BotSettingsRequest {
     #[serde(default)]
     pub enabled: bool,
