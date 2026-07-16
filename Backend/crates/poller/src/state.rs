@@ -83,6 +83,41 @@ impl PollerConfig {
     }
 }
 
+/// The tenant's live compiled rule set: `rules[i]`/`rule_meta[i]` are index-aligned (same
+/// contract `PollerState.rules`/`rule_meta` already had before this task — see
+/// `dispatch.rs::dispatch_booking`'s `st.rule_meta[idx]` lookup). Cloning a `RuleSet` is cheap
+/// (both fields are `Arc`, so `CompiledRule` itself never needs to implement `Clone`).
+#[derive(Clone)]
+pub struct RuleSet {
+    pub rules: Arc<Vec<CompiledRule>>,
+    pub rule_meta: Arc<Vec<crate::dispatch::RuleMeta>>,
+}
+
+impl RuleSet {
+    pub fn empty() -> Self {
+        Self {
+            rules: Arc::new(Vec::new()),
+            rule_meta: Arc::new(Vec::new()),
+        }
+    }
+}
+
+/// A manual-accept command sent INTO a running account's poller task (Task 10's route is the
+/// only producer). The poller task is the only ever writer/reader of `SpxCookies`/`agency_id` —
+/// this is how a caller outside that task gets a real accept dispatched through them without
+/// breaking that single-writer invariant. `booking_id`/`request_ids` mirror
+/// `SpxClient::accept_booking`'s own parameters exactly (see `dispatch.rs::dispatch_booking`'s
+/// existing call for the same shape) — `spx_id`/`account_id` are NOT included here because the
+/// channel itself is already scoped to one account (it lives on that account's own
+/// `AccountHandle`), and the claim/dedup check (`try_claim_manual`) happens in the ROUTE, before
+/// this request is ever sent — by the time a `ManualAcceptRequest` reaches the poller task, the
+/// claim has already succeeded.
+pub struct ManualAcceptRequest {
+    pub booking_id: i64,
+    pub request_ids: Vec<i64>,
+    pub reply: tokio::sync::oneshot::Sender<spx_client::AcceptResult>,
+}
+
 /// Per-account state, owned by one task.
 pub struct PollerState {
     pub account_id: String,
@@ -115,6 +150,13 @@ pub struct PollerState {
     pub rules: Arc<Vec<CompiledRule>>,
     pub rule_meta: Arc<Vec<crate::dispatch::RuleMeta>>,
     pub match_state: MatchState,
+    /// Task 6/7: live-reload subscription. `None` for every existing test/caller that
+    /// constructs `PollerState` via `PollerState::new` and never touches this field — behavior
+    /// is byte-for-byte unchanged from before this task for them (`rules`/`rule_meta` above
+    /// stay at whatever the caller set). Production code (`reactor-core`'s bootstrap loop, Task
+    /// 7) sets this to `Some(shared.rules_tx.subscribe())` and eagerly seeds `rules`/`rule_meta`
+    /// from it once, right after construction.
+    pub rules_rx: Option<tokio::sync::watch::Receiver<RuleSet>>,
 }
 
 impl PollerState {
@@ -143,14 +185,20 @@ impl PollerState {
             rules: Arc::new(Vec::new()),
             rule_meta: Arc::new(Vec::new()),
             match_state: MatchState::default(),
+            rules_rx: None,
         }
     }
 }
 
-/// A running account's control handle (poke to wake early; join to await stop).
+/// A running account's control handle (poke to wake early; join to await stop; dedup to reach
+/// its `AccountDedupState` from outside the poller task; manual_accept to dispatch a real SPX
+/// accept HTTP call through that SAME task's live cookies/agency_id — Task 10's route uses
+/// both).
 pub struct AccountHandle {
     pub poke: Arc<Notify>,
     pub join: JoinHandle<()>,
+    pub dedup: Arc<AccountDedupState>,
+    pub manual_accept: tokio::sync::mpsc::Sender<ManualAcceptRequest>,
 }
 
 /// Global, clone-shared context. `SpxClient`/`ExecutorHandle` are shared via
@@ -183,4 +231,10 @@ pub struct PollerShared {
     /// exercise ws delivery construct `PollerShared` with `redis: None`, a
     /// safe no-op the same way `notifier: None` is.
     pub redis: Option<crate::publish::RedisPublisher>,
+    /// Task 6/7: ONE shared live-reload channel for the whole tenant — `accept_rules` has no
+    /// per-account scoping column, so every account this process spawns shares the exact same
+    /// compiled rule set. `PUT /bookings/settings` (Task 11) calls `.send(new_set)` after a
+    /// successful save; every spawned account's next `poll_once` cycle picks it up via its own
+    /// subscribed `PollerState.rules_rx`.
+    pub rules_tx: tokio::sync::watch::Sender<RuleSet>,
 }

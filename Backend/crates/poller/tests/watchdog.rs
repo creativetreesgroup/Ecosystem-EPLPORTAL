@@ -166,6 +166,7 @@ async fn watchdog_is_a_noop_when_no_primary_account_configured() {
         notifier: None,
         redis: None,
         sidecar: Arc::new(SidecarClient::new("http://127.0.0.1:1")),
+        rules_tx: tokio::sync::watch::channel(poller::RuleSet::empty()).0,
     });
 
     let respawn_calls = Arc::new(AtomicUsize::new(0));
@@ -239,6 +240,7 @@ async fn watchdog_recreates_a_dead_primary_and_preserves_restore_contract() {
         notifier: None,
         redis: None,
         sidecar: Arc::new(SidecarClient::new("http://127.0.0.1:1")),
+        rules_tx: tokio::sync::watch::channel(poller::RuleSet::empty()).0,
     });
 
     // A GENUINELY dead task: it panics (tokio catches the unwind and reports
@@ -263,6 +265,8 @@ async fn watchdog_recreates_a_dead_primary_and_preserves_restore_contract() {
         poller::AccountHandle {
             poke: Arc::new(Notify::new()),
             join: dead_join,
+            dedup: Arc::new(AccountDedupState::new()),
+            manual_accept: tokio::sync::mpsc::channel(8).0,
         },
     );
 
@@ -303,6 +307,7 @@ async fn watchdog_recreates_a_dead_primary_and_preserves_restore_contract() {
                 rules: Arc::new(Vec::new()),
                 rule_meta: Arc::new(Vec::new()),
                 match_state: core_domain::MatchState::default(),
+                rules_rx: None,
             };
             let handle = poller::ensure_restored_then_spawn(shared2.clone(), st).await;
             shared2.accounts.insert(account_id, handle);
@@ -418,12 +423,15 @@ async fn watchdog_does_not_respawn_a_healthy_running_primary() {
         notifier: None,
         redis: None,
         sidecar: Arc::new(SidecarClient::new("http://127.0.0.1:1")),
+        rules_tx: tokio::sync::watch::channel(poller::RuleSet::empty()).0,
     });
     shared.accounts.insert(
         primary.clone(),
         poller::AccountHandle {
             poke: Arc::new(Notify::new()),
             join: alive_join,
+            dedup: Arc::new(AccountDedupState::new()),
+            manual_accept: tokio::sync::mpsc::channel(8).0,
         },
     );
 
@@ -529,12 +537,15 @@ async fn watchdog_respawns_a_primary_that_dies_between_ticks_counter_only() {
         notifier: None,
         redis: None,
         sidecar: Arc::new(SidecarClient::new("http://127.0.0.1:1")),
+        rules_tx: tokio::sync::watch::channel(poller::RuleSet::empty()).0,
     });
     shared.accounts.insert(
         primary.clone(),
         poller::AccountHandle {
             poke: Arc::new(Notify::new()),
             join: primary_join,
+            dedup: Arc::new(AccountDedupState::new()),
+            manual_accept: tokio::sync::mpsc::channel(8).0,
         },
     );
 

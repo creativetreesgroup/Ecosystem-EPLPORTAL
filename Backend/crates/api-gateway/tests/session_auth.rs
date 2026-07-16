@@ -111,6 +111,7 @@ async fn build_state(pool: PgPool) -> AppState {
         sidecar: Arc::new(sidecar),
         notifier: None,
         redis: None,
+        rules_tx: tokio::sync::watch::channel(poller::RuleSet::empty()).0,
     };
 
     AppState {

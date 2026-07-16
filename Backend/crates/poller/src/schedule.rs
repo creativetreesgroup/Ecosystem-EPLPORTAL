@@ -38,6 +38,7 @@ pub fn spawn_account_loop(
     shared: Arc<PollerShared>,
     mut st: PollerState,
     poke: Arc<Notify>,
+    mut manual_rx: tokio::sync::mpsc::Receiver<crate::state::ManualAcceptRequest>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         let interval = Duration::from_millis(shared.config.poll_interval_ms);
@@ -60,6 +61,19 @@ pub fn spawn_account_loop(
                     woken_by_poke = true;
                     tracing::trace!(account = %st.account_id, "poked → early wake, next cycle forces a full sweep");
                 }
+                // Task 6/10: a manual-accept request from OUTSIDE this task. Dispatched using
+                // THIS task's own, current `st.cookies`/`st.agency_id` — the same values
+                // `poll_once`'s auto-accept path would use on its very next cycle — preserving
+                // the single-writer invariant (only this task ever reads/writes them). Does NOT
+                // count as a "poke" (no forced full sweep on the next cycle) — a manual accept
+                // is not a "pool changed" signal.
+                Some(req) = manual_rx.recv() => {
+                    let result = shared
+                        .client
+                        .accept_booking(&st.cookies, req.booking_id, st.agency_id, &req.request_ids)
+                        .await;
+                    let _ = req.reply.send(result); // caller may have already timed out/dropped
+                }
             }
         }
     })
@@ -76,6 +90,16 @@ pub fn spawn_account_loop(
 /// Task 4's watcher) reliably forces a full sweep on the very next cycle
 /// (DoD #4), not merely an early wake with no behavioral effect.
 pub async fn poll_once(shared: &PollerShared, st: &mut PollerState, woken_by_poke: bool) {
+    // Task 6/7: pick up a live-reload push, if any, BEFORE this cycle's fetch/dispatch — a
+    // settings save should affect the very next cycle, not wait for a process restart.
+    if let Some(rx) = &mut st.rules_rx {
+        if rx.has_changed().unwrap_or(false) {
+            let latest = rx.borrow_and_update().clone();
+            st.rules = latest.rules;
+            st.rule_meta = latest.rule_meta;
+        }
+    }
+
     st.poll_count = st.poll_count.wrapping_add(1);
 
     // Fast-detect (opt-in) hints a pool change → jump straight to a full sweep.
@@ -172,7 +196,17 @@ pub async fn ensure_restored_then_spawn(
         .executor
         .restore_accepted_ids(&st.account_id, &st.dedup)
         .await;
+    // Captured BEFORE `st` moves into `spawn_account_loop` below.
+    let dedup = st.dedup.clone();
     let poke = Arc::new(Notify::new());
-    let join = spawn_account_loop(shared, st, poke.clone());
-    AccountHandle { poke, join }
+    // Bounded, small: a manual accept is a rare, human-paced action, and a slow/wedged consumer
+    // should apply backpressure rather than buffer unboundedly.
+    let (manual_tx, manual_rx) = tokio::sync::mpsc::channel(8);
+    let join = spawn_account_loop(shared, st, poke.clone(), manual_rx);
+    AccountHandle {
+        poke,
+        join,
+        dedup,
+        manual_accept: manual_tx,
+    }
 }

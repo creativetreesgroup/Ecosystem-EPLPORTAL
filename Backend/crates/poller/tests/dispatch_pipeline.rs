@@ -112,6 +112,7 @@ async fn accept_then_duplicate_and_booking_row_flips_to_accepted() {
         notifier: None,
         redis: None,
         sidecar: Arc::new(SidecarClient::new("http://127.0.0.1:0")),
+        rules_tx: tokio::sync::watch::channel(poller::RuleSet::empty()).0,
     };
 
     let account_id = format!("t{}", Uuid::new_v4().simple());
@@ -263,6 +264,7 @@ async fn taken_outcome_leaves_rule_matched_null_and_stamps_accept_reason() {
         notifier: None,
         redis: None,
         sidecar: Arc::new(SidecarClient::new("http://127.0.0.1:0")),
+        rules_tx: tokio::sync::watch::channel(poller::RuleSet::empty()).0,
     };
     let account_id = format!("t{}", Uuid::new_v4().simple());
     let (username, password) = creds();
@@ -389,6 +391,7 @@ async fn auth_outcome_releases_claim_and_leaves_booking_pending() {
         notifier: None,
         redis: None,
         sidecar: Arc::new(SidecarClient::new("http://127.0.0.1:0")),
+        rules_tx: tokio::sync::watch::channel(poller::RuleSet::empty()).0,
     };
     let account_id = format!("t{}", Uuid::new_v4().simple());
     let (username, password) = creds();
@@ -563,6 +566,7 @@ async fn ensure_self_email_does_not_permanently_cache_a_transient_fetch_failure(
         notifier: None,
         redis: None,
         sidecar: Arc::new(SidecarClient::new("http://127.0.0.1:0")),
+        rules_tx: tokio::sync::watch::channel(poller::RuleSet::empty()).0,
     };
 
     let account_id = format!("t{}", Uuid::new_v4().simple());

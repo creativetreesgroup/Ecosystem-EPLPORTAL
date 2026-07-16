@@ -234,6 +234,11 @@ async fn build_state() -> AppState {
         // pre-existing gap, unchanged by this task.
         notifier: None,
         redis: redis_publisher,
+        // Task 6: placeholder live-reload channel so this struct literal keeps compiling.
+        // Task 7 replaces this with the real bootstrap wiring (loading compiled rules from
+        // `store` and seeding every spawned account's `PollerState.rules_rx` from the same
+        // sender) — this line exists only to satisfy the new required field until then.
+        rules_tx: tokio::sync::watch::channel(poller::RuleSet::empty()).0,
     });
 
     // Account bootstrap: one live poller task per `agency_credentials` row.

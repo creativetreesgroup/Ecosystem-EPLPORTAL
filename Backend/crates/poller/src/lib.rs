@@ -27,5 +27,5 @@ pub use login::{
 pub use notif_watch::{next_backoff, spawn_notif_watcher, WatchState};
 pub use publish::RedisPublisher;
 pub use schedule::{ensure_restored_then_spawn, poll_once, spawn_account_loop};
-pub use state::{AccountHandle, PollerConfig, PollerShared, PollerState};
+pub use state::{AccountHandle, ManualAcceptRequest, PollerConfig, PollerShared, PollerState, RuleSet};
 pub use watchdog::{heartbeat, spawn_watchdog};

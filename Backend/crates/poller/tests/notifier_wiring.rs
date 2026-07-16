@@ -175,6 +175,7 @@ async fn win_then_agency_loss_then_none_drive_waha_calls_correctly() {
         notifier: Some(bot_settings.clone()),
         redis: None,
         sidecar: Arc::new(SidecarClient::new("http://127.0.0.1:0")),
+        rules_tx: tokio::sync::watch::channel(poller::RuleSet::empty()).0,
     };
 
     let spx_id_1 = format!("SPXID-NOTIFYWIN-{}", Uuid::new_v4().simple());
@@ -243,6 +244,7 @@ async fn win_then_agency_loss_then_none_drive_waha_calls_correctly() {
         notifier: Some(bot_settings.clone()),
         redis: None,
         sidecar: Arc::new(SidecarClient::new("http://127.0.0.1:0")),
+        rules_tx: tokio::sync::watch::channel(poller::RuleSet::empty()).0,
     };
 
     let spx_id_2 = format!("SPXID-NOTIFYLOSS-{}", Uuid::new_v4().simple());
@@ -308,6 +310,7 @@ async fn win_then_agency_loss_then_none_drive_waha_calls_correctly() {
         notifier: None,
         redis: None,
         sidecar: Arc::new(SidecarClient::new("http://127.0.0.1:0")),
+        rules_tx: tokio::sync::watch::channel(poller::RuleSet::empty()).0,
     };
 
     let spx_id_3 = format!("SPXID-NOTIFYNONE-{}", Uuid::new_v4().simple());

@@ -130,6 +130,7 @@ async fn poke_during_sleep_forces_a_full_sweep_on_the_next_cycle() {
         notifier: None,
         redis: None,
         sidecar: Arc::new(SidecarClient::new("http://127.0.0.1:0")),
+        rules_tx: tokio::sync::watch::channel(poller::RuleSet::empty()).0,
     });
 
     let account_id = format!("t{}", Uuid::new_v4().simple());

@@ -145,6 +145,7 @@ async fn a_booking_accepted_before_restart_is_never_re_accepted_after_restore() 
         notifier: None,
         redis: None,
         sidecar: Arc::new(SidecarClient::new("http://127.0.0.1:0")),
+        rules_tx: tokio::sync::watch::channel(poller::RuleSet::empty()).0,
     });
 
     // A BRAND NEW PollerState: empty in-proc dedup (`AccountDedupState::new()`

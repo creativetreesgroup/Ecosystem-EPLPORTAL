@@ -101,6 +101,7 @@ async fn build_shared(spx: &MockServer, sidecar: &MockServer) -> Arc<PollerShare
         notifier: None,
         redis: None,
         sidecar: sidecar_client,
+        rules_tx: tokio::sync::watch::channel(poller::RuleSet::empty()).0,
     })
 }
 
