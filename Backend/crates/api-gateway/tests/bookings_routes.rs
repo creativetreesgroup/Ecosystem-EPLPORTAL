@@ -1,5 +1,5 @@
 // Backend/crates/api-gateway/tests/bookings_routes.rs
-//! `GET /bookings/live`, `/history`, `/:id/detail` — session-auth-only read routes.
+//! `GET /bookings/live`, `/history`, `/:id/detail`, `/spx-log` — session-auth-only read routes.
 use dashmap::DashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -268,6 +268,48 @@ async fn detail_returns_full_raw_data_and_404s_for_unknown_id() {
         .await
         .unwrap();
     assert_eq!(missing_resp.status(), 404);
+
+    cleanup(&pool, tenant_id).await;
+}
+
+#[tokio::test]
+async fn spx_log_lists_accept_events_newest_first() {
+    let pool = store::connect(&database_url()).await.expect("connect");
+    let tenant_id = insert_tenant(&pool).await;
+    insert_portal_user(&pool, tenant_id, "owner").await;
+
+    for outcome in ["accepted", "failed"] {
+        store::insert_accept_event(
+            &pool,
+            tenant_id,
+            &store::NewAcceptEvent {
+                booking_id: None,
+                rule_id: None,
+                outcome: outcome.to_string(),
+                local_dispatch_us: None,
+                accept_e2e_ms: None,
+                detail: serde_json::json!({}),
+            },
+        )
+        .await
+        .unwrap_or_else(|e| panic!("insert {outcome}: {e}"));
+    }
+
+    let state = build_state(pool.clone(), tenant_id).await;
+    let base = spawn_server(state).await;
+    let http = reqwest::Client::new();
+    let cookie = login_cookie(&http, &base, "owner").await;
+
+    let resp = http
+        .get(format!("{base}/bookings/spx-log"))
+        .header("Cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert_eq!(body.len(), 2);
+    assert_eq!(body[0]["outcome"], "failed", "newest (last-inserted) first");
 
     cleanup(&pool, tenant_id).await;
 }

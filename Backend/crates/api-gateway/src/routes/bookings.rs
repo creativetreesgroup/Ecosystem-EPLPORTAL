@@ -1,8 +1,9 @@
 // Backend/crates/api-gateway/src/routes/bookings.rs
-//! `GET /bookings/live`, `/bookings/history`, `/bookings/:id/detail` — read-only booking views,
-//! and (Task 10) `POST /bookings/:id/accept` — manual accept. Every route here needs only
-//! `session_auth` (any logged-in tenant member); see this file's own `require_permission`
-//! usage (Task 10's handler) for the one exception's rationale.
+//! `GET /bookings/live`, `/bookings/history`, `/bookings/:id/detail`, `/bookings/spx-log` —
+//! read-only booking + accept-event-audit views, and (Task 10) `POST /bookings/:id/accept` —
+//! manual accept. Every route here needs only `session_auth` (any logged-in tenant member);
+//! see this file's own `require_permission` usage (Task 10's handler) for the one exception's
+//! rationale.
 use axum::extract::{Extension, Path, Query, State};
 use axum::routing::get;
 use axum::{Json, Router};
@@ -145,6 +146,48 @@ async fn detail(
     Ok(Json(BookingDetail::from(row)))
 }
 
+#[derive(Debug, Serialize)]
+pub struct AcceptEventItem {
+    pub id: Uuid,
+    pub booking_id: Option<Uuid>,
+    pub rule_id: Option<Uuid>,
+    pub outcome: String,
+    pub local_dispatch_us: Option<i64>,
+    pub accept_e2e_ms: Option<i64>,
+    pub detail: Value,
+    pub created_at: DateTime<Utc>,
+}
+
+impl From<store::models::AcceptEvent> for AcceptEventItem {
+    fn from(e: store::models::AcceptEvent) -> Self {
+        Self {
+            id: e.id,
+            booking_id: e.booking_id,
+            rule_id: e.rule_id,
+            outcome: e.outcome,
+            local_dispatch_us: e.local_dispatch_us,
+            accept_e2e_ms: e.accept_e2e_ms,
+            detail: e.detail,
+            created_at: e.created_at,
+        }
+    }
+}
+
+async fn spx_log(
+    State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
+    Query(params): Query<ListParams>,
+) -> Result<Json<Vec<AcceptEventItem>>, ApiError> {
+    let rows = store::list_accept_events(
+        &state.poller.pool,
+        user.tenant_id,
+        clamp_limit(params.limit),
+        clamp_offset(params.offset),
+    )
+    .await?;
+    Ok(Json(rows.into_iter().map(AcceptEventItem::from).collect()))
+}
+
 /// Nested at `/bookings` by `build_router`. Task 10 appends `.route("/{id}/accept", post(...))`
 /// to this SAME function (do not create a second router for it — one `/bookings` prefix, one
 /// router, per this crate's established one-router-per-resource convention).
@@ -153,5 +196,6 @@ pub fn bookings_router(state: AppState) -> Router<AppState> {
         .route("/live", get(live))
         .route("/history", get(history))
         .route("/{id}/detail", get(detail))
+        .route("/spx-log", get(spx_log))
         .route_layer(axum::middleware::from_fn_with_state(state, session_auth))
 }
