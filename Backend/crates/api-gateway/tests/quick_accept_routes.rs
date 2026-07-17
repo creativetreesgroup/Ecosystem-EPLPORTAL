@@ -220,3 +220,90 @@ async fn wrong_tenant_token_is_rejected_by_this_deployments_state_tenant_id() {
 
     cleanup(&pool, tenant_id).await;
 }
+
+/// Proves Task 4's CSP-relaxation fix actually took effect: the confirmation page's response
+/// must carry a `Content-Security-Policy` with a `script-src` token. The OLD global strict
+/// default (`default-src 'none'; frame-ancestors 'none'; base-uri 'none'`) has NO `script-src`
+/// token at all — a real browser would block the page's inline `<script>` and its `fetch()`
+/// under that header, which is exactly the bug this fix addresses. This test would have failed
+/// before Step 1/2's change and must pass after it.
+#[tokio::test]
+async fn quick_token_page_csp_allows_its_own_inline_script() {
+    let pool = store::connect(&database_url()).await.expect("connect");
+    let tenant_id = insert_tenant(&pool).await;
+    insert_booking(&pool, tenant_id, "SPX-QA-CSP", "pending").await;
+
+    let state = build_state(pool.clone(), tenant_id).await;
+    let master_key = state.master_key.clone();
+    let base = spawn_server(state).await;
+    let http = reqwest::Client::new();
+
+    let now = chrono::Utc::now().timestamp_millis();
+    let token = spx_client::crypto::quick_token::sign_quick_token(
+        &master_key,
+        tenant_id,
+        "SPX-QA-CSP",
+        spx_client::crypto::quick_token::DEFAULT_TTL_MS,
+        now,
+    )
+    .unwrap();
+
+    let resp = http.get(format!("{base}/q/{token}")).send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let csp = resp
+        .headers()
+        .get("content-security-policy")
+        .expect("confirmation page must set a Content-Security-Policy header")
+        .to_str()
+        .unwrap();
+    assert!(
+        csp.contains("script-src"),
+        "confirmation page CSP must contain a script-src token allowing its own inline \
+         <script> to run, got: {csp}"
+    );
+
+    cleanup(&pool, tenant_id).await;
+}
+
+/// Proves Task 4's HTML-escaping fix: a `spx_id` containing an HTML metacharacter must be
+/// rendered escaped, never raw, in the confirmation page's markup. `spx_id` is unconstrained
+/// TEXT in the DB (this INSERT is legal even though `is_valid_token_shape` would reject this
+/// exact string as a URL path segment) — the point is proving the RENDERING is safe for
+/// whatever value ends up in the DB, so the token here is signed directly for this exact
+/// `spx_id` value via the crypto layer, independent of `is_valid_token_shape`'s URL-shape check.
+#[tokio::test]
+async fn quick_token_page_html_escapes_spx_id() {
+    let pool = store::connect(&database_url()).await.expect("connect");
+    let tenant_id = insert_tenant(&pool).await;
+    let spx_id = "SPX<script>ALERT</script>";
+    insert_booking(&pool, tenant_id, spx_id, "pending").await;
+
+    let state = build_state(pool.clone(), tenant_id).await;
+    let master_key = state.master_key.clone();
+    let base = spawn_server(state).await;
+    let http = reqwest::Client::new();
+
+    let now = chrono::Utc::now().timestamp_millis();
+    let token = spx_client::crypto::quick_token::sign_quick_token(
+        &master_key,
+        tenant_id,
+        spx_id,
+        spx_client::crypto::quick_token::DEFAULT_TTL_MS,
+        now,
+    )
+    .unwrap();
+
+    let resp = http.get(format!("{base}/q/{token}")).send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.unwrap();
+    assert!(
+        body.contains("&lt;script&gt;"),
+        "spx_id's HTML metacharacters must be rendered escaped"
+    );
+    assert!(
+        !body.contains("<script>ALERT</script>"),
+        "the raw, unescaped spx_id must never appear in the response body"
+    );
+
+    cleanup(&pool, tenant_id).await;
+}

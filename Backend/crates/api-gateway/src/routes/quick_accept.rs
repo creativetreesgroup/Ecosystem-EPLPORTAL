@@ -37,6 +37,31 @@ fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
 
+/// Narrowly relaxed CSP for `confirmation_page` ONLY — the global default
+/// (`middleware::security_headers`) is `default-src 'none'` with no `script-src`/`connect-src`,
+/// which a real browser enforces by silently blocking BOTH this page's inline `<script>` from
+/// running and its `fetch()` from firing, leaving the "Terima Tiket Sekarang" button inert.
+/// `'unsafe-inline'` is the pragmatic, disclosed choice for this stopgap page (no nonce
+/// infrastructure exists yet; Fase 7's Command Center replaces this page's styling/mechanism
+/// entirely — see the file-level doc comment). `connect-src 'self'` is only what the page's own
+/// same-origin `fetch()` to `/q/accept` needs. Everything else stays as locked down as the
+/// global default: no `frame-ancestors`, no `object-src`, `base-uri 'none'`.
+const CONFIRMATION_PAGE_CSP: &str =
+    "default-src 'none'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'";
+
+/// Minimal HTML-escaping for interpolating untrusted, SPX-platform-sourced text (`spx_id`) into
+/// `confirmation_page`'s markup. `spx_id` is never validated as HTML-safe anywhere in the
+/// ingestion pipeline, so this is a display-only safety net — NOT used anywhere near
+/// `post_body`'s JSON, which has its own separate, already-safe path via `{token:?}` +
+/// `is_valid_token_shape`'s charset gate.
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#x27;")
+}
+
 fn error_page(status: StatusCode, text: &str) -> Response {
     let body = format!(
         "<!doctype html><html lang=\"id\"><head><meta charset=\"utf-8\">\
@@ -58,13 +83,14 @@ fn confirmation_page(spx_id: &str, status: &str, post_url: &str, post_body: &str
         _ => ("Terima tiket ini", false),
     };
     let btn_attr = if disabled { "disabled" } else { "" };
+    let spx_id_escaped = html_escape(spx_id);
     let body = format!(
         "<!doctype html><html lang=\"id\"><head><meta charset=\"utf-8\">\
          <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
          <meta name=\"robots\" content=\"noindex,nofollow\">\
          <title>Terima Tiket</title></head>\
          <body style=\"font-family:sans-serif;max-width:420px;margin:40px auto;padding:0 20px\">\
-         <p>Booking ID: <b>{spx_id}</b></p>\
+         <p>Booking ID: <b>{spx_id_escaped}</b></p>\
          <p>{label}</p>\
          <button id=\"go\" {btn_attr} style=\"width:100%;padding:14px;font-size:16px\">Terima Tiket Sekarang</button>\
          <p id=\"msg\"></p>\
@@ -78,7 +104,12 @@ fn confirmation_page(spx_id: &str, status: &str, post_url: &str, post_body: &str
          }};\
          </script></body></html>"
     );
-    Html(body).into_response()
+    let mut response = Html(body).into_response();
+    response.headers_mut().insert(
+        axum::http::header::CONTENT_SECURITY_POLICY,
+        axum::http::HeaderValue::from_static(CONFIRMATION_PAGE_CSP),
+    );
+    response
 }
 
 async fn get_quick_token(State(state): State<AppState>, Path(token): Path<String>) -> Response {
