@@ -620,6 +620,51 @@ mod tests {
             .ok();
     }
 
+    /// `get_by_spx_id` (Fase 6e, quick-accept lookup): finds a row by `spx_id` and, like every
+    /// other lookup in this crate, is tenant-isolated — the same `spx_id` string under a
+    /// different tenant must not resolve.
+    #[tokio::test]
+    async fn bookings_get_by_spx_id_finds_row_and_isolates_by_tenant() {
+        let pool = connect(&test_database_url()).await.expect("connect");
+        run_migrations(&pool).await.expect("migrate");
+        let tenant_a = insert_test_tenant(&pool).await;
+        let tenant_b = insert_test_tenant(&pool).await;
+
+        sqlx::query("INSERT INTO bookings (tenant_id, spx_id, raw_data) VALUES ($1, $2, '{}')")
+            .bind(tenant_a)
+            .bind("SPX-QUICK-1")
+            .execute(&pool)
+            .await
+            .expect("insert booking");
+
+        let found = bookings::get_by_spx_id(&pool, tenant_a, "SPX-QUICK-1")
+            .await
+            .expect("query ok")
+            .expect("row found");
+        assert_eq!(found.spx_id, "SPX-QUICK-1");
+        assert_eq!(found.tenant_id, tenant_a);
+
+        // Cross-tenant: same spx_id string, wrong tenant, must return None.
+        let not_found = bookings::get_by_spx_id(&pool, tenant_b, "SPX-QUICK-1")
+            .await
+            .expect("query ok");
+        assert!(
+            not_found.is_none(),
+            "a booking must not be visible via a different tenant_id"
+        );
+
+        let missing = bookings::get_by_spx_id(&pool, tenant_a, "SPX-DOES-NOT-EXIST")
+            .await
+            .expect("query ok");
+        assert!(missing.is_none());
+
+        sqlx::query("DELETE FROM tenants WHERE id = ANY($1)")
+            .bind(vec![tenant_a, tenant_b])
+            .execute(&pool)
+            .await
+            .ok();
+    }
+
     /// Proves migration 0020's actual motivation (see its own doc comment):
     /// the OLD `bookings_tenant_spx_id_unique UNIQUE (tenant_id, spx_id)`
     /// constraint meant a given `spx_id` could only ever have ONE row per

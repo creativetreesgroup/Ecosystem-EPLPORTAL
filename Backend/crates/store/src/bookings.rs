@@ -331,3 +331,37 @@ pub async fn get_detail(
     tx.commit().await?;
     Ok(row)
 }
+
+/// Looks up a booking by its SPX platform id (`spx_id`) rather than the internal UUID row id —
+/// what a quick-accept HMAC token carries (Fase 6e), since neither the WhatsApp notification nor
+/// the token format ever carries TOWER's internal row id. Tenant-scoped exactly like
+/// `get_detail` (same return type, same `begin_tenant_tx` + `WHERE tenant_id = $1` pattern).
+///
+/// `(tenant_id, account_id, spx_id)` is UNIQUE per migration 0020's
+/// `bookings_tenant_account_spx_id_unique` constraint, but `(tenant_id, spx_id)` alone is NOT —
+/// the same `spx_id` can legitimately exist under two different sibling accounts within one
+/// tenant (that's the entire reason migration 0020 replaced the old, narrower
+/// `bookings_tenant_spx_id_unique` constraint). `LIMIT 1` with no `ORDER BY` is therefore an
+/// intentional, accepted simplification for this specific use case: a WhatsApp quick-accept link
+/// is fired for one specific account's ticket at send-time, so whichever row Postgres returns
+/// first is a correct answer for the common case. If a same-`spx_id`-across-accounts collision
+/// ever becomes a real ambiguity for a caller, that caller needs a variant that also takes
+/// `account_id` — this function intentionally does not attempt that disambiguation itself.
+pub async fn get_by_spx_id(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    spx_id: &str,
+) -> Result<Option<crate::models::Booking>, sqlx::Error> {
+    let mut tx = crate::begin_tenant_tx(pool, tenant_id).await?;
+    let row = sqlx::query_as::<_, crate::models::Booking>(
+        "SELECT id, tenant_id, account_id, spx_id, raw_data, status, is_coc, needs_enrichment, \
+         service_type, weight, cod_amount, auto_accepted, accept_latency_ms, rule_matched, \
+         created_at, updated_at FROM bookings WHERE tenant_id = $1 AND spx_id = $2 LIMIT 1",
+    )
+    .bind(tenant_id)
+    .bind(spx_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(row)
+}
