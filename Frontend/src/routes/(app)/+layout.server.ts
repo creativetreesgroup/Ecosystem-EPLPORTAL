@@ -14,10 +14,16 @@ export const load: LayoutServerLoad = async ({ fetch, cookies }) => {
 	if (!cookies.get('spx_session')) {
 		redirect(307, '/login');
 	}
-	const res = await fetch('/auth/me');
-	if (!res.ok) {
+	try {
+		const res = await fetch('/auth/me');
+		if (!res.ok) {
+			redirect(307, '/login');
+		}
+		const user = await res.json();
+		return { user };
+	} catch {
+		// Network error, timeout, malformed JSON, or redirect from !res.ok check
+		// Fail-closed: treat any error as unauthenticated
 		redirect(307, '/login');
 	}
-	const user = await res.json();
-	return { user };
 };
