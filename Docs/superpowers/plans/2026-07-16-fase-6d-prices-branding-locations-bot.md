@@ -31,7 +31,7 @@
 - Consumes: `crate::begin_tenant_tx`, `crate::models::RoutePrice` (`id, tenant_id, route_code, region, origin, destinations: Value, price: i64, vehicle_type, created_at, updated_at`).
 - Produces (for Task 4): `route_prices::{list_all, create, update, delete}`.
 
-- [ ] **Step 1: Write the module**
+- [x] **Step 1: Write the module**
 
 ```rust
 // Backend/crates/store/src/route_prices.rs
@@ -138,7 +138,7 @@ pub async fn delete(pool: &PgPool, tenant_id: Uuid, id: Uuid) -> Result<bool, sq
 }
 ```
 
-- [ ] **Step 2: Wire the module**
+- [x] **Step 2: Wire the module**
 
 ```rust
 // Backend/crates/store/src/lib.rs
@@ -151,7 +151,7 @@ pub use route_prices::{
 };
 ```
 
-- [ ] **Step 3: Write the failing test**
+- [x] **Step 3: Write the failing test**
 
 ```rust
 // Backend/crates/store/src/lib.rs — inside `#[cfg(test)] mod tests`
@@ -213,7 +213,7 @@ async fn route_prices_create_update_delete_round_trip() {
 }
 ```
 
-- [ ] **Step 4: Run it, then full verification + commit**
+- [x] **Step 4: Run it, then full verification + commit**
 
 Run: `cd Backend && export PATH="$HOME/.cargo/bin:$PATH" && cargo test -p store route_prices_create_update_delete_round_trip -- --test-threads=1`
 Expected: PASS. Then `cargo test -p store -- --test-threads=1 && cargo clippy -p store --all-targets -- -D warnings` — 0 failures, clean.
@@ -235,7 +235,7 @@ git commit -m "feat(store): route_prices CRUD"
 - Consumes: `crate::models::RouteLocation` (`id, tenant_id, name, created_at` — no `updated_at`, locations are add/delete-only per the schema).
 - Produces (for Task 5): `route_locations::{list_all, create, delete}`.
 
-- [ ] **Step 1: Write the module**
+- [x] **Step 1: Write the module**
 
 ```rust
 // Backend/crates/store/src/route_locations.rs
@@ -292,7 +292,7 @@ pub async fn delete(pool: &PgPool, tenant_id: Uuid, id: Uuid) -> Result<bool, sq
 }
 ```
 
-- [ ] **Step 2: Wire the module**
+- [x] **Step 2: Wire the module**
 
 ```rust
 // Backend/crates/store/src/lib.rs
@@ -305,7 +305,7 @@ pub use route_locations::{
 };
 ```
 
-- [ ] **Step 3: Write the failing test**
+- [x] **Step 3: Write the failing test**
 
 ```rust
 // Backend/crates/store/src/lib.rs — inside `#[cfg(test)] mod tests`
@@ -344,7 +344,7 @@ async fn route_locations_create_list_delete_round_trip() {
 }
 ```
 
-- [ ] **Step 4: Run it, then full verification + commit**
+- [x] **Step 4: Run it, then full verification + commit**
 
 Run: `cargo test -p store route_locations_create_list_delete_round_trip -- --test-threads=1`, then `cargo test -p store -- --test-threads=1 && cargo clippy -p store --all-targets -- -D warnings`.
 
@@ -366,7 +366,7 @@ git commit -m "feat(store): route_locations CRUD"
 **Interfaces:**
 - Produces (for Tasks 6 and 8): `site_settings::{put, delete, list}` alongside the existing `get`.
 
-- [ ] **Step 1: Add the missing verbs**
+- [x] **Step 1: Add the missing verbs**
 
 ```rust
 // Backend/crates/store/src/site_settings.rs — append (keep the existing `get` fn unchanged)
@@ -424,7 +424,7 @@ pub async fn list(pool: &PgPool, tenant_id: Uuid) -> Result<Vec<(String, Value)>
 }
 ```
 
-- [ ] **Step 2: Update the module's own top doc comment**
+- [x] **Step 2: Update the module's own top doc comment**
 
 ```rust
 // Backend/crates/store/src/site_settings.rs — replace the doc comment's "Deliberately just this
@@ -435,7 +435,7 @@ pub async fn list(pool: &PgPool, tenant_id: Uuid) -> Result<Vec<(String, Value)>
 //! first two real writers (`waha_settings` extended by Task 6, `price_page`/branding by Task 8).
 ```
 
-- [ ] **Step 3: Write the failing test**
+- [x] **Step 3: Write the failing test**
 
 ```rust
 // Backend/crates/store/src/lib.rs — inside `#[cfg(test)] mod tests`
@@ -483,7 +483,7 @@ async fn site_settings_put_get_delete_round_trip() {
 }
 ```
 
-- [ ] **Step 4: Run it, then full verification + commit**
+- [x] **Step 4: Run it, then full verification + commit**
 
 Run: `cargo test -p store site_settings_put_get_delete_round_trip -- --test-threads=1`, then `cargo test -p store -- --test-threads=1 && cargo clippy -p store --all-targets -- -D warnings`.
 
@@ -510,7 +510,7 @@ git commit -m "feat(store): complete site_settings CRUD (put, delete, list)"
 - Consumes: `store::{list_route_prices, create_route_price, update_route_price, delete_route_price, NewRoutePrice}` (Task 1).
 - Produces: `middleware::public_rate_limit_layer() -> GovernorLayer<SmartIpKeyExtractor, NoOpMiddleware, axum::body::Body>`.
 
-- [ ] **Step 1: Add the public rate limiter**
+- [x] **Step 1: Add the public rate limiter**
 
 ```rust
 // Backend/crates/api-gateway/src/middleware/rate_limit.rs — append, after the existing
@@ -541,14 +541,14 @@ pub fn public_rate_limit_layer(
 ```
 Check `GovernorConfigBuilder`'s actual method name for a millisecond-granularity replenish period (`per_millisecond` vs. only `per_second`/`per_nanosecond` existing in the resolved `governor`/`tower_governor` version) by reading the vendored source (`~/.cargo/registry/src/.../tower_governor-0.8.0/` and its `governor` dependency) BEFORE writing this — `login_rate_limit_layer` only ever used `per_second`, so this is the first call site in this crate needing sub-second granularity; if `per_millisecond` doesn't exist, use `per_second(1)` with `burst_size(120)` instead (a coarser but still-compliant 120/min figure: 1 token/sec replenish, burst up to 120) and note the substitution in your report.
 
-- [ ] **Step 2: Re-export**
+- [x] **Step 2: Re-export**
 
 ```rust
 // Backend/crates/api-gateway/src/middleware/mod.rs
 pub use rate_limit::{login_rate_limit_layer, public_rate_limit_layer};
 ```
 
-- [ ] **Step 3: Write the route module**
+- [x] **Step 3: Write the route module**
 
 ```rust
 // Backend/crates/api-gateway/src/routes/prices.rs
@@ -704,7 +704,7 @@ pub fn prices_router(state: AppState) -> Router<AppState> {
 }
 ```
 
-- [ ] **Step 4: Wire the module**
+- [x] **Step 4: Wire the module**
 
 ```rust
 // Backend/crates/api-gateway/src/routes/mod.rs
@@ -715,7 +715,7 @@ pub mod prices;
         .nest("/prices", routes::prices::prices_router(state.clone()))
 ```
 
-- [ ] **Step 5: Write the failing tests**
+- [x] **Step 5: Write the failing tests**
 
 ```rust
 // Backend/crates/api-gateway/tests/prices_routes.rs (new file)
@@ -899,13 +899,13 @@ async fn create_price_requires_main_account_and_validates_destinations() {
 }
 ```
 
-- [ ] **Step 6: Run the tests, then full crate verification**
+- [x] **Step 6: Run the tests, then full crate verification**
 
 Run: `cargo test -p api-gateway --test prices_routes -- --test-threads=1` — both PASS. Check `insert_portal_user`'s exact `store::portal_users::create` argument order against `Backend/crates/api-gateway/tests/bookings_routes.rs`'s ALREADY-WORKING helper before assuming the signature above is right — Tasks 8/9/10/11 of Fase 6c each independently had to correct a brief's guess at this exact signature; copy the verified-working shape, don't re-guess it.
 
 Run: `cargo test -p api-gateway -- --test-threads=1 && cargo clippy -p api-gateway --all-targets -- -D warnings` — 0 failures, clean.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add Backend/crates/api-gateway/src/middleware/rate_limit.rs Backend/crates/api-gateway/src/middleware/mod.rs \
@@ -929,7 +929,7 @@ git commit -m "feat(api-gateway): GET /prices (public, rate-limited) + POST/PUT/
 **Interfaces:**
 - Consumes: `store::{list_route_locations, create_route_location, delete_route_location}` (Task 2).
 
-- [ ] **Step 1: Write the route module**
+- [x] **Step 1: Write the route module**
 
 ```rust
 // Backend/crates/api-gateway/src/routes/locations.rs
@@ -1010,7 +1010,7 @@ pub fn locations_router(state: AppState) -> Router<AppState> {
 }
 ```
 
-- [ ] **Step 2: Wire the module**
+- [x] **Step 2: Wire the module**
 
 ```rust
 // Backend/crates/api-gateway/src/routes/mod.rs
@@ -1021,7 +1021,7 @@ pub mod locations;
         .nest("/locations", routes::locations::locations_router(state.clone()))
 ```
 
-- [ ] **Step 3: Write the failing tests**
+- [x] **Step 3: Write the failing tests**
 
 ```rust
 // Backend/crates/api-gateway/tests/locations_routes.rs (new file)
@@ -1136,7 +1136,7 @@ async fn locations_require_session_and_gate_writes_on_main_account() {
 }
 ```
 
-- [ ] **Step 4: Run the tests, then full crate verification + commit**
+- [x] **Step 4: Run the tests, then full crate verification + commit**
 
 Run: `cargo test -p api-gateway --test locations_routes -- --test-threads=1` — PASS. Then `cargo test -p api-gateway -- --test-threads=1 && cargo clippy -p api-gateway --all-targets -- -D warnings` — clean.
 
@@ -1169,7 +1169,7 @@ git commit -m "feat(api-gateway): GET/POST/DELETE /locations"
 **Interfaces:**
 - Produces: `spx_client::waha_settings::WahaSettings` gains `enabled: bool, webhook_url: String, wa_group: String, portal_label: String` (all `#[serde(default)]`).
 
-- [ ] **Step 1: Extend `WahaSettings`**
+- [x] **Step 1: Extend `WahaSettings`**
 
 ```rust
 // Backend/crates/spx-client/src/waha_settings.rs — replace the struct definition
@@ -1228,12 +1228,12 @@ pub struct WahaSettings {
     }
 ```
 
-- [ ] **Step 2: Run `spx-client`'s existing tests to confirm the additive change is safe**
+- [x] **Step 2: Run `spx-client`'s existing tests to confirm the additive change is safe**
 
 Run: `cargo test -p spx-client -- --test-threads=1`
 Expected: all pass, including `roundtrip_in_memory_and_plaintext_never_in_json` (`waha_settings.rs`'s own test) — confirms the new fields don't break JSON round-tripping or the plaintext-never-in-JSON guarantee.
 
-- [ ] **Step 3: Fix `otp.rs::load_bot_settings` to read the real values instead of hardcoding zero**
+- [x] **Step 3: Fix `otp.rs::load_bot_settings` to read the real values instead of hardcoding zero**
 
 ```rust
 // Backend/crates/api-gateway/src/routes/otp.rs — replace load_bot_settings' final
@@ -1253,7 +1253,7 @@ Also update this function's doc comment (currently explains the 4-field gap this
 
 Run: `cargo test -p api-gateway --test otp_routes -- --test-threads=1` — confirm all pre-existing OTP tests still pass (this change only widens what `load_bot_settings` reads; it does not change `request_otp`/`verify_otp`'s own logic).
 
-- [ ] **Step 4: Write the route module**
+- [x] **Step 4: Write the route module**
 
 ```rust
 // Backend/crates/api-gateway/src/routes/bot.rs
@@ -1444,7 +1444,7 @@ pub fn bot_settings_router(state: AppState) -> Router<AppState> {
 }
 ```
 
-- [ ] **Step 5: Wire the module (mounted at `/bot`, Task 7 adds `/bot/logs` to the SAME router)**
+- [x] **Step 5: Wire the module (mounted at `/bot`, Task 7 adds `/bot/logs` to the SAME router)**
 
 ```rust
 // Backend/crates/api-gateway/src/routes/mod.rs
@@ -1455,7 +1455,7 @@ pub mod bot;
         .nest("/bot", routes::bot::bot_settings_router(state.clone()))
 ```
 
-- [ ] **Step 6: Write the failing tests**
+- [x] **Step 6: Write the failing tests**
 
 ```rust
 // Backend/crates/api-gateway/tests/bot_routes.rs (new file)
@@ -1619,7 +1619,7 @@ async fn ssrf_guard_rejects_internal_hosts() {
 }
 ```
 
-- [ ] **Step 7: Run the tests, then full crate verification + commit**
+- [x] **Step 7: Run the tests, then full crate verification + commit**
 
 Run: `cargo test -p api-gateway --test bot_routes -- --test-threads=1` — all PASS. Then `cargo test -p spx-client -p api-gateway -- --test-threads=1 && cargo clippy -p spx-client -p api-gateway --all-targets -- -D warnings` — clean.
 
@@ -1647,7 +1647,7 @@ git commit -m "feat(spx-client,api-gateway): extend WahaSettings + GET/PUT /bot/
 - Modify: `Backend/crates/api-gateway/src/routes/bot.rs` (append `GET/DELETE /logs`)
 - Test: `Backend/crates/notifier/tests/bot_log_pg.rs` (misnamed — no Postgres, real Redis; matches this crate's existing `tests/waha_mock.rs`-adjacent naming loosely, use `bot_log_redis.rs` instead), `Backend/crates/api-gateway/tests/bot_routes.rs` (append)
 
-- [ ] **Step 1: Write `notifier::bot_log`**
+- [x] **Step 1: Write `notifier::bot_log`**
 
 ```rust
 // Backend/crates/notifier/src/bot_log.rs
@@ -1705,14 +1705,14 @@ pub async fn clear(redis: &mut ConnectionManager) {
 }
 ```
 
-- [ ] **Step 2: Wire the module**
+- [x] **Step 2: Wire the module**
 
 ```rust
 // Backend/crates/notifier/src/lib.rs
 pub mod bot_log;
 ```
 
-- [ ] **Step 3: Extend `RedisPublisher`**
+- [x] **Step 3: Extend `RedisPublisher`**
 
 ```rust
 // Backend/crates/poller/src/publish.rs — append inside `impl RedisPublisher`, after
@@ -1727,7 +1727,7 @@ pub mod bot_log;
     }
 ```
 
-- [ ] **Step 4: Wire into `dispatch.rs`'s `finalize_win`**
+- [x] **Step 4: Wire into `dispatch.rs`'s `finalize_win`**
 
 ```rust
 // Backend/crates/poller/src/dispatch.rs — inside `finalize_win`, extend the existing
@@ -1756,7 +1756,7 @@ pub mod bot_log;
     }
 ```
 
-- [ ] **Step 5: Wire into `dispatch.rs`'s `LostToAgency` branch**
+- [x] **Step 5: Wire into `dispatch.rs`'s `LostToAgency` branch**
 
 ```rust
 // Backend/crates/poller/src/dispatch.rs — inside dispatch_booking's AgencyDupOutcome::LostToAgency
@@ -1777,7 +1777,7 @@ pub mod bot_log;
 ```
 Read the exact current `LostToAgency` arm in `dispatch.rs` before editing — confirm `rival_email`/`meta`/`latency_ms` are all genuinely in scope at that point (they are, per the existing `notify_agency_loss` call in the same arm using all three already) and match the indentation level of the surrounding match arm exactly.
 
-- [ ] **Step 6: Write a real end-to-end test proving the wiring (extends the existing notifier-wiring test, does not duplicate its setup)**
+- [x] **Step 6: Write a real end-to-end test proving the wiring (extends the existing notifier-wiring test, does not duplicate its setup)**
 
 Read `Backend/crates/poller/tests/notifier_wiring.rs` (already exists, exercises `finalize_win`'s `notify_accepted` dispatch against a real wiremock WAHA server) and ADD one assertion to its existing win-path test (do not write a whole new test file) proving the bot log now also gets a `spx:bot:logs` entry — after the existing test's win assertion, add:
 
@@ -1796,7 +1796,7 @@ Read `Backend/crates/poller/tests/notifier_wiring.rs` (already exists, exercises
 ```
 (adjust the exact `redis_url()` helper name/import to match whatever this test file already uses — read it first, don't guess the exact local helper name.)
 
-- [ ] **Step 7: Write `notifier::bot_log`'s own direct test**
+- [x] **Step 7: Write `notifier::bot_log`'s own direct test**
 
 ```rust
 // Backend/crates/notifier/tests/bot_log_redis.rs (new file)
@@ -1873,7 +1873,7 @@ async fn caps_at_200_entries() {
 }
 ```
 
-- [ ] **Step 8: Wire into `api-gateway`'s `request_otp`**
+- [x] **Step 8: Wire into `api-gateway`'s `request_otp`**
 
 ```rust
 // Backend/crates/api-gateway/src/routes/otp.rs — request_otp, immediately after the existing
@@ -1898,7 +1898,7 @@ async fn caps_at_200_entries() {
     .await;
 ```
 
-- [ ] **Step 9: Append `GET/DELETE /bot/logs` to the existing `bot.rs` router**
+- [x] **Step 9: Append `GET/DELETE /bot/logs` to the existing `bot.rs` router**
 
 ```rust
 // Backend/crates/api-gateway/src/routes/bot.rs — append imports
@@ -1936,7 +1936,7 @@ pub fn bot_router(state: AppState) -> Router<AppState> {
 ```
 Update `Backend/crates/api-gateway/src/lib.rs`'s mount line to call the renamed `bot_router` instead of `bot_settings_router`.
 
-- [ ] **Step 10: Write the failing test**
+- [x] **Step 10: Write the failing test**
 
 ```rust
 // Backend/crates/api-gateway/tests/bot_routes.rs — append
@@ -1967,14 +1967,14 @@ async fn bot_logs_records_from_otp_and_can_be_cleared() {
 ```
 (This test proves the route wiring, not the OTP-triggered recording — Step 7's `notifier` crate test already proves `record`/`list`/`clear` correctness directly, and Step 6's `poller` test proves `finalize_win`'s wiring; re-testing `request_otp`'s own wiring end-to-end would need a real WAHA wiremock server, already covered by `otp_routes.rs`'s existing `request_otp_sends_to_wa_number_via_waha` test — extending THAT test with a bot_log assertion is optional polish, not required by this task.)
 
-- [ ] **Step 11: Run everything, then full workspace verification**
+- [x] **Step 11: Run everything, then full workspace verification**
 
 Run: `cargo test -p notifier --test bot_log_redis -- --test-threads=1` — both PASS.
 Run: `cargo test -p poller --test notifier_wiring -- --test-threads=1` — PASS (including the new bot_log assertion).
 Run: `cargo test -p api-gateway --test bot_routes -- --test-threads=1` — all PASS.
 Run: `cargo test --workspace -- --test-threads=1 && cargo clippy --workspace --all-targets -- -D warnings` — 0 failures, clean (this task touches 4 crates — `notifier`, `poller`, `api-gateway`, and indirectly re-verifies `spx-client` — a full workspace check is the right scope here, not just the touched crates individually).
 
-- [ ] **Step 12: Commit**
+- [x] **Step 12: Commit**
 
 ```bash
 git add Backend/crates/notifier/src/bot_log.rs Backend/crates/notifier/src/lib.rs \
@@ -2008,7 +2008,7 @@ git commit -m "feat(notifier,poller,api-gateway): Redis-backed bot_log ring buff
 **Interfaces:**
 - Consumes: `store::site_settings::{get, put}` (Task 3), `spx_client::waha_settings::SITE_SETTINGS_KEY`-style constant (this task defines its OWN `"price_page"` constant, a different key — do not confuse with `waha_settings`).
 
-- [ ] **Step 1: Write the `Branding` data + validation module**
+- [x] **Step 1: Write the `Branding` data + validation module**
 
 ```rust
 // Backend/crates/api-gateway/src/branding.rs
@@ -2140,7 +2140,7 @@ pub fn validate_and_normalize(input: BrandingInput) -> Result<Branding, String> 
 }
 ```
 
-- [ ] **Step 2: Write the failing unit tests for validation (pure, no DB/HTTP needed)**
+- [x] **Step 2: Write the failing unit tests for validation (pure, no DB/HTTP needed)**
 
 ```rust
 // Backend/crates/api-gateway/src/branding.rs — append
@@ -2199,7 +2199,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Run the unit tests**
+- [x] **Step 3: Run the unit tests**
 
 Run: `cd Backend && export PATH="$HOME/.cargo/bin:$PATH" && cargo test -p api-gateway branding:: -- --test-threads=1`
 Expected: FAIL (module doesn't exist yet in `lib.rs`) — then wire it in and re-run.
@@ -2210,7 +2210,7 @@ pub mod branding;
 ```
 Re-run: PASS, all 5 tests.
 
-- [ ] **Step 4: Write the route module**
+- [x] **Step 4: Write the route module**
 
 ```rust
 // Backend/crates/api-gateway/src/routes/branding.rs
@@ -2262,14 +2262,14 @@ pub fn branding_router(state: AppState) -> Router<AppState> {
 }
 ```
 
-- [ ] **Step 5: Wire the module**
+- [x] **Step 5: Wire the module**
 
 ```rust
 // Backend/crates/api-gateway/src/routes/mod.rs
 pub mod branding;
 ```
 
-- [ ] **Step 6: Restructure `build_router` — the risky part**
+- [x] **Step 6: Restructure `build_router` — the risky part**
 
 ```rust
 // Backend/crates/api-gateway/src/lib.rs — replace the ENTIRE build_router fn
@@ -2325,7 +2325,7 @@ pub fn build_router(state: AppState) -> Router {
 }
 ```
 
-- [ ] **Step 7: Write the failing tests proving BOTH halves of the carve-out**
+- [x] **Step 7: Write the failing tests proving BOTH halves of the carve-out**
 
 ```rust
 // Backend/crates/api-gateway/tests/branding_routes.rs (new file)
@@ -2504,7 +2504,7 @@ async fn sub_user_cannot_write_branding_but_can_read_it() {
 }
 ```
 
-- [ ] **Step 8: Run the tests, then full crate + workspace verification**
+- [x] **Step 8: Run the tests, then full crate + workspace verification**
 
 Run: `cargo test -p api-gateway --test branding_routes -- --test-threads=1` — all 3 PASS. If `put_branding_accepts_a_4mb_body_but_prices_still_rejects_it` fails on the 200 assertion, the carve-out did NOT work — re-check Step 6's exact layering order against this task's own risk note before touching anything else.
 
@@ -2512,7 +2512,7 @@ Run: `cargo test -p api-gateway -- --test-threads=1 && cargo clippy -p api-gatew
 
 Run: `cargo test --workspace -- --test-threads=1 && cargo clippy --workspace --all-targets -- -D warnings` — this task restructures a load-bearing shared fn (`build_router`) every other route in this crate depends on; a full workspace check is the right scope here, not just `api-gateway`.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add Backend/crates/api-gateway/src/branding.rs Backend/crates/api-gateway/src/routes/branding.rs \
@@ -2527,39 +2527,39 @@ git commit -m "feat(api-gateway): GET/PUT /branding + 15MB body-limit carve-out 
 
 **Files:** none (verification-only task, no new code).
 
-- [ ] **Step 1: Full workspace test suite**
+- [x] **Step 1: Full workspace test suite**
 
 Run: `cd Backend && export PATH="$HOME/.cargo/bin:$PATH" && cargo test --workspace -- --test-threads=1 2>&1 | tail -100`
 Expected: `0 failed` across every crate.
 
-- [ ] **Step 2: Clippy, workspace-wide, warnings as errors**
+- [x] **Step 2: Clippy, workspace-wide, warnings as errors**
 
 Run: `cargo clippy --workspace --all-targets -- -D warnings`
 Expected: clean.
 
-- [ ] **Step 3: `cargo deny check`**
+- [x] **Step 3: `cargo deny check`**
 
 Run: `cargo deny check`
 Expected: `advisories ok, bans ok, licenses ok, sources ok`, exit code 0. This plan adds NO new Cargo.toml dependencies anywhere — confirm `Backend/Cargo.lock`'s diff against the pre-6d state has no new crate entries (only version-bump noise, if any, from the workspace's existing deps).
 
-- [ ] **Step 4: `cargo tree` cross-dependency check (DoD #8)**
+- [x] **Step 4: `cargo tree` cross-dependency check (DoD #8)**
 
 Run: `cargo tree -p api-gateway --depth 1 | grep -E "^(store|executor|spx-client|poller|ws-hub|notifier|core-domain) v"` — confirm all 7 present.
 Run: `for c in store executor spx-client poller ws-hub notifier core-domain; do cargo tree -p "$c" -i api-gateway 2>&1; done` — every invocation must fail with "did not match any packages" (confirms none of the 7 depends back on `api-gateway` — same verification method Fase 6c's own sign-off used).
 
-- [ ] **Step 5: Body-limit carve-out regression guard**
+- [x] **Step 5: Body-limit carve-out regression guard**
 
 Run: `cargo test -p api-gateway --test branding_routes put_branding_accepts_a_4mb_body_but_prices_still_rejects_it -- --test-threads=1`
 Expected: PASS. This is the single test in this whole sub-phase that most directly proves Task 8's structural risk was correctly resolved — call it out explicitly in the sign-off notes, don't let it blend into the general test-count tally.
 
-- [ ] **Step 6: Checkbox guard**
+- [x] **Step 6: Checkbox guard**
 
 ```bash
 grep -c '^\- \[ \]' Docs/superpowers/plans/2026-07-16-fase-6d-prices-branding-locations-bot.md
 ```
 Expected: `0` after converting every real step checkbox to `- [x]` as it completes during execution. Verify via `diff` that only checkbox markers changed (no prose corruption), matching the established procedure from every prior sub-phase's sign-off.
 
-- [ ] **Step 7: Definition of Done cross-check, scoped to THIS sub-phase's slice**
+- [x] **Step 7: Definition of Done cross-check, scoped to THIS sub-phase's slice**
 
 Re-read `Docs/superpowers/specs/2026-07-15-fase-6-api-gateway-design.md`'s DoD list. Confirm 6d's contribution:
 - #1 (route-level parity): `GET /prices` + CRUD, `GET/PUT /branding`, `GET/POST/DELETE /locations`, `GET/PUT /bot/settings`, `GET/DELETE /bot/logs` — all present with route-level tests. `/branding/meta`, `/branding/logo`, `/branding/favicon` deliberately deferred (disclosed, Task 8) — full #1 still needs 6e's quick-accept routes, not this sub-phase's job to close alone.
@@ -2568,11 +2568,11 @@ Re-read `Docs/superpowers/specs/2026-07-15-fase-6-api-gateway-design.md`'s DoD l
 - #5 (public-GET rate limit, 120/min/IP): closed by Task 4's `public_rate_limit_layer`, applied to `GET /prices` and `GET /branding`.
 - Do NOT claim #3/#4/#6/#7/#8 as closed by 6d alone — #7/#8 ARE re-verified by Steps 1-4 above (workspace-wide), but were not exclusively this sub-phase's to close.
 
-- [ ] **Step 8: Update the progress ledger**
+- [x] **Step 8: Update the progress ledger**
 
 Append one line per task plus a closing summary line: `Fase 6d (prices, branding, locations, bot settings): all 9 tasks complete. Proceeding to final whole-branch review.`
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add -A
