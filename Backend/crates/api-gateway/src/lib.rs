@@ -62,6 +62,15 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/prices", routes::prices::prices_router(state.clone()))
         .nest("/locations", routes::locations::locations_router(state.clone()))
         .nest("/bot", routes::bot::bot_router(state.clone()))
+        // `/q/:token` (HMAC quick-accept) + `POST /q/accept` — deliberately mounted OUTSIDE
+        // every `session_auth`-gated nest above (the token itself is the authorization; there is
+        // no session cookie on this route at all). Mounted here now, in Task 4, rather than left
+        // for a later task as `quick_accept.rs`'s own module doc originally sketched: this task's
+        // own test suite (`tests/quick_accept_routes.rs`) drives it through this exact
+        // `build_router`, so it has to be reachable for those tests to mean anything. No
+        // dedicated rate-limit layer added on this nest — that's a disclosed follow-up hardening
+        // item, not silently dropped scope.
+        .nest("/q", routes::quick_accept::hmac_router(state.clone()))
         .with_state(state.clone())
         .layer(RequestBodyLimitLayer::new(GLOBAL_BODY_LIMIT_BYTES));
 

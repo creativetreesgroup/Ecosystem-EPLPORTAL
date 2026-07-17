@@ -7,6 +7,7 @@ pub mod locations;
 pub mod otp;
 pub mod portal_users;
 pub mod prices;
+pub mod quick_accept;
 pub mod rules;
 pub mod spx_credentials;
 pub mod spx_login;
