@@ -5,6 +5,7 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import HealthPill from './HealthPill.svelte';
+	import NotificationCenter from './NotificationCenter.svelte';
 	import type { WsStatus } from '$lib/ws.svelte';
 
 	let { wsStatus }: { wsStatus: WsStatus } = $props();
@@ -42,12 +43,6 @@
 	</ul>
 	<div class="ml-auto flex items-center gap-3 shrink-0">
 		<HealthPill status={wsStatus} />
-		<button
-			type="button"
-			aria-label="Notifikasi"
-			class="w-9 h-9 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-lg text-text-muted hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-		>
-			<span aria-hidden="true">&#128276;</span>
-		</button>
+		<NotificationCenter />
 	</div>
 </nav>
