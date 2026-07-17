@@ -33,19 +33,19 @@
 - Consumes: `crate::crypto::envelope::{derive_subkey, MasterKey, LABEL_QUICK_ACCEPT_HMAC}` (`derive_subkey` is `pub(crate)` — this module lives inside `crate::crypto`, same visibility scope `envelope.rs` itself uses).
 - Produces (for Task 4): `quick_token::{sign_quick_token, verify_quick_token, QuickTokenClaims}`.
 
-- [ ] **Step 1: Add the `hmac` dependency**
+- [x] **Step 1: Add the `hmac` dependency**
 
 ```toml
 # Backend/crates/spx-client/Cargo.toml — add to [dependencies], alphabetical position
 hmac = "0.13"
 ```
 
-- [ ] **Step 2: Verify it resolves to the already-present version**
+- [x] **Step 2: Verify it resolves to the already-present version**
 
 Run: `cd Backend && export PATH="$HOME/.cargo/bin:$PATH" && cargo tree -p spx-client -i hmac 2>&1`
 Expected: shows `hmac v0.13.0` (matching the version already present in `Cargo.lock` as a transitive dependency — confirm via `grep -A1 'name = "hmac"' Cargo.lock` shows `version = "0.13.0"` is one of the entries, and that this task's `cargo build` doesn't add a THIRD hmac version). If cargo resolves a different 0.13.x patch or fails to compile against `sha2 = "0.11"`'s `digest` trait version, STOP and report BLOCKED — do not pin a version that silently duplicates the dependency graph.
 
-- [ ] **Step 3: Write the module**
+- [x] **Step 3: Write the module**
 
 ```rust
 // Backend/crates/spx-client/src/crypto/quick_token.rs
@@ -222,7 +222,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 4: Re-export from the crypto module**
+- [x] **Step 4: Re-export from the crypto module**
 
 ```rust
 // Backend/crates/spx-client/src/crypto/mod.rs — add alongside the existing `pub mod envelope;`
@@ -231,7 +231,7 @@ pub mod quick_token;
 
 Check the existing `mod.rs` re-export style first (Task 3 of Fase 3 established the pattern: `envelope`'s public items are re-exported at `crate::crypto::{...}` — mirror it exactly for `quick_token`'s `sign_quick_token`/`verify_quick_token`/`QuickTokenClaims`, not just the bare `pub mod`).
 
-- [ ] **Step 5: Run the tests**
+- [x] **Step 5: Run the tests**
 
 Run: `cargo test -p spx-client quick_token:: -- --test-threads=1`
 Expected: 6 tests passing (`valid_token_round_trips`, `expired_token_is_rejected`, `wrong_tenant_is_rejected`, `tampered_payload_is_rejected`, `malformed_tokens_are_rejected_not_panicking`, `different_master_key_rejects_the_token`).
@@ -239,7 +239,7 @@ Expected: 6 tests passing (`valid_token_round_trips`, `expired_token_is_rejected
 Run: `cargo test -p spx-client -- --test-threads=1 && cargo clippy -p spx-client --all-targets -- -D warnings`
 Expected: 0 failures, clean.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add Backend/crates/spx-client/Cargo.toml Backend/crates/spx-client/src/crypto/quick_token.rs \
@@ -258,11 +258,11 @@ git commit -m "feat(spx-client): sign_quick_token/verify_quick_token — tenant-
 - Consumes: `crate::begin_tenant_tx`, existing `models::Booking` / whatever row type `get_detail` (line 316) already returns — reuse that exact type, do not define a new one.
 - Produces (for Task 4/5): `bookings::get_by_spx_id(pool, tenant_id, spx_id) -> Result<Option<Booking>, sqlx::Error>`.
 
-- [ ] **Step 1: Read `get_detail` first**
+- [x] **Step 1: Read `get_detail` first**
 
 Read `Backend/crates/store/src/bookings.rs`'s existing `get_detail` fn (line 316) in full — this task's new fn is a near-identical sibling querying by `spx_id` instead of `id`, returning the SAME row type. Copy its exact `SELECT` column list and tenant-scoping pattern; do not invent a different shape.
 
-- [ ] **Step 2: Write the function**
+- [x] **Step 2: Write the function**
 
 ```rust
 // Backend/crates/store/src/bookings.rs — add near get_detail
@@ -300,7 +300,7 @@ pub async fn get_by_spx_id(
 
 **Note for the implementer:** the exact column list above is a best-effort reconstruction — `get_detail`'s real `SELECT` list (read in Step 1) is the source of truth. Match it exactly, including whatever the real return type is actually named (`BookingDetail` is this plan's guess; use the real name from `get_detail`'s signature).
 
-- [ ] **Step 3: Write the failing test**
+- [x] **Step 3: Write the failing test**
 
 ```rust
 // Backend/crates/store/src/lib.rs — inside #[cfg(test)] mod tests, alongside the existing
@@ -349,12 +349,12 @@ async fn bookings_get_by_spx_id_finds_row_and_isolates_by_tenant() {
 
 Adjust the exact `INSERT` columns to match `bookings` table's real required columns (check migration 0003/0020 or an existing test's own `INSERT INTO bookings` statement in this same file for the exact required-column list — several already exist, copy one).
 
-- [ ] **Step 4: Run it, then full store verification**
+- [x] **Step 4: Run it, then full store verification**
 
 Run: `cargo test -p store bookings_get_by_spx_id -- --test-threads=1` — PASS.
 Run: `cargo test -p store -- --test-threads=1 && cargo clippy -p store --all-targets -- -D warnings` — 0 failures, clean.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add Backend/crates/store/src/bookings.rs Backend/crates/store/src/lib.rs
@@ -373,7 +373,7 @@ git commit -m "feat(store): bookings::get_by_spx_id — tenant-scoped lookup by 
 
 This task is a pure refactor: read the CURRENT `accept()` handler (`routes/bookings.rs`, already summarized in this plan's own research — the `try_claim_manual` → `manual_tx` dispatch → `outcome_for` → DB update sequence) in full, then extract everything from "resolve `handle`/`dedup`/`manual_tx` from `state.poller.accounts`" through "the final DB status update" into a new private async fn that takes `&AppState`, `tenant_id: Uuid`, and `&BookingDetail` (the type `get_detail`/`get_by_spx_id` both return) and returns `ManualAcceptResponse` — no `Result`, no `ApiError`: every failure mode the existing code currently maps to an early `Err(ApiError::...)` return (account not connected, already claimed) must become an OK-typed `ManualAcceptResponse { ok: false, reason: ..., message: ... }` value instead, since Tasks 4/5's callers need uniform response handling regardless of which failure occurred (unlike the existing session-gated route, which is fine using `ApiError`'s automatic status-code mapping).
 
-- [ ] **Step 1: Extract the helper**
+- [x] **Step 1: Extract the helper**
 
 ```rust
 // Backend/crates/api-gateway/src/routes/bookings.rs — new private fn, placed above `accept`
@@ -521,7 +521,7 @@ async fn execute_manual_accept(
 
 Read the CURRENT `accept()` function's exact `store::update_booking_status` calls (both branches) before writing this — the `accept_reason` field on the failure branch, and the exact `dedup`/`executor` method names/argument order, must match byte-for-byte what's already there. This plan's reconstruction above is from this session's own research; verify every line against the real file.
 
-- [ ] **Step 2: Rewrite `accept()` as a thin wrapper**
+- [x] **Step 2: Rewrite `accept()` as a thin wrapper**
 
 ```rust
 // Backend/crates/api-gateway/src/routes/bookings.rs — replace the body of `accept`
@@ -555,17 +555,17 @@ async fn accept(
 
 This preserves the EXACT existing external behavior (same status codes for the same failure modes: `Conflict`/409 for not-pending/already-claimed/offline, `Internal`/500 for dispatch failures) — the refactor must be invisible to every existing test in `bookings_routes.rs`. If any existing test fails after this change, the mapping above has a mismatch against the pre-refactor behavior; fix the mapping, not the test.
 
-- [ ] **Step 3: Run the existing test suite unchanged — this IS the regression proof**
+- [x] **Step 3: Run the existing test suite unchanged — this IS the regression proof**
 
 Run: `cargo test -p api-gateway --test bookings_routes -- --test-threads=1`
 Expected: every test that existed BEFORE this task still passes, with ZERO test-file changes (if this task needs to touch `bookings_routes.rs` to make tests pass, the refactor changed observable behavior — stop and reconcile against Step 2's mapping before proceeding).
 
-- [ ] **Step 4: Full crate + workspace verification**
+- [x] **Step 4: Full crate + workspace verification**
 
 Run: `cargo test -p api-gateway -- --test-threads=1 && cargo clippy -p api-gateway --all-targets -- -D warnings` — 0 failures, clean.
 Run: `cargo test --workspace -- --test-threads=1` — 0 failures (this touches a route every other sub-phase's tests don't call, but a full run is cheap insurance for a refactor of shared logic).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add Backend/crates/api-gateway/src/routes/bookings.rs
@@ -584,7 +584,7 @@ git commit -m "refactor(api-gateway): extract execute_manual_accept — shared c
 - Consumes: `spx_client::crypto::quick_token::{verify_quick_token}`, `store::bookings::get_by_spx_id` (Task 2), `crate::routes::bookings::execute_manual_accept` (Task 3 — widen its visibility to `pub(crate)` if it was left private; this is the ONE cross-file interface this task needs from Task 3, note it explicitly if not already `pub(crate)`).
 - Produces (for Task 6): `quick_accept::hmac_router(state: AppState) -> Router<AppState>`.
 
-- [ ] **Step 1: Write the module — token validation, page rendering, and the two HMAC handlers**
+- [x] **Step 1: Write the module — token validation, page rendering, and the two HMAC handlers**
 
 ```rust
 // Backend/crates/api-gateway/src/routes/quick_accept.rs
@@ -791,7 +791,7 @@ pub fn hmac_router(_state: AppState) -> Router<AppState> {
 }
 ```
 
-- [ ] **Step 2: Wire the module**
+- [x] **Step 2: Wire the module**
 
 ```rust
 // Backend/crates/api-gateway/src/routes/mod.rs
@@ -800,7 +800,7 @@ pub mod quick_accept;
 
 Also widen `execute_manual_accept` and `ManualAcceptResponse` to `pub(crate)` in `routes/bookings.rs` if Task 3 left them private (module-private items aren't visible from `routes/quick_accept.rs`).
 
-- [ ] **Step 3: Write the failing tests**
+- [x] **Step 3: Write the failing tests**
 
 ```rust
 // Backend/crates/api-gateway/tests/quick_accept_routes.rs (new file)
@@ -974,12 +974,12 @@ async fn wrong_tenant_token_is_rejected_by_this_deployments_state_tenant_id() {
 }
 ```
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `cargo test -p api-gateway --test quick_accept_routes -- --test-threads=1`
 Expected: 5 tests passing.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add Backend/crates/api-gateway/src/routes/quick_accept.rs Backend/crates/api-gateway/src/routes/mod.rs \
@@ -999,7 +999,7 @@ git commit -m "feat(api-gateway): GET/POST /q/:token — HMAC quick-accept flow 
 - Consumes: this task's own file's `confirmation_page`/`error_page`/`is_valid_token_shape` (Task 4, same file — reuse, do not duplicate).
 - Produces (for Task 6): `quick_accept::short_code_router(state: AppState) -> Router<AppState>`.
 
-- [ ] **Step 1: Write the route module — short-code handlers**
+- [x] **Step 1: Write the route module — short-code handlers**
 
 ```rust
 // Backend/crates/api-gateway/src/routes/quick_accept.rs — append
@@ -1133,7 +1133,7 @@ pub fn short_code_router(_state: AppState) -> Router<AppState> {
 }
 ```
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 ```rust
 // Backend/crates/api-gateway/tests/quick_accept_routes.rs — append
@@ -1189,12 +1189,12 @@ async fn expired_short_code_returns_410() {
 }
 ```
 
-- [ ] **Step 3: Run the tests**
+- [x] **Step 3: Run the tests**
 
 Run: `cargo test -p api-gateway --test quick_accept_routes -- --test-threads=1`
 Expected: all 7 tests passing (5 from Task 4 + 2 new).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add Backend/crates/api-gateway/src/routes/quick_accept.rs Backend/crates/api-gateway/tests/quick_accept_routes.rs
@@ -1212,7 +1212,7 @@ git commit -m "feat(api-gateway): GET/POST /accept/:code — Redis short-code qu
 **Interfaces:**
 - Consumes: `middleware::rate_limit::{quick_accept_view_rate_limit_layer, quick_accept_action_rate_limit_layer}` (new, this task), `routes::quick_accept::{hmac_router, short_code_router}` (Tasks 4/5).
 
-- [ ] **Step 1: Add the two new rate-limit configs**
+- [x] **Step 1: Add the two new rate-limit configs**
 
 Read `middleware/rate_limit.rs`'s existing `login_rate_limit_layer`/`public_rate_limit_layer` fully first (already summarized in this plan's research) — the two new fns below follow the IDENTICAL structure (`GovernorConfigBuilder` + `SmartIpKeyExtractor` + `.expect(...)` with the same non-panic justification), only the burst/period constants and the route-scope doc comment differ.
 
@@ -1256,7 +1256,7 @@ pub fn quick_accept_action_rate_limit_layer(
 }
 ```
 
-- [ ] **Step 2: Apply the rate limits inside each router fn**
+- [x] **Step 2: Apply the rate limits inside each router fn**
 
 ```rust
 // Backend/crates/api-gateway/src/routes/quick_accept.rs — modify hmac_router/short_code_router
@@ -1276,7 +1276,7 @@ pub fn hmac_router(_state: AppState) -> Router<AppState> {
 
 **Read `routes/prices.rs::prices_router` (already-shipped Fase 6d code) before writing this step** — it already solves "two different rate limits on two different routes in the same mount point" via `Router::new()...route_layer(A)` for one half `.merge()`d with a second `Router::new()...route_layer(B)` for the other half. Mirror that EXACT shape for `hmac_router` (view limiter on the `/{token}` half, action limiter on the `/accept` half) and `short_code_router` (view limiter on GET, action limiter on POST — note GET and POST share the same path `/{code}` here, unlike `hmac_router`'s two different paths; check whether `tower_governor`'s `route_layer` can be scoped to one HTTP method on a shared path, or whether `short_code_router` needs `.route("/{code}", get(...))` and `.route("/{code}", post(...))` as two separately-layered single-method routers merged together instead of one `MethodRouter` — read `tower_governor`'s actual behavior here rather than assuming, this is exactly the class of layering subtlety Fase 6d Task 8 got wrong on the first pass).
 
-- [ ] **Step 3: Mount into `build_router`**
+- [x] **Step 3: Mount into `build_router`**
 
 ```rust
 // Backend/crates/api-gateway/src/lib.rs — inside build_router's `rest` chain, add:
@@ -1286,7 +1286,7 @@ pub fn hmac_router(_state: AppState) -> Router<AppState> {
 
 Add these `.nest(...)` calls to the SAME `rest` tree every other route (prices/locations/bot) already joins — quick-accept doesn't need branding's 15MB carve-out, the existing 1.5MB global limit is more than sufficient for a token/code + small JSON body. Do NOT wrap either router in `session_auth` — these are the two genuinely public route groups this task adds, alongside `GET /prices`/`GET /branding`'s already-established public precedent.
 
-- [ ] **Step 4: Write the failing tests proving BOTH rate limits fire correctly-scoped**
+- [x] **Step 4: Write the failing tests proving BOTH rate limits fire correctly-scoped**
 
 ```rust
 // Backend/crates/api-gateway/tests/quick_accept_routes.rs — append
@@ -1315,13 +1315,13 @@ async fn action_rate_limit_is_stricter_than_view_rate_limit() {
 }
 ```
 
-- [ ] **Step 5: Run the tests, then full crate + workspace verification**
+- [x] **Step 5: Run the tests, then full crate + workspace verification**
 
 Run: `cargo test -p api-gateway --test quick_accept_routes -- --test-threads=1` — all 8 tests PASS.
 Run: `cargo test -p api-gateway -- --test-threads=1 && cargo clippy -p api-gateway --all-targets -- -D warnings` — 0 failures, clean.
 Run: `cargo test --workspace -- --test-threads=1 && cargo clippy --workspace --all-targets -- -D warnings` — this task restructures `build_router` again (a load-bearing shared fn); full workspace scope is the right check here, same reasoning as Fase 6d Task 8.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add Backend/crates/api-gateway/src/middleware/rate_limit.rs Backend/crates/api-gateway/src/lib.rs \
@@ -1335,32 +1335,32 @@ git commit -m "feat(api-gateway): rate-limit + mount /q and /accept (quick-accep
 
 **Files:** none (verification-only task, no new code) plus the shared design doc (tracked notes).
 
-- [ ] **Step 1: Full workspace test suite**
+- [x] **Step 1: Full workspace test suite**
 
 Run: `cd Backend && export PATH="$HOME/.cargo/bin:$PATH" && unset DATABASE_URL && export REDIS_URL="redis://127.0.0.1:16379" && cargo test --workspace -- --test-threads=1 2>&1 | tail -100`
 Expected: `0 failed` across every crate.
 
-- [ ] **Step 2: Clippy, workspace-wide, warnings as errors**
+- [x] **Step 2: Clippy, workspace-wide, warnings as errors**
 
 Run: `cargo clippy --workspace --all-targets -- -D warnings` — clean.
 
-- [ ] **Step 3: `cargo deny check`**
+- [x] **Step 3: `cargo deny check`**
 
 Run: `cargo deny check` — `advisories ok, bans ok, licenses ok, sources ok`, exit 0. Confirm the only new `Cargo.lock` entries this whole sub-phase introduced are `hmac 0.13.0`'s promotion to a direct edge (Task 1) — no new crate VERSIONS anywhere.
 
-- [ ] **Step 4: `cargo tree` cross-dependency check (DoD #8)**
+- [x] **Step 4: `cargo tree` cross-dependency check (DoD #8)**
 
 Run: `cargo tree -p api-gateway --depth 1 | grep -E "(store|executor|spx-client|poller|ws-hub|notifier|core-domain) v"` — confirm all 7 present.
 Run: `for c in store executor spx-client poller ws-hub notifier core-domain; do cargo tree -p "$c" -i api-gateway 2>&1; done` — every invocation must fail with "did not match any packages".
 
-- [ ] **Step 5: Checkbox guard**
+- [x] **Step 5: Checkbox guard**
 
 ```bash
 grep -c '^\- \[ \]' Docs/superpowers/plans/2026-07-17-fase-6e-quick-accept-hardening.md
 ```
 Expected: `0` after converting every real step checkbox to `[x]`. Verify via `diff` against a pre-conversion copy that only checkbox markers changed.
 
-- [ ] **Step 6: Fase-6-WIDE Definition of Done cross-check (all 5 sub-phases, not just 6e)**
+- [x] **Step 6: Fase-6-WIDE Definition of Done cross-check (all 5 sub-phases, not just 6e)**
 
 Re-read `Docs/superpowers/specs/2026-07-15-fase-6-api-gateway-design.md`'s DoD list (8 items) and the progress ledger's 6a-6e history. For each item, state which sub-phase closed it and whether it is GENUINELY closeable now:
 
@@ -1373,17 +1373,17 @@ Re-read `Docs/superpowers/specs/2026-07-15-fase-6-api-gateway-design.md`'s DoD l
 - **#7** (clean workspace): re-confirmed by Steps 1-3 above.
 - **#8** (cross-dependency uniqueness): re-confirmed by Step 4 above.
 
-- [ ] **Step 7: Add the disclosed Fase-5 gap as a tracked design-doc note**
+- [x] **Step 7: Add the disclosed Fase-5 gap as a tracked design-doc note**
 
 Append to `Docs/superpowers/specs/2026-07-15-fase-6-api-gateway-design.md` (matching the existing tracked-notes' style/section — read at least 2 first):
 
 > **Quick-accept short-code *generation* is unbuilt (Fase 6e review scope note).** `notifier::notify_new_tickets` (built Fase 5) has no caller anywhere in the codebase, and its link-building still uses a raw `spx_id` rather than a real `spx:qa:<code>` short code — Fase 6e (this sub-phase) built the READ side of both the HMAC-token and short-code quick-accept flows (parity with the reference's `verifyQuickToken`/`GET /accept/:code`, both of which the reference itself also has as effectively-dead-until-linked infrastructure), but generating and sending a real link from a real new-ticket detection event is unbuilt. Tracked for whichever future phase wires `poller`'s ticket-detection loop to `notifier::notify_new_tickets` with a real short-code generator (mirrors the reference's `webhook.ts::genAcceptCode`) — until then, `GET/POST /q/:token` and `/accept/:code` are reachable and correct, but nothing in TOWER currently produces a link to them.
 
-- [ ] **Step 8: Update the progress ledger**
+- [x] **Step 8: Update the progress ledger**
 
 Append one line per task plus a closing summary: `Fase 6e (quick-accept HMAC + hardening): all 7 tasks complete. Fase 6 (6a-6e) Definition of Done fully cross-checked — item #4 explicitly owned by Fase 8, not closed here. Proceeding to final whole-branch review.`
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add -A
