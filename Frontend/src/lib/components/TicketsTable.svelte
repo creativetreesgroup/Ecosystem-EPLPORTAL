@@ -54,7 +54,20 @@
 		</thead>
 		<tbody>
 			{#each rows as row (row.id)}
-				<tr class="border-b border-border hover:bg-bg-base cursor-pointer" onclick={() => onRowClick(row)}>
+				<tr
+					tabindex="0"
+					onclick={() => onRowClick(row)}
+					onkeydown={(e) => {
+						// Guard against the "Terima" button's keydown bubbling up from the nested <td>:
+						// without this, pressing Enter on the button would also fire this row's
+						// onRowClick (and cancel the button's own native Enter→click activation).
+						if (e.target !== e.currentTarget) return;
+						if (e.key === 'Enter') {
+							onRowClick(row);
+						}
+					}}
+					class="border-b border-border hover:bg-bg-base cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset"
+				>
 					<td class="py-2.5 pr-3">
 						<span class="inline-flex items-center gap-1.5">
 							<span aria-hidden="true" class="w-1.5 h-1.5 rounded-full shrink-0 {statusDotClass(row.status)}"></span>
@@ -78,7 +91,7 @@
 									e.stopPropagation();
 									onAccept(row);
 								}}
-								class="min-h-[36px] px-2.5 rounded-md text-[11px] font-bold bg-accent text-bg-base disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+								class="min-h-[44px] min-w-[44px] px-2.5 rounded-md text-[11px] font-bold bg-accent text-bg-base disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
 							>
 								{row.accepting ? 'Memproses…' : 'Terima'}
 							</button>
@@ -93,12 +106,14 @@
 	     once collapsed, so labels carry the meaning instead). -->
 	<ul class="md:hidden flex flex-col gap-2">
 		{#each rows as row (row.id)}
-			<li>
-				<!-- role="button" div, not a real <button>: the "Terima" button below must nest inside
-				     this card for layout/click-region purposes, and <button> inside <button> is invalid
-				     HTML — browsers auto-close the outer button on the parser pass (this app SSRs by
-				     default), silently detaching everything after it. tabindex+onkeydown keep it keyboard
-				     operable in place of the native button semantics we gave up. -->
+			<li class="p-3 rounded-lg border border-border bg-bg-surface flex flex-col gap-1.5">
+				<!-- Non-interactive <li> wraps two SIBLING controls: this role="button" div (opens
+				     detail) and the "Terima" button below. Neither nests inside the other — a real
+				     <button> inside a role="button" element is an ARIA anti-pattern (ambiguous
+				     focus/tab-stop semantics), and it also lets the button's keydown bubble into the
+				     outer handler (Enter would get preventDefault'd before the button's native
+				     activation runs; Space would double-fire both actions). Keeping them siblings
+				     avoids that bug class entirely rather than needing to guard against it. -->
 				<div
 					role="button"
 					tabindex="0"
@@ -109,7 +124,7 @@
 							onRowClick(row);
 						}
 					}}
-					class="w-full text-left p-3 rounded-lg border border-border bg-bg-surface flex flex-col gap-1.5 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+					class="w-full text-left flex flex-col gap-1.5 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
 				>
 					<div class="flex items-center justify-between">
 						<span class="inline-flex items-center gap-1.5 text-[12px]">
@@ -125,20 +140,17 @@
 						{#if row.codAmount > 0}<span>COD: {row.codAmount.toLocaleString('id-ID')}</span>{/if}
 					</div>
 					<div class="font-mono text-[10px] text-text-muted">{formatDate(row.createdAt)}</div>
-					{#if row.status === 'pending'}
-						<button
-							type="button"
-							disabled={row.accepting}
-							onclick={(e) => {
-								e.stopPropagation();
-								onAccept(row);
-							}}
-							class="mt-1 min-h-[44px] w-full rounded-md text-[12px] font-bold bg-accent text-bg-base disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-						>
-							{row.accepting ? 'Memproses…' : 'Terima'}
-						</button>
-					{/if}
 				</div>
+				{#if row.status === 'pending'}
+					<button
+						type="button"
+						disabled={row.accepting}
+						onclick={() => onAccept(row)}
+						class="mt-1 min-h-[44px] w-full rounded-md text-[12px] font-bold bg-accent text-bg-base disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+					>
+						{row.accepting ? 'Memproses…' : 'Terima'}
+					</button>
+				{/if}
 			</li>
 		{/each}
 	</ul>
