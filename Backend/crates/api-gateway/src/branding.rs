@@ -75,6 +75,9 @@ fn validate_data_uri(value: &str, max_bytes: usize) -> Result<(), String> {
     {
         return Err("invalid base64 payload".to_string());
     }
+    if b64.len() < 4 {
+        return Err("invalid base64 payload".to_string());
+    }
     let padding = b64.chars().rev().take_while(|&c| c == '=').count().min(2);
     let decoded_len = (b64.len() / 4) * 3 - padding;
     if decoded_len > max_bytes {
@@ -182,5 +185,16 @@ mod tests {
         input.logo_data_uri = Some("data:image/png;base64,iVBORw0KGgo=".to_string());
         let branding = validate_and_normalize(input).expect("valid small PNG must pass");
         assert!(branding.logo_data_uri.is_some());
+    }
+
+    #[test]
+    fn short_padding_heavy_base64_is_rejected_not_panicking() {
+        let mut input = base_input();
+        // b64 body is "==" — 2 chars, both padding. (b64.len() / 4) * 3 = 0 while padding = 2,
+        // which would underflow a plain `0usize - 2` (panics under overflow-checks, silently
+        // wraps to usize::MAX in release). Must cleanly return Err, not panic.
+        input.logo_data_uri = Some("data:image/png;base64,==".to_string());
+        let err = validate_and_normalize(input).unwrap_err();
+        assert!(err.contains("invalid base64 payload"));
     }
 }
