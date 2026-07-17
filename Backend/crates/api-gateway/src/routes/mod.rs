@@ -2,6 +2,7 @@
 pub mod auth;
 pub mod bookings;
 pub mod bot;
+pub mod branding;
 pub mod locations;
 pub mod otp;
 pub mod portal_users;
