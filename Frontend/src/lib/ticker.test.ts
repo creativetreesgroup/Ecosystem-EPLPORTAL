@@ -12,6 +12,7 @@ import {
 
 function row(overrides: Partial<TicketRow> = {}): TicketRow {
 	return {
+		id: 'row-uuid-1',
 		spxId: 'SPX1',
 		status: 'pending',
 		route: ['Jakarta', 'Bandung'],

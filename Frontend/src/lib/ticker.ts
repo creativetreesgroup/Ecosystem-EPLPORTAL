@@ -4,6 +4,10 @@
 // teruji" requirement. Every function takes the current rows array and returns a NEW array
 // (never mutates its input) so Svelte 5's $state reassignment triggers reactivity correctly.
 export type TicketRow = {
+	/** Internal booking UUID (`BookingListItem.id`) — the identifier `POST /bookings/:id/accept`
+	 * expects. Distinct from `spxId`: WS delta events (ticket_accepted/rejected/removed) key on
+	 * `spxId`, not this UUID, so both must be carried on the row. */
+	id: string;
 	spxId: string;
 	status: 'pending' | 'accepted' | 'taken_by_agency';
 	route: string[];
