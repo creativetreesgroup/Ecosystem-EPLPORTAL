@@ -3,6 +3,8 @@
 // ws-hub cookie fix), no ?session= needed; the browser attaches the HttpOnly session cookie
 // automatically on same-origin WS handshakes (via Caddy in prod, Vite's proxy in dev — both
 // already route /ws to reactor-core, Fase 7a Tasks 2/3).
+import { browser } from '$app/environment';
+
 export type WsStatus = 'connecting' | 'connected' | 'reconnecting' | 'disconnected';
 
 // Matches Backend/crates/ws-hub/src/events.rs's WsEvent enum shape exactly
@@ -76,7 +78,15 @@ export function createWsStore() {
 		});
 	}
 
-	connect();
+	// `(app)/+layout.svelte` calls `createWsStore()` unconditionally at component-script top
+	// level, which — unlike `onMount` — also runs during SSR. `connect()` reads `location` (a
+	// browser-only global; Node has no such global), so an unguarded call here 500s every
+	// SSR'd request under the (app) route group (any full navigation/reload, not just a
+	// client-side SPA transition — caught by tickets.spec.ts's `page.goto('/tickets')` after
+	// login, which command.spec.ts's suite never exercised since its login() helper's click
+	// already lands on /command via client-side navigation). `browser` (`$app/environment`) is
+	// SvelteKit's standard SSR-safety flag for exactly this case.
+	if (browser) connect();
 
 	return {
 		get status() {
