@@ -58,8 +58,9 @@
 			});
 	});
 
-	// Focus management (hand-rolled, no focus-trap dependency — this drawer has one focusable
-	// element besides the close button's own tab stop, a full trap is overkill):
+	// Focus management (hand-rolled, no focus-trap dependency — this drawer has exactly ONE
+	// focusable element, the close button, so a general multi-element trap is overkill; see the
+	// Tab-key branch in handleKeydown below for how Tab/Shift+Tab is kept from leaving it):
 	// - Open: remember whatever had focus (the row that triggered this) and move focus onto the
 	//   close button, the drawer's first focusable element, so a keyboard user isn't left focused
 	//   on a now-backdrop-obscured element.
@@ -77,7 +78,21 @@
 	});
 
 	function handleKeydown(e: KeyboardEvent) {
-		if (e.key === 'Escape') onClose();
+		if (e.key === 'Escape') {
+			onClose();
+			return;
+		}
+		// Minimal Tab trap: the close button is the ONLY focusable element in this dialog, so
+		// there's no first/last-element pair to cycle between — blocking Tab/Shift+Tab from
+		// leaving it (it's already focused) is sufficient to satisfy aria-modal="true" without a
+		// general-purpose focus-trap library. If this drawer ever gains more focusable elements
+		// (e.g. action buttons), this needs to become a real wrap-around trap (Tab from last
+		// focusable -> first, Shift+Tab from first -> last) instead of always refocusing the
+		// close button.
+		if (e.key === 'Tab') {
+			e.preventDefault();
+			closeButtonEl?.focus();
+		}
 	}
 </script>
 
