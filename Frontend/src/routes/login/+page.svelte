@@ -39,12 +39,24 @@
 			await goto('/command');
 		} catch (e) {
 			if (e instanceof ApiError) {
-				// Generic message, deliberately identical for "no such user" and "wrong password"
-				// (backend already protects this distinction via constant-time comparison — the
-				// UI must not leak it back through a different error string). Per the design doc's
-				// disclosed data flow: clear the password field and return focus to username, form
-				// otherwise stays filled in.
-				errorMsg = 'Username atau password salah';
+				if (e.status === 401) {
+					// Generic message, deliberately identical for "no such user" and "wrong password"
+					// (backend already protects this distinction via constant-time comparison — the
+					// UI must not leak it back through a different error string).
+					errorMsg = 'Username atau password salah';
+				} else if (e.status === 429) {
+					// tower_governor's login_rate_limit_layer (~20/min/IP) tripped — this is not a
+					// credentials problem, don't tell the user their password is wrong.
+					errorMsg = 'Terlalu banyak percobaan. Coba lagi sebentar lagi.';
+				} else {
+					// Any other non-2xx (e.g. 500) — transient server error, not a credentials problem.
+					errorMsg = 'Terjadi kesalahan pada server. Coba lagi.';
+				}
+				// Per the design doc's disclosed data flow: clear the password field and return focus
+				// to username on any rejected attempt (username stays filled in). Applying this to
+				// 429/500 too, not just 401 — the user will retry with the same credentials regardless
+				// of which of these three fired, and re-focusing username is harmless; the only cost is
+				// re-typing the password, which is a minor courtesy loss, not a correctness issue.
 				password = '';
 				usernameInput?.focus();
 			} else {
@@ -53,10 +65,6 @@
 		} finally {
 			loading = false;
 		}
-	}
-
-	function onKeydown(e: KeyboardEvent) {
-		if (e.key === 'Enter' && canSubmit) login();
 	}
 </script>
 
@@ -100,57 +108,62 @@
 					</div>
 				{/if}
 
-				<div class="space-y-1.5">
-					<label for="login-username" class="block text-[11px] font-semibold text-text-muted uppercase tracking-widest font-body"
-						>Username</label
-					>
-					<input
-						id="login-username"
-						type="text"
-						bind:value={username}
-						bind:this={usernameInput}
-						onkeydown={onKeydown}
-						placeholder="Username portal"
-						autocomplete="username"
-						spellcheck="false"
-						class="w-full min-h-[44px] px-3 py-2.5 rounded-lg text-[14px] font-body bg-bg-base border border-border text-text-primary placeholder:text-text-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-					/>
-				</div>
-
-				<div class="space-y-1.5">
-					<label for="login-password" class="block text-[11px] font-semibold text-text-muted uppercase tracking-widest font-body"
-						>Password</label
-					>
-					<div class="relative">
-						<input
-							id="login-password"
-							type={showPassword ? 'text' : 'password'}
-							bind:value={password}
-							onkeydown={onKeydown}
-							placeholder="••••••••••"
-							autocomplete="current-password"
-							class="w-full min-h-[44px] px-3 pr-12 py-2.5 rounded-lg text-[14px] font-body bg-bg-base border border-border text-text-primary placeholder:text-text-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-						/>
-						<button
-							type="button"
-							onclick={() => (showPassword = !showPassword)}
-							aria-pressed={showPassword}
-							class="absolute inset-y-0 right-0 flex items-center px-3 min-w-[44px] text-text-muted hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent rounded-lg"
-						>
-							<span class="sr-only">{showPassword ? 'Sembunyikan password' : 'Tampilkan password'}</span>
-							<span aria-hidden="true" class="text-[11px] font-body">{showPassword ? 'Sembunyikan' : 'Tampilkan'}</span>
-						</button>
-					</div>
-				</div>
-
-				<button
-					type="button"
-					onclick={login}
-					disabled={!canSubmit || loading}
-					class="w-full min-h-[44px] py-2.5 rounded-lg text-[13px] font-bold font-body transition-opacity bg-accent text-bg-base hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+				<form
+					onsubmit={(e) => {
+						e.preventDefault();
+						login();
+					}}
+					class="space-y-4"
 				>
-					{loading ? 'Memverifikasi…' : 'Masuk ke Portal'}
-				</button>
+					<div class="space-y-1.5">
+						<label for="login-username" class="block text-[11px] font-semibold text-text-muted uppercase tracking-widest font-body"
+							>Username</label
+						>
+						<input
+							id="login-username"
+							type="text"
+							bind:value={username}
+							bind:this={usernameInput}
+							placeholder="Username portal"
+							autocomplete="username"
+							spellcheck="false"
+							class="w-full min-h-[44px] px-3 py-2.5 rounded-lg text-[14px] font-body bg-bg-base border border-border text-text-primary placeholder:text-text-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+						/>
+					</div>
+
+					<div class="space-y-1.5">
+						<label for="login-password" class="block text-[11px] font-semibold text-text-muted uppercase tracking-widest font-body"
+							>Password</label
+						>
+						<div class="relative">
+							<input
+								id="login-password"
+								type={showPassword ? 'text' : 'password'}
+								bind:value={password}
+								placeholder="••••••••••"
+								autocomplete="current-password"
+								class="w-full min-h-[44px] px-3 pr-12 py-2.5 rounded-lg text-[14px] font-body bg-bg-base border border-border text-text-primary placeholder:text-text-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+							/>
+							<button
+								type="button"
+								onclick={() => (showPassword = !showPassword)}
+								aria-pressed={showPassword}
+								class="absolute inset-y-0 right-0 flex items-center px-3 min-w-[44px] text-text-muted hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent rounded-lg"
+							>
+								<span class="sr-only">{showPassword ? 'Sembunyikan password' : 'Tampilkan password'}</span>
+								<span aria-hidden="true" class="text-[11px] font-body">{showPassword ? 'Sembunyikan' : 'Tampilkan'}</span>
+							</button>
+						</div>
+					</div>
+
+					<button
+						type="submit"
+						disabled={!canSubmit || loading}
+						class="w-full min-h-[44px] py-2.5 rounded-lg text-[13px] font-bold font-body transition-opacity bg-accent text-bg-base hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+					>
+						{loading ? 'Memverifikasi…' : 'Masuk ke Portal'}
+					</button>
+				</form>
 			</div>
 		</div>
 	</div>
