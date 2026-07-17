@@ -14,16 +14,24 @@ export const load: LayoutServerLoad = async ({ fetch, cookies }) => {
 	if (!cookies.get('spx_session')) {
 		redirect(307, '/login');
 	}
+
+	// Only the calls that can genuinely throw unexpectedly (network error, timeout, malformed
+	// JSON) live in this try. The !res.ok check below runs outside it on purpose: redirect()
+	// throws internally, and a redirect() call sitting inside this try would get swallowed by
+	// its own catch below instead of propagating to SvelteKit.
+	let res: Response;
+	let user: unknown;
 	try {
-		const res = await fetch('/auth/me');
-		if (!res.ok) {
-			redirect(307, '/login');
-		}
-		const user = await res.json();
-		return { user };
+		res = await fetch('/auth/me');
+		user = await res.json();
 	} catch {
-		// Network error, timeout, malformed JSON, or redirect from !res.ok check
 		// Fail-closed: treat any error as unauthenticated
 		redirect(307, '/login');
 	}
+
+	if (!res.ok) {
+		redirect(307, '/login');
+	}
+
+	return { user };
 };
