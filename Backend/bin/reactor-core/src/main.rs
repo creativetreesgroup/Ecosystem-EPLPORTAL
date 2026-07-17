@@ -447,6 +447,7 @@ fn app(state: AppState) -> Router {
     let ws_router = ws_hub::ws_router_with_auth(
         state.ws_hub.clone(),
         session_validator(state.poller.pool.clone()),
+        state.session_cookie_name.clone(),
     );
     api_gateway::build_router(state).merge(ws_router)
 }

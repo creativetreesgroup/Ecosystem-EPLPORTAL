@@ -23,9 +23,22 @@ use futures::StreamExt;
 use spx_client::crypto::secret::ExposeSecret;
 use spx_client::crypto::session_token::{generate_session_token, hash_session_token};
 use sqlx::PgPool;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::http::header::COOKIE;
 use tokio_tungstenite::tungstenite::Message as CM;
 use uuid::Uuid;
 use ws_hub::{ws_router_with_auth, Hub, SessionValidator};
+
+/// The `HttpOnly` cookie name `ws_router_with_auth` falls back to when
+/// `?session=` is empty (Fase 7a). Matches `reactor-core`'s own
+/// `SESSION_COOKIE_NAME` default (`main.rs`'s `env_or("SESSION_COOKIE_NAME",
+/// "spx_session")`) for realism, though any name would do here since this
+/// file wires it explicitly rather than through env vars.
+const COOKIE_NAME: &str = "spx_session";
+
+fn cookie_name() -> Arc<str> {
+    Arc::from(COOKIE_NAME)
+}
 
 fn database_url() -> String {
     // 15432, not 5432 — see `store`'s own `test_database_url()` comment:
@@ -102,7 +115,7 @@ async fn valid_session_upgrade_succeeds_and_greets() {
         .expect("create session");
 
     let hub = Hub::new();
-    let app = ws_router_with_auth(hub.clone(), test_validator(pool.clone()));
+    let app = ws_router_with_auth(hub.clone(), test_validator(pool.clone()), cookie_name());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
@@ -131,7 +144,7 @@ async fn bogus_session_rejected_before_handshake() {
     store::run_migrations(&pool).await.expect("migrate");
 
     let hub = Hub::new();
-    let app = ws_router_with_auth(hub.clone(), test_validator(pool.clone()));
+    let app = ws_router_with_auth(hub.clone(), test_validator(pool.clone()), cookie_name());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
@@ -145,6 +158,103 @@ async fn bogus_session_rejected_before_handshake() {
     let err = tokio_tungstenite::connect_async(url)
         .await
         .expect_err("a bogus session must never complete the WS handshake");
+    match err {
+        tokio_tungstenite::tungstenite::Error::Http(resp) => {
+            assert_eq!(
+                resp.status().as_u16(),
+                401,
+                "must be rejected with exactly 401 Unauthorized, not any other status"
+            );
+        }
+        other => panic!("expected Error::Http(401 Unauthorized), got: {other:?}"),
+    }
+
+    assert!(
+        !hub.has_channel(bogus_token.expose_secret()),
+        "a rejected upgrade must never register a channel in the hub"
+    );
+}
+
+/// Case 3 (Fase 7a): a real browser stores the session token in an
+/// `HttpOnly` cookie and has no way to read it back to construct a
+/// `?session=` query string itself — it can only rely on the browser
+/// automatically attaching the `Cookie:` header on the WS handshake request.
+/// A valid, unexpired session token supplied ONLY via a `Cookie:` header
+/// (no `?session=` at all) must still succeed and greet, proving the
+/// cookie-fallback path closes that gap.
+#[tokio::test]
+async fn cookie_only_session_with_no_query_param_upgrades_successfully() {
+    let pool = store::connect(&database_url()).await.expect("connect pg");
+    store::run_migrations(&pool).await.expect("migrate");
+    let tenant_id = insert_tenant(&pool).await;
+    let user_id = insert_portal_user(&pool, tenant_id, "ws-agent-cookie-valid").await;
+
+    let (token, hash) = generate_session_token().expect("generate token");
+    store::portal_sessions::create(&pool, tenant_id, user_id, hash, None, None, Duration::hours(2))
+        .await
+        .expect("create session");
+
+    let hub = Hub::new();
+    let app = ws_router_with_auth(hub.clone(), test_validator(pool.clone()), cookie_name());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+    // No `?session=` query string at all — only a `Cookie:` header, exactly
+    // what a real browser sends automatically for an `HttpOnly` cookie.
+    let url = format!("ws://{addr}/ws");
+    let mut request = url.into_client_request().expect("build ws client request");
+    request.headers_mut().insert(
+        COOKIE,
+        format!("{COOKIE_NAME}={}", token.expose_secret())
+            .parse()
+            .expect("valid Cookie header value"),
+    );
+
+    let (mut ws, resp) = tokio_tungstenite::connect_async(request)
+        .await
+        .expect("a valid session cookie alone must complete the WS handshake");
+    assert_eq!(resp.status().as_u16(), 101, "handshake must succeed with 101 Switching Protocols");
+
+    // First frame is the `connected` greeting.
+    let first = ws.next().await.unwrap().unwrap();
+    assert!(matches!(first, CM::Text(ref t) if t.contains("connected")));
+
+    cleanup_tenant(&pool, tenant_id).await;
+}
+
+/// Case 4 (Fase 7a): mirrors `bogus_session_rejected_before_handshake` above,
+/// but the bogus token is supplied via a `Cookie:` header instead of
+/// `?session=` — the cookie fallback must reject a bogus/never-persisted
+/// token exactly the same way (a clean pre-upgrade 401, not a 101 that then
+/// immediately closes).
+#[tokio::test]
+async fn bogus_cookie_with_no_query_param_is_rejected_before_upgrade() {
+    let pool = store::connect(&database_url()).await.expect("connect pg");
+    store::run_migrations(&pool).await.expect("migrate");
+
+    let hub = Hub::new();
+    let app = ws_router_with_auth(hub.clone(), test_validator(pool.clone()), cookie_name());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+    // A genuine 256-bit token shape, but its hash was never persisted to
+    // `portal_sessions` — proves a clean "not found" rejection, not a
+    // malformed-input special case.
+    let (bogus_token, _hash) = generate_session_token().expect("generate token");
+    let url = format!("ws://{addr}/ws");
+    let mut request = url.into_client_request().expect("build ws client request");
+    request.headers_mut().insert(
+        COOKIE,
+        format!("{COOKIE_NAME}={}", bogus_token.expose_secret())
+            .parse()
+            .expect("valid Cookie header value"),
+    );
+
+    let err = tokio_tungstenite::connect_async(request)
+        .await
+        .expect_err("a bogus session cookie must never complete the WS handshake");
     match err {
         tokio_tungstenite::tungstenite::Error::Http(resp) => {
             assert_eq!(

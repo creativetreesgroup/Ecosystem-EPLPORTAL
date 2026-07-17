@@ -18,6 +18,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
+use axum_extra::extract::CookieJar;
 use dashmap::DashMap;
 use futures::{SinkExt, StreamExt};
 use serde::Deserialize;
@@ -209,15 +210,30 @@ pub type SessionValidator =
     Arc<dyn Fn(String) -> Pin<Box<dyn Future<Output = bool> + Send>> + Send + Sync>;
 
 /// Validated upgrade path. Rejects with `401 Unauthorized` BEFORE
-/// `ws.on_upgrade` ever runs for a missing/empty/invalid/expired `?session=`
-/// — the WS handshake never completes in that case, rather than accepting
+/// `ws.on_upgrade` ever runs for a missing/empty/invalid/expired session —
+/// the WS handshake never completes in that case, rather than accepting
 /// the connection and immediately closing it, per the task brief's
 /// requirement that the client see a clean non-101 HTTP response.
+///
+/// **Fase 7a addition:** the session token can now come from EITHER the
+/// `?session=` query param (unchanged, kept for test/tooling convenience —
+/// `session_validated_ws.rs`'s existing tests still use it directly) OR the
+/// `cookie_name`-named `HttpOnly` cookie a real browser sends automatically
+/// (closing the Fase-6a tracked gap: a browser has no way to read an
+/// `HttpOnly` cookie's value to construct a `?session=` query string itself).
+/// The query param wins if BOTH are present (keeps existing test behavior
+/// byte-identical); the cookie is used ONLY when the query param is empty.
 pub async fn ws_handler_with_auth(
     ws: WebSocketUpgrade,
-    State((hub, validator)): State<(Arc<Hub>, SessionValidator)>,
-    Query(q): Query<WsQuery>,
+    State((hub, validator, cookie_name)): State<(Arc<Hub>, SessionValidator, Arc<str>)>,
+    Query(mut q): Query<WsQuery>,
+    jar: CookieJar,
 ) -> Response {
+    if q.session.is_empty() {
+        if let Some(cookie) = jar.get(&cookie_name) {
+            q.session = cookie.value().to_string();
+        }
+    }
     if q.session.is_empty() || !(validator)(q.session.clone()).await {
         return (StatusCode::UNAUTHORIZED, "invalid session").into_response();
     }
@@ -225,12 +241,16 @@ pub async fn ws_handler_with_auth(
 }
 
 /// Same `/ws` route shape as `ws_router` (existing, unchanged, no-auth) but
-/// requiring `validator` to confirm `?session=` names a valid session before
-/// the handshake completes. This is authentication only — no
-/// `is_main_account`/RBAC check here, per the task brief: any valid,
-/// logged-in session may open a WS connection.
-pub fn ws_router_with_auth(hub: Arc<Hub>, validator: SessionValidator) -> Router {
+/// requiring `validator` to confirm a session (from `?session=` OR the
+/// `cookie_name` cookie) is valid before the handshake completes.
+/// Authentication only — no `is_main_account`/RBAC check here, per the task
+/// brief: any valid, logged-in session may open a WS connection.
+pub fn ws_router_with_auth(
+    hub: Arc<Hub>,
+    validator: SessionValidator,
+    cookie_name: Arc<str>,
+) -> Router {
     Router::new()
         .route("/ws", get(ws_handler_with_auth))
-        .with_state((hub, validator))
+        .with_state((hub, validator, cookie_name))
 }
