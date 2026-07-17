@@ -364,3 +364,48 @@ async fn expired_short_code_returns_410() {
 
     cleanup(&pool, tenant_id).await;
 }
+
+/// Proves Task 6's two rate-limit budgets are BOTH correctly scoped to their own HTTP method on
+/// `short_code_router`'s shared `/{code}` path — not the same layer applied to both methods, and
+/// not accidentally swapped (the stricter 12/min action budget leaking onto GET, or the lenient
+/// 60/min view budget leaking onto POST). `GET` and `POST` hit the exact same URL
+/// (`/accept/rl-test-code`) from the exact same client IP, so the only thing that can explain a
+/// difference in outcome is the two independently-`route_layer`'d sub-routers
+/// `short_code_router::view`/`::action` actually carrying different `GovernorLayer` instances, as
+/// documented in that fn's own doc comment.
+#[tokio::test]
+async fn action_rate_limit_is_stricter_than_view_rate_limit() {
+    let pool = store::connect(&database_url()).await.expect("connect");
+    let tenant_id = insert_tenant(&pool).await;
+    let state = build_state(pool.clone(), tenant_id).await;
+    let base = spawn_server(state).await;
+    let http = reqwest::Client::new();
+
+    // 13 rapid GETs to /accept/:code (view-limited, 60/min burst) must ALL clear the rate
+    // limiter — if the stricter 12/min action budget had leaked onto GET instead, this loop
+    // would see a 429 well before request 13 and fail here.
+    for i in 0..13 {
+        let resp = http.get(format!("{base}/accept/rl-test-code")).send().await.unwrap();
+        assert_ne!(
+            resp.status(),
+            429,
+            "GET #{i} must not be rate-limited yet under the 60/min view budget"
+        );
+    }
+
+    // 13 rapid POSTs to the SAME path (action-limited, 12/min burst) — an invalid code doesn't
+    // matter, the rate limiter fires before the handler's own 410 logic — must trip 429 before
+    // the 13th request. If the lenient 60/min view budget had leaked onto POST instead (or both
+    // methods shared one layer), all 13 would clear and this assertion would fail.
+    let mut saw_429 = false;
+    for _ in 0..13 {
+        let resp = http.post(format!("{base}/accept/rl-test-code")).send().await.unwrap();
+        if resp.status() == 429 {
+            saw_429 = true;
+            break;
+        }
+    }
+    assert!(saw_429, "the 12/min action limiter must eventually reject rapid POSTs");
+
+    cleanup(&pool, tenant_id).await;
+}

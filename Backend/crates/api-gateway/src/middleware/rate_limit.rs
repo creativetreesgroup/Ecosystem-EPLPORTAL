@@ -166,3 +166,69 @@ pub fn public_rate_limit_layer(
         .expect("PUBLIC_BURST_SIZE and PUBLIC_REPLENISH_PERIOD_MS are both non-zero");
     GovernorLayer::new(config)
 }
+
+/// ~60 requests/minute/IP for quick-accept PAGE views (`GET /q/{token}`, `GET /accept/{code}`) —
+/// matches the reference's own `rlView` budget exactly (60/60s). A lenient budget since this is a
+/// page render (WhatsApp link previews/repeat taps), not a state-changing action — deliberately
+/// looser than `quick_accept_action_rate_limit_layer` below. A burst of 60 immediately,
+/// replenishing one element every 1000ms thereafter (60 elements/60s steady-state). Same
+/// `SmartIpKeyExtractor` as every other layer in this file — see `login_rate_limit_layer`'s doc
+/// comment for the X-Forwarded-For trust invariant this depends on; identical here, not
+/// re-derived.
+const QUICK_ACCEPT_VIEW_BURST_SIZE: u32 = 60;
+const QUICK_ACCEPT_VIEW_REPLENISH_PERIOD_MS: u64 = 1000;
+
+/// Builds the route-scoped rate-limit layer for the quick-accept PAGE-view routes. Applied via
+/// `.route_layer(...)` on the GET-only half of `routes/quick_accept.rs::hmac_router` /
+/// `short_code_router` — never mounted globally, never applied to the stricter POST/action half
+/// (see `quick_accept_action_rate_limit_layer`).
+pub fn quick_accept_view_rate_limit_layer(
+) -> GovernorLayer<SmartIpKeyExtractor, NoOpMiddleware, axum::body::Body> {
+    let config = GovernorConfigBuilder::default()
+        .key_extractor(SmartIpKeyExtractor)
+        .per_millisecond(QUICK_ACCEPT_VIEW_REPLENISH_PERIOD_MS)
+        .burst_size(QUICK_ACCEPT_VIEW_BURST_SIZE)
+        .finish()
+        // Only `None` when burst_size or period is zero — both are
+        // non-zero `const`s above, so this can never actually panic.
+        .expect("QUICK_ACCEPT_VIEW_BURST_SIZE and QUICK_ACCEPT_VIEW_REPLENISH_PERIOD_MS are both non-zero");
+    GovernorLayer::new(config)
+}
+
+/// ~12 requests/minute/IP for quick-accept ACTIONS (`POST /q/accept`, `POST /accept/{code}`) —
+/// matches the reference's own `rlAccept` budget exactly (12/60s). A stricter budget than
+/// `quick_accept_view_rate_limit_layer` above since this fires a real accept attempt against SPX
+/// (a state-changing, external side effect — anti-brute-force on the token/code space AND
+/// anti-DoS-against-SPX, not just anti-scraping). A burst of 12 immediately, replenishing one
+/// element every 5000ms thereafter (12 elements/60s steady-state). Same `SmartIpKeyExtractor` as
+/// every other layer in this file.
+const QUICK_ACCEPT_ACTION_BURST_SIZE: u32 = 12;
+const QUICK_ACCEPT_ACTION_REPLENISH_PERIOD_MS: u64 = 5000;
+
+/// Builds the route-scoped rate-limit layer for the quick-accept ACTION routes. Applied via
+/// `.route_layer(...)` on the POST-only half of `routes/quick_accept.rs::hmac_router` /
+/// `short_code_router`. `GET /{code}` and `POST /{code}` share the same path in
+/// `short_code_router` — `axum::Router::route_layer` wraps every route registered so far on the
+/// `Router` value it's called on (verified against `axum 0.8.9`'s
+/// `path_router.rs::PathRouter::route_layer`, which maps `.layer(...)` over ALL entries in
+/// `self.routes`), with no per-HTTP-method scoping within a single path entry — a `MethodRouter`
+/// combining `get(...).post(...)` at one path is ONE entry, so a single `.route_layer(...)` call
+/// on it always wraps both methods identically. Method-scoped budgets therefore require two
+/// separate single-method `Router::new()` values (one `.route_layer`'d with this fn, one with
+/// `quick_accept_view_rate_limit_layer`), `.merge()`d together — the exact shape
+/// `routes/prices.rs::prices_router` already established for "two different rate limits sharing a
+/// mount point" (there via two different PATHS at the top level; here via two different METHODS
+/// on the same path, which merges just as cleanly since axum only rejects merging the SAME method
+/// at the same path twice, not different methods).
+pub fn quick_accept_action_rate_limit_layer(
+) -> GovernorLayer<SmartIpKeyExtractor, NoOpMiddleware, axum::body::Body> {
+    let config = GovernorConfigBuilder::default()
+        .key_extractor(SmartIpKeyExtractor)
+        .per_millisecond(QUICK_ACCEPT_ACTION_REPLENISH_PERIOD_MS)
+        .burst_size(QUICK_ACCEPT_ACTION_BURST_SIZE)
+        .finish()
+        // Only `None` when burst_size or period is zero — both are
+        // non-zero `const`s above, so this can never actually panic.
+        .expect("QUICK_ACCEPT_ACTION_BURST_SIZE and QUICK_ACCEPT_ACTION_REPLENISH_PERIOD_MS are both non-zero");
+    GovernorLayer::new(config)
+}

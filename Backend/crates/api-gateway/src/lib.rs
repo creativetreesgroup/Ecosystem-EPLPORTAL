@@ -67,15 +67,16 @@ pub fn build_router(state: AppState) -> Router {
         // no session cookie on this route at all). Mounted here now, in Task 4, rather than left
         // for a later task as `quick_accept.rs`'s own module doc originally sketched: this task's
         // own test suite (`tests/quick_accept_routes.rs`) drives it through this exact
-        // `build_router`, so it has to be reachable for those tests to mean anything. No
-        // dedicated rate-limit layer added on this nest — that's a disclosed follow-up hardening
-        // item, not silently dropped scope.
+        // `build_router`, so it has to be reachable for those tests to mean anything.
+        // Rate-limited (Task 6): `hmac_router`'s own doc comment has the view/action budget
+        // split and the layering-shape derivation.
         .nest("/q", routes::quick_accept::hmac_router(state.clone()))
         // `/accept/:code` (Redis short-code quick-accept, Task 5) — same reasoning as `/q` right
         // above: also outside every `session_auth` nest (the short code itself is the
         // authorization, resolved via Redis instead of an HMAC token), and mounted here now
         // rather than deferred, because this task's own test suite drives it through this exact
-        // `build_router`. Same disclosed follow-up gap as `/q`: no dedicated rate-limit layer yet.
+        // `build_router`. Rate-limited (Task 6): same view/action split as `/q`, see
+        // `short_code_router`'s own doc comment.
         .nest("/accept", routes::quick_accept::short_code_router(state.clone()))
         .with_state(state.clone())
         .layer(RequestBodyLimitLayer::new(GLOBAL_BODY_LIMIT_BYTES));

@@ -11,10 +11,16 @@
 //! route. `rate_limit::public_rate_limit_layer` (Fase 6d Task 4) is likewise
 //! NOT global — it's route-scoped to just `GET /prices`'s public half via
 //! `routes/prices.rs::prices_router`'s own `.route_layer(...)`.
+//! `rate_limit::{quick_accept_view_rate_limit_layer, quick_accept_action_rate_limit_layer}`
+//! (Fase 6e Task 6) are likewise route-scoped only — the view/action halves of
+//! `routes/quick_accept.rs::hmac_router` / `short_code_router`, never global.
 pub mod cors;
 pub mod rate_limit;
 pub mod security_headers;
 
 pub use cors::cors_layer;
-pub use rate_limit::{login_rate_limit_layer, public_rate_limit_layer};
+pub use rate_limit::{
+    login_rate_limit_layer, public_rate_limit_layer, quick_accept_action_rate_limit_layer,
+    quick_accept_view_rate_limit_layer,
+};
 pub use security_headers::security_headers;

@@ -229,14 +229,28 @@ async fn post_quick_accept(
 }
 
 /// Mounted at `/q` in `build_router`. No `session_auth`/`require_permission` layer — the token
-/// itself is the authorization, matching the reference's login-free "quick accept" link. Rate
-/// limiting for this public endpoint is a follow-up hardening item (tracked separately, not part
-/// of this task), same as every other `*_router` fn in this crate keeps cross-cutting layers out
-/// of the router-construction fn itself.
+/// itself is the authorization, matching the reference's login-free "quick accept" link.
+/// Rate-limited per Task 6 (`middleware::rate_limit`): the `GET /{token}` page-view half gets the
+/// lenient 60/min `quick_accept_view_rate_limit_layer`, the `POST /accept` action half gets the
+/// stricter 12/min `quick_accept_action_rate_limit_layer`. Built as two single-route sub-routers
+/// `.merge()`d together (the SAME `public.merge(protected)` shape `routes/prices.rs::prices_router`
+/// established), rather than one `Router::new()` with two `.route_layer(...)` calls — the two
+/// routes here already live at two different paths so a two-`route_layer` single-router chain
+/// would technically be an option, but it doesn't compose safely: `axum::Router::route_layer`
+/// wraps EVERY route registered so far on that value (not just the most-recently-added one), so a
+/// second `.route_layer` call after `/accept` is added would re-wrap `/{token}` too, compounding
+/// both limiters onto it. Two independently-layered `Router` values merged avoids that entirely —
+/// see `quick_accept_action_rate_limit_layer`'s own doc comment for the full derivation (that
+/// derivation is actually for `short_code_router` below, where GET/POST share one path and this
+/// approach is the ONLY option, not just the cleaner one).
 pub fn hmac_router(_state: AppState) -> Router<AppState> {
-    Router::new()
+    let view = Router::new()
         .route("/{token}", get(get_quick_token))
+        .route_layer(crate::middleware::quick_accept_view_rate_limit_layer());
+    let action = Router::new()
         .route("/accept", post(post_quick_accept))
+        .route_layer(crate::middleware::quick_accept_action_rate_limit_layer());
+    view.merge(action)
 }
 
 /// `spx:qa:<code>` Redis key (30-min TTL, set by a future code-generator — see the struct doc
@@ -373,11 +387,31 @@ async fn post_short_code(
     (status, Json(result))
 }
 
-/// Mounted at `/accept` in `build_router` — mounted here now, in Task 5, for the same reason
-/// Task 4 mounted `/q` in its own task rather than deferring to Task 6: this task's own test
-/// suite (`tests/quick_accept_routes.rs`) drives it through the real `build_router`, so it has to
-/// be reachable for those tests to mean anything. Same disclosed gap as `/q`: no dedicated
-/// rate-limit layer yet.
+/// Mounted at `/accept` in `build_router` — mounted here in Task 5 for the same reason Task 4
+/// mounted `/q` in its own task rather than deferring to Task 6: this task's own test suite
+/// (`tests/quick_accept_routes.rs`) drives it through the real `build_router`, so it has to be
+/// reachable for those tests to mean anything.
+///
+/// Rate-limited per Task 6: `GET /{code}` gets the lenient 60/min
+/// `quick_accept_view_rate_limit_layer`, `POST /{code}` gets the stricter 12/min
+/// `quick_accept_action_rate_limit_layer` — UNLIKE `hmac_router` above, GET and POST here share
+/// the exact same path (`/{code}`), so a single `Router::new().route("/{code}",
+/// get(...).post(...))` registers ONE `MethodRouter` entry, and `axum::Router::route_layer` wraps
+/// whatever entry is registered at a path as a whole — there is no way to scope a `route_layer`
+/// call to just one HTTP method within a shared `MethodRouter` (verified against `axum 0.8.9`'s
+/// `PathRouter::route_layer` source, which maps `.layer(...)` over every entry in `self.routes`
+/// with no method-level granularity). So this MUST be two single-method sub-routers, each
+/// `.route_layer`'d with its own limiter, `.merge()`d together — the same `public.merge(protected)`
+/// shape `routes/prices.rs::prices_router` established, here splitting by METHOD on one path
+/// rather than by PATH; `Router::merge` only rejects registering the SAME method at the same path
+/// twice, not different methods sharing a path, so this composes cleanly (already proven by
+/// `prices_router`'s own shipped `GET "/"` / `POST "/"` split).
 pub fn short_code_router(_state: AppState) -> Router<AppState> {
-    Router::new().route("/{code}", get(get_short_code).post(post_short_code))
+    let view = Router::new()
+        .route("/{code}", get(get_short_code))
+        .route_layer(crate::middleware::quick_accept_view_rate_limit_layer());
+    let action = Router::new()
+        .route("/{code}", post(post_short_code))
+        .route_layer(crate::middleware::quick_accept_action_rate_limit_layer());
+    view.merge(action)
 }
