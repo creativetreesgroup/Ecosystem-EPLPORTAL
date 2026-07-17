@@ -50,6 +50,23 @@ export function filtersToQueryString(
 	return params.toString();
 }
 
+/** Merges two already-individually-sorted (by created_at desc) row sets into one globally-sorted
+ * set, then slices out exactly one page's window. Used by `fetchTickets`'s "all statuses" branch
+ * to correctly reconstruct page N of a merge of two backend sources (see api-tickets.ts for why
+ * naively applying the same page-N offset to both sources independently is wrong beyond page 1).
+ * Generic over any row shape carrying `created_at` so this stays a pure, network-free function
+ * that's easy to unit test with plain fixtures. */
+export function mergeAndSlicePage<T extends { created_at: string }>(
+	live: T[],
+	history: T[],
+	page: number,
+	pageSize: number
+): { rows: T[]; hasMore: boolean } {
+	const merged = [...live, ...history].sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+	const start = (page - 1) * pageSize;
+	return { rows: merged.slice(start, start + pageSize), hasMore: merged.length > page * pageSize };
+}
+
 export function markRowAccepting(rows: TicketDetailRow[], id: string): TicketDetailRow[] {
 	return rows.map((r) => (r.id === id ? { ...r, accepting: true } : r));
 }

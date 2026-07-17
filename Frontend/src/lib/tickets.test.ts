@@ -5,6 +5,7 @@ import {
 	markRowAccepting,
 	revertRowAccepting,
 	applyRowAccepted,
+	mergeAndSlicePage,
 	type TicketDetailRow
 } from './tickets';
 
@@ -47,6 +48,33 @@ describe('filtersToQueryString', () => {
 		);
 		expect(qs).toContain('from=2026-07-01T00%3A00%3A00Z');
 		expect(qs).toContain('to=2026-07-18T00%3A00%3A00Z');
+	});
+});
+
+describe('mergeAndSlicePage', () => {
+	// Two sources, each already sorted desc by created_at on its own (matching what /bookings/live
+	// and /bookings/history each return), interleaved so neither source's own page-2 window would
+	// contain the true globally-sorted page 2 — this is exactly the bug the fix addresses.
+	const live = ['10', '08', '06', '04', '02'].map((d) => ({ created_at: `2026-07-${d}` }));
+	const history = ['09', '07', '05', '03', '01'].map((d) => ({ created_at: `2026-07-${d}` }));
+	// Globally merged+sorted desc: 10,09,08,07,06,05,04,03,02,01
+
+	it('returns the correct globally-sorted window for page 2, not either source own page 2', () => {
+		const { rows, hasMore } = mergeAndSlicePage(live, history, 2, 3);
+		expect(rows.map((r) => r.created_at)).toEqual(['2026-07-07', '2026-07-06', '2026-07-05']);
+		expect(hasMore).toBe(true);
+	});
+
+	it('reports hasMore=false once the last page is reached', () => {
+		const { rows, hasMore } = mergeAndSlicePage(live, history, 4, 3);
+		expect(rows.map((r) => r.created_at)).toEqual(['2026-07-01']);
+		expect(hasMore).toBe(false);
+	});
+
+	it('page 1 matches the naive concatenation (no regression for the common case)', () => {
+		const { rows, hasMore } = mergeAndSlicePage(live, history, 1, 3);
+		expect(rows.map((r) => r.created_at)).toEqual(['2026-07-10', '2026-07-09', '2026-07-08']);
+		expect(hasMore).toBe(true);
 	});
 });
 

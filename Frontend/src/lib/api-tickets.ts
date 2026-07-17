@@ -2,7 +2,13 @@
 // Thin typed REST layer for /tickets — no UI logic here.
 import { ApiError } from './api';
 import { acceptBooking } from './api-bookings';
-import { filtersToQueryString, type TicketDetailRow, type TicketFilters, type FailureReason } from './tickets';
+import {
+	filtersToQueryString,
+	mergeAndSlicePage,
+	type TicketDetailRow,
+	type TicketFilters,
+	type FailureReason
+} from './tickets';
 
 export { acceptBooking };
 
@@ -59,27 +65,53 @@ export async function fetchTickets(
 	filters: TicketFilters,
 	page: number
 ): Promise<{ rows: TicketDetailRow[]; hasMore: boolean }> {
-	const qs = filtersToQueryString(filters, page, PAGE_SIZE + 1);
-
-	async function fetchOne(path: string): Promise<BookingListItemWire[]> {
-		const res = await fetch(`${path}?${qs}`, { credentials: 'include' });
+	async function fetchOne(path: string, queryString: string): Promise<BookingListItemWire[]> {
+		const res = await fetch(`${path}?${queryString}`, { credentials: 'include' });
 		if (!res.ok) throw new ApiError(res.status, `failed to fetch ${path}`);
 		return res.json();
 	}
 
 	let items: BookingListItemWire[];
-	if (filters.status === 'pending') {
-		items = await fetchOne('/bookings/live');
-	} else if (filters.status === 'accepted' || filters.status === 'failed') {
-		items = await fetchOne('/bookings/history');
+	let hasMore: boolean;
+
+	if (filters.status === 'pending' || filters.status === 'accepted' || filters.status === 'failed') {
+		const qs = filtersToQueryString(filters, page, PAGE_SIZE + 1);
+		const path = filters.status === 'pending' ? '/bookings/live' : '/bookings/history';
+		items = await fetchOne(path, qs);
+		hasMore = items.length > PAGE_SIZE;
+		items = items.slice(0, PAGE_SIZE);
 	} else {
-		const [live, history] = await Promise.all([fetchOne('/bookings/live'), fetchOne('/bookings/history')]);
-		items = [...live, ...history].sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+		// status === null ("all statuses"): merge /bookings/live + /bookings/history.
+		//
+		// Each backend source is independently sorted/paginated, so applying the same page-N
+		// offset/limit to both and concatenating the two page-N windows (the old, buggy approach)
+		// does NOT reconstruct the true globally-sorted page N — for page >= 2 that silently
+		// returns some arbitrary wrong subset of rows. Instead: fetch each source's FULL prefix
+		// from offset 0 through the end of the requested page, merge + sort that combined prefix
+		// (mergeAndSlicePage, in tickets.ts, does the merge/sort/slice math and is unit-tested),
+		// then slice out exactly this page's window from the correctly-ordered result.
+		//
+		// Known, bounded, honestly-disclosed limitation: the backend's clamp_limit caps `limit`
+		// at 200 server-side (a pre-existing constraint from Fase 6/7b, not changed here).
+		// prefixLimit grows with `page` (page * PAGE_SIZE + 1), so beyond roughly page 4 at the
+		// default PAGE_SIZE=50, prefixLimit exceeds 200 and gets silently truncated per-source —
+		// which can under-represent one source at very deep pagination into the "all statuses"
+		// merged view. There is no single backend endpoint that can do genuine global
+		// OFFSET/LIMIT across both `live` and `history`; building one is out of scope for this
+		// fix. This client-side merge is correct for pages 1-4 (the common case) with this
+		// documented boundary beyond that, instead of being silently wrong starting at page 2.
+		const prefixLimit = page * PAGE_SIZE + 1;
+		const prefixQs = filtersToQueryString(filters, 1, prefixLimit);
+		const [live, history] = await Promise.all([
+			fetchOne('/bookings/live', prefixQs),
+			fetchOne('/bookings/history', prefixQs)
+		]);
+		const merged = mergeAndSlicePage(live, history, page, PAGE_SIZE);
+		items = merged.rows;
+		hasMore = merged.hasMore;
 	}
 
-	const hasMore = items.length > PAGE_SIZE;
-	const pageItems = items.slice(0, PAGE_SIZE);
-	return { rows: pageItems.map((item) => toDetailRow(item, null)), hasMore };
+	return { rows: items.map((item) => toDetailRow(item, null)), hasMore };
 }
 
 // Wire shape of BookingDetail (snake_case, includes raw_data for failureReason derivation).
