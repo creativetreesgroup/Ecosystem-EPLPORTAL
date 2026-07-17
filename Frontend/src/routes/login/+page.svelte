@@ -2,6 +2,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { apiPost, ApiError } from '$lib/api';
+	import { Eye, EyeOff } from '@lucide/svelte';
 
 	let username = $state('');
 	let password = $state('');
@@ -151,7 +152,11 @@
 								class="absolute inset-y-0 right-0 flex items-center px-3 min-w-[44px] text-text-muted hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent rounded-lg"
 							>
 								<span class="sr-only">{showPassword ? 'Sembunyikan password' : 'Tampilkan password'}</span>
-								<span aria-hidden="true" class="text-[11px] font-body">{showPassword ? 'Sembunyikan' : 'Tampilkan'}</span>
+								{#if showPassword}
+									<EyeOff size={18} aria-hidden="true" />
+								{:else}
+									<Eye size={18} aria-hidden="true" />
+								{/if}
 							</button>
 						</div>
 					</div>
