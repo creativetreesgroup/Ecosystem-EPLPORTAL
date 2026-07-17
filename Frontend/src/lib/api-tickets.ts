@@ -75,7 +75,14 @@ export async function fetchTickets(
 	let hasMore: boolean;
 
 	if (filters.status === 'pending' || filters.status === 'accepted' || filters.status === 'failed') {
-		const qs = filtersToQueryString(filters, page, PAGE_SIZE + 1);
+		// offset must be derived from the REAL page size, not the inflated overfetch limit below —
+		// filtersToQueryString computes offset = (page - 1) * pageSize, so passing PAGE_SIZE + 1
+		// here would shift every page's offset by `page - 1` rows. Build the query string with the
+		// real PAGE_SIZE (correct offset, limit=50), then override just `limit` to overfetch by one
+		// for hasMore detection.
+		const params = new URLSearchParams(filtersToQueryString(filters, page, PAGE_SIZE));
+		params.set('limit', String(PAGE_SIZE + 1));
+		const qs = params.toString();
 		const path = filters.status === 'pending' ? '/bookings/live' : '/bookings/history';
 		items = await fetchOne(path, qs);
 		hasMore = items.length > PAGE_SIZE;

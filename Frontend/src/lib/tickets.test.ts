@@ -40,6 +40,21 @@ describe('filtersToQueryString', () => {
 		expect(qs).toContain('offset=100');
 	});
 
+	it('regression: offset must come from the real page size, not an inflated overfetch limit — ' +
+		'api-tickets.ts\'s single-source fetchTickets branch builds the query string with the real ' +
+		'PAGE_SIZE (so offset is correct), then overrides just `limit` to overfetch by one for ' +
+		'hasMore detection; passing the inflated limit as filtersToQueryString\'s pageSize arg ' +
+		'directly (the bug) would corrupt offset for every page > 1', () => {
+		const PAGE_SIZE = 50;
+		const page = 2;
+		const params = new URLSearchParams(
+			filtersToQueryString({ status: 'pending', spxId: '', from: null, to: null }, page, PAGE_SIZE)
+		);
+		params.set('limit', String(PAGE_SIZE + 1));
+		expect(params.get('offset')).toBe('50'); // (page-1) * real PAGE_SIZE, not * 51
+		expect(params.get('limit')).toBe('51');
+	});
+
 	it('includes from/to as ISO strings when set', () => {
 		const qs = filtersToQueryString(
 			{ status: null, spxId: '', from: '2026-07-01T00:00:00Z', to: '2026-07-18T00:00:00Z' },
