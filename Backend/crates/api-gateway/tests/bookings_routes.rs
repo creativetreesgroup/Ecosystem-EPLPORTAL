@@ -163,7 +163,20 @@ async fn live_and_history_split_by_status_and_require_session() {
             spx_id: "live-1".to_string(),
             status: "pending".to_string(),
             is_coc: false,
-            raw_data: serde_json::json!({}),
+            // route_detail_list-shaped raw_data (real SPX shape) — see
+            // `spx_client::normalize_booking`'s `parse_route_detail_list` (core_domain's
+            // `route_parse.rs`), which reads `node_info_list[].name` under each
+            // `route_detail_list[]` entry. This is priority #2 in `parse_route_stops`'s
+            // fallback chain (an empty `{}` raw_data, as used before this task, yields an
+            // empty `route_stops` — insufficient to prove the field is actually populated).
+            raw_data: serde_json::json!({
+                "route_detail_list": [{
+                    "node_info_list": [
+                        {"name": "Aceh DC", "address_info": {"l1": "Aceh", "l2": "Banda Aceh"}},
+                        {"name": "Cileungsi DC", "address_info": {"l1": "Jabar", "l2": "Bogor"}},
+                    ]
+                }]
+            }),
         },
     )
     .await
@@ -219,6 +232,15 @@ async fn live_and_history_split_by_status_and_require_session() {
     let live_body: Vec<serde_json::Value> = live_resp.json().await.unwrap();
     assert_eq!(live_body.len(), 1);
     assert_eq!(live_body[0]["spx_id"], "live-1");
+    let route = live_body[0]["route"].as_array().expect("route field present");
+    assert_eq!(
+        route,
+        &vec![
+            serde_json::json!("Aceh DC"),
+            serde_json::json!("Cileungsi DC")
+        ],
+        "route must be populated from raw_data via normalize_booking, not an empty default"
+    );
 
     let hist_resp = http
         .get(format!("{base}/bookings/history"))

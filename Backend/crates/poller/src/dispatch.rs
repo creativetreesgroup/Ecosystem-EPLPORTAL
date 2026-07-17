@@ -286,6 +286,7 @@ async fn finalize_win(
                 "latencyMs": latency_ms,
                 "autoAccept": true,
                 "rule": meta.name,
+                "route": booking.route_stops,
             }),
         )
         .await;

@@ -47,10 +47,16 @@ pub struct BookingListItem {
     pub auto_accepted: bool,
     pub rule_matched: Option<Uuid>,
     pub created_at: DateTime<Utc>,
+    /// SPX route stop names, origin-first. Sourced from `raw_data` via
+    /// `spx_client::normalize_booking` (Fase 7b) — not stored as its own DB column, the raw
+    /// JSONB blob is the source of truth, matching how `routes/bookings.rs::accept` already
+    /// derives `SpxBooking` from `raw_data` for the manual-accept path.
+    pub route: Vec<String>,
 }
 
 impl From<store::models::Booking> for BookingListItem {
     fn from(b: store::models::Booking) -> Self {
+        let route = spx_client::normalize_booking(&b.raw_data).route_stops;
         Self {
             id: b.id,
             account_id: b.account_id,
@@ -62,6 +68,7 @@ impl From<store::models::Booking> for BookingListItem {
             auto_accepted: b.auto_accepted,
             rule_matched: b.rule_matched,
             created_at: b.created_at,
+            route,
         }
     }
 }
