@@ -1,5 +1,6 @@
 pub mod envelope;
 pub mod password;
+pub mod quick_token;
 pub mod secret;
 pub mod session_token;
 
@@ -11,5 +12,6 @@ pub use envelope::{
     LABEL_WAHA_KEY,
 };
 pub use password::{hash_password, verify_password};
+pub use quick_token::{sign_quick_token, verify_quick_token, QuickTokenClaims, DEFAULT_TTL_MS};
 pub use secret::{ExposeSecret, SecretBox, SecretKeyBytes, SecretString};
 pub use session_token::{generate_session_token, hash_session_token};
