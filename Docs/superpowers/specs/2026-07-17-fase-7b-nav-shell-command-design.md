@@ -79,6 +79,20 @@ tersimpan di DB — murni live, konsisten dengan sifat "osiloskop".
 ID). Badge "+N baru" muncul di atas list kalau user sedang scroll ke bawah saat event baru masuk
 (scroll position bukan di top) — klik badge scroll ke atas + clear badge.
 
+**Koreksi/temuan (riset plan): event WS `new_tickets` belum pernah di-wire sejak Fase 5** —
+`Backend/crates/poller/src/publish.rs`'s doc comment sendiri sudah mencatat ini, dengan alasan
+nyata: belum ada sinyal "booking ini genuinely baru" yang bersih di pipeline
+fetch/upsert poller (`store::upsert_booking` bersifat "enrichment-preserving", tidak
+mengembalikan sinyal insert-vs-update yang bisa dipakai langsung). **Disepakati sesi ini:**
+BUKAN diselesaikan di 7b (menutup gap itu dengan benar butuh desain pipeline tersendiri, di
+luar scope nav-shell+command). Sebagai gantinya, `/command` **polling ringan** —
+refetch `GET /bookings/live` tiap 20 detik (konstanta `LIVE_POLL_INTERVAL_MS`) untuk menangkap
+tiket pending baru di luar WS, di-merge ke state ticker yang sama (fungsi merge yang sama dipakai
+baik untuk hasil polling maupun event WS — satu sumber logic, bukan dua jalur terpisah).
+`ticket_accepted`/`ticket_rejected` TETAP real-time lewat WS untuk tiket yang sudah dikenal
+ticker. Konsekuensi: tiket baru bisa telat muncul hingga ~20 detik (bukan instan) — trade-off
+sadar, bukan bug. Menutup gap `new_tickets` sepenuhnya dicatat untuk sub-fase mendatang.
+
 **Aksi Terima (disepakati sesi ini, masuk scope 7b):** baris dengan status `pending` punya tombol
 "Terima" kecil. Klik → optimistic update (baris berubah ke state "Memproses..." dengan spinner,
 tombol disabled) → `POST /bookings/:id/accept` (real, sudah ada) → sukses: baris dikonfirmasi
@@ -136,6 +150,13 @@ field baru `localDispatchUs` murni tambahan, tidak mengubah struktur yang sudah 
 sama (yang pertama berhenti di akhir Layer 1, yang kedua baru mulai tepat sebelum panggilan HTTP)
 — ada jeda Layer 2 di antara keduanya yang sengaja TIDAK masuk metrik manapun (bukan celah, tapi
 representasi jujur: itu waktu tunggu Redis, bukan waktu keputusan ATAU waktu jaringan SPX).
+
+**Field rute (temuan riset plan):** `SpxBooking.route_stops: Vec<String>` (`Backend/crates/spx-client/src/booking.rs`) sudah berisi data rute lengkap tapi tidak pernah diekspos lewat API mana pun.
+Ditambahkan sebagai field baru `route: Vec<String>` (nama field REST beda dari nama WS
+`routeStops` yang mungkin dipakai referensi — pilih SATU nama konsisten, `route`, dipakai di
+kedua tempat) ke `BookingListItem` (`GET /bookings/live`, untuk fetch awal + hasil polling) DAN
+ke payload `publish_ticket_accepted` (`finalize_win`, untuk update real-time). Murni tambahan
+field, tidak mengubah struktur/kontrak yang sudah ada.
 
 ## Struktur file (indikatif — plan resmi akan memverifikasi ulang terhadap kode nyata)
 
