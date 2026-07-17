@@ -106,13 +106,36 @@ dicatat sebagai gap untuk sub-fase Notification Center nanti, bukan diam-diam di
 
 ## Perubahan backend (scope 7b)
 
-`Backend/crates/poller/src/dispatch.rs`: tambah `Instant::now()` baru di awal `dispatch_booking`
-(sebelum rule-matching/claim), hitung durasi sampai TEPAT SEBELUM `let started = Instant::now()`
-yang sudah ada (titik mulai pengukuran `accept_e2e_ms`) — dua metrik ini jadi dua segmen
-berurutan dari timeline yang sama, tidak overlap. Hasil (`local_dispatch_us: u64`, mikrodetik)
-ditambahkan sebagai field baru ke JSON payload `publish_ticket_accepted` yang sudah ada di
-`finalize_win` (poller/dispatch.rs) — field baru murni tambahan, tidak mengubah struktur yang
-sudah ada.
+**Koreksi (ditemukan saat riset untuk plan implementasi, sebelum kode ditulis):** deskripsi awal
+di atas salah menaruh titik akhir pengukuran. Master spec eksplisit menyebut hot path sebagai
+"...find_best_matching_rule -> in-proc atomic claim (DashMap CAS)..." dan secara terpisah
+menyatakan "Redis Lua gate / DB write / WS / notif = async OFF critical path" — tapi
+`dispatch_booking` (`Backend/crates/poller/src/dispatch.rs`) nyatanya meng-await Layer 2 (gate
+Redis via `executor::try_claim_auto`, network round-trip) SEBELUM titik `let started =
+Instant::now()` yang sudah ada untuk `accept_e2e_ms`. Kalau `local_dispatch_us` diukur sampai
+titik itu (rencana awal), angkanya akan MENCAKUP round-trip Redis (biasanya 1-5ms) — bukan hanya
+jalur keputusan in-proc, dan tidak akan pernah menunjukkan sub-milidetik seperti klaim utama
+proyek ini.
+
+**Titik ukur yang benar:** `Instant::now()` di awal `dispatch_booking` (sebelum
+`find_best_matching_rule_compiled`), berakhir TEPAT SETELAH `st.dedup.try_begin_accept(&booking.id)`
+mengembalikan `true` (akhir Layer 1, in-proc, DashMap CAS — operasi lock-free murni memori, tidak
+ada I/O) — BUKAN sampai sebelum Layer 2/HTTP. Ini genuinely mengukur "keputusan": cocokkan rule
++ klaim in-proc, persis sesuai daftar hot-path master spec, mengecualikan gate Redis (Layer 2)
+dan panggilan HTTP yang memang "off critical path" secara sengaja. Nilai dicatat setiap kali
+Layer 1 berhasil (baik booking itu akhirnya menang accept atau tidak di Layer 2/HTTP), tapi HANYA
+benar-benar dikirim ke frontend lewat WS pada booking yang akhirnya sampai ke `finalize_win` (real
+win) — cukup untuk tampilan live yang berarti, tidak perlu event terpisah untuk setiap skip/gagal
+Layer 2 (YAGNI, di luar apa yang divalidasi sesi brainstorming).
+
+`Backend/crates/poller/src/dispatch.rs`: tambah `Instant::now()` baru di awal `dispatch_booking`,
+simpan durasi (mikrodetik) begitu Layer 1 berhasil, teruskan nilai itu (bukan diukur ulang) sampai
+ke `finalize_win` agar bisa disertakan ke JSON payload `publish_ticket_accepted` yang sudah ada —
+field baru `localDispatchUs` murni tambahan, tidak mengubah struktur yang sudah ada. Dua metrik
+(`localDispatchUs` dan `latencyMs`/`accept_e2e_ms`) jadi dua segmen BERBEDA dari timeline yang
+sama (yang pertama berhenti di akhir Layer 1, yang kedua baru mulai tepat sebelum panggilan HTTP)
+— ada jeda Layer 2 di antara keduanya yang sengaja TIDAK masuk metrik manapun (bukan celah, tapi
+representasi jujur: itu waktu tunggu Redis, bukan waktu keputusan ATAU waktu jaringan SPX).
 
 ## Struktur file (indikatif — plan resmi akan memverifikasi ulang terhadap kode nyata)
 
