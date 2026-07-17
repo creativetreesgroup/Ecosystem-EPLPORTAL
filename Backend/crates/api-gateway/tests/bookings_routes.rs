@@ -650,6 +650,98 @@ async fn audit_trail_returns_only_this_bookings_events_tenant_scoped() {
     cleanup(&pool, tenant_id).await;
 }
 
+/// Unlike `audit_trail_returns_only_this_bookings_events_tenant_scoped` above (a SINGLE tenant —
+/// it only proves the `booking_id` predicate works), this uses TWO real tenants and asserts
+/// tenant B's session can never see tenant A's `accept_events` row for tenant A's booking, even
+/// when tenant B's request names tenant A's `booking_id` directly. This is the pattern
+/// `store::bookings_get_detail_returns_none_for_wrong_tenant` (`crates/store/src/lib.rs`) already
+/// established for `/bookings/:id/detail`; `audit_trail` never had an equivalent.
+///
+/// `POST /auth/portal-login` looks up the username scoped by `state.tenant_id`
+/// (`routes/auth.rs::portal_login`), i.e. one spawned server logs into ONE tenant — so tenant B's
+/// server is built with `tenant_b` as `AppState.tenant_id` and tenant B's user logs in against
+/// it. The resulting session's `tenant_id` (stored server-side, read back by `session_auth` into
+/// `CurrentUser.tenant_id`) is what the `audit_trail` handler actually uses per-request — NOT
+/// `AppState.tenant_id` again — so this exercises the same tenant-scoping path a real cross-tenant
+/// request would.
+///
+/// Expected result confirmed by reading `audit_trail`'s handler (`src/routes/bookings.rs`): it
+/// calls `store::accept_events::list_for_booking` directly with no prior `get_detail`-style
+/// existence check on the booking, so a cross-tenant `booking_id` is not a 404 — it is RLS
+/// (`list_for_booking` runs inside `begin_tenant_tx`, `WHERE tenant_id = $1 AND booking_id = $2`)
+/// silently returning zero rows. So the correct assertion is `200` with an empty array, not `404`.
+#[tokio::test]
+async fn audit_trail_is_tenant_isolated_across_real_tenants() {
+    let pool = store::connect(&database_url()).await.expect("connect");
+    store::run_migrations(&pool).await.expect("migrate");
+    let tenant_a = insert_tenant(&pool).await;
+    let tenant_b = insert_tenant(&pool).await;
+    insert_portal_user(&pool, tenant_b, "owner-b").await;
+
+    store::upsert_booking(
+        &pool,
+        tenant_a,
+        &store::BookingUpsert {
+            account_id: "acct-1".to_string(),
+            spx_id: "audit-cross-1".to_string(),
+            status: "pending".to_string(),
+            is_coc: false,
+            raw_data: serde_json::json!({}),
+        },
+    )
+    .await
+    .expect("seed booking under tenant A");
+    let booking_a = {
+        let live = store::bookings::list_live(&pool, tenant_a, 10, 0)
+            .await
+            .expect("list");
+        live.into_iter()
+            .find(|b| b.spx_id == "audit-cross-1")
+            .expect("seeded row")
+    };
+
+    store::insert_accept_event(
+        &pool,
+        tenant_a,
+        &store::NewAcceptEvent {
+            booking_id: Some(booking_a.id),
+            rule_id: None,
+            outcome: "accepted".to_string(),
+            local_dispatch_us: Some(111),
+            accept_e2e_ms: Some(222),
+            detail: serde_json::json!({"manual": false}),
+        },
+    )
+    .await
+    .expect("seed accept_event under tenant A");
+
+    // Server spawned for tenant B (see doc comment above for why `state.tenant_id = tenant_b`
+    // matters for login), then queried for tenant A's booking id.
+    let state = build_state(pool.clone(), tenant_b).await;
+    let base = spawn_server(state).await;
+    let http = reqwest::Client::new();
+    let cookie = login_cookie(&http, &base, "owner-b").await;
+
+    let resp = http
+        .get(format!("{base}/bookings/{}/audit-trail", booking_a.id))
+        .header("Cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert!(
+        body.is_empty(),
+        "tenant B must NEVER see tenant A's accept_event, even when it names tenant A's booking_id directly"
+    );
+
+    sqlx::query("DELETE FROM tenants WHERE id = ANY($1)")
+        .bind(vec![tenant_a, tenant_b])
+        .execute(&pool)
+        .await
+        .ok();
+}
+
 #[tokio::test]
 async fn manual_accept_404s_for_unknown_booking_and_409s_for_disconnected_account() {
     let pool = store::connect(&database_url()).await.expect("connect");
