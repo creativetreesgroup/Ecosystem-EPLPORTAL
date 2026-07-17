@@ -51,6 +51,15 @@ tombol aksi, indikator status — bukan swatch lepas). **Dipilih: "Balanced Duo"
   sekadar dibalik.
 - **Teal:** untuk DATA dan STATUS HIDUP/TERHUBUNG (angka latency, indikator koneksi). Dark
   `#2dd4bf`, light dipertajam ke `#0d9488` dengan alasan kontras yang sama.
+- **Koreksi (Task 1 review finding, dilacak di sini): nilai light-mode teal/danger di atas belum
+  cukup tajam.** `#0d9488` (teal) dan `#dc2626` (danger, token error/`--color-danger`, minimal
+  addition di luar dua aksen di atas — lihat catatan plan) dipilih sebelum matematika kontras
+  nyata dihitung untuk sub-fase ini; dihitung ulang saat implementasi Task 1 dengan formula
+  WCAG relative-luminance (bukan dikira-kira mata) dan ternyata gagal/mepet gagal 4.5:1:
+  `#0d9488` = 3.46:1 (gagal), `#dc2626` = 4.47:1 (mepet, tetap gagal) terhadap
+  `--color-bg-base` (`#f7f6f3`). Dikoreksi ke `#0f766e` (teal, 5.07:1) dan `#b91c1c` (danger,
+  5.99:1), diverifikasi dua kali (implementer + reviewer, angka sama persis). Lihat
+  `Frontend/src/app.css`'s `[data-theme='light']` block dan `Frontend/src/lib/tokens.ts`.
 - **Alasan pemilihan (dari pengguna):** dua aksen setara (bukan satu dominan) terasa lebih tenang
   untuk dipandangi berjam-jam (shift kerja) — amber = aksi/perhatian, teal = data/status, makna
   warna jadi konsisten dan bisa diprediksi di seluruh Fase 7, bukan cuma dekorasi.

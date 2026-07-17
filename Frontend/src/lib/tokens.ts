@@ -21,8 +21,8 @@ export const TOKENS = {
 		textPrimary: '#1c1e21',
 		textMuted: '#5c5952',
 		accent: '#b45309',
-		live: '#0d9488',
-		danger: '#dc2626'
+		live: '#0f766e',
+		danger: '#b91c1c'
 	}
 } as const;
 

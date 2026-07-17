@@ -36,11 +36,14 @@
 	--font-body: 'Inter', system-ui, sans-serif;
 }
 
-/* Light-mode overrides — amber/teal are DELIBERATELY different values from the dark tokens
-   above (sharpened/darkened), not simply reused: the dark-mode amber (#eab308) and teal
-   (#2dd4bf) both fail WCAG 2.2 AA's 4.5:1 text-contrast ratio against a light background.
-   Verified with a real contrast-ratio tool (not eyeballed) as part of this task's own
-   verification step. */
+/* Light-mode overrides — amber/teal/danger are DELIBERATELY different values from the dark
+   tokens above (sharpened/darkened), not simply reused: the dark-mode amber (#eab308), teal
+   (#2dd4bf), and danger red (#f87171) all fail WCAG 2.2 AA's 4.5:1 text-contrast ratio against
+   a light background. --color-live and --color-danger below (#0f766e, #b91c1c) are hand-verified
+   via the WCAG relative-luminance formula against --color-bg-base (#f7f6f3) at ~5.07:1 and
+   ~5.99:1 respectively — both clear 4.5:1 with real margin (computed twice independently,
+   implementer + reviewer, exact numbers matched both times; see the design doc's palette
+   section for the original values that failed this check and were corrected here). */
 [data-theme='light'] {
 	--color-bg-base: #f7f6f3;
 	--color-bg-surface: #ffffff;
@@ -48,8 +51,8 @@
 	--color-text-primary: #1c1e21;
 	--color-text-muted: #5c5952;
 	--color-accent: #b45309;
-	--color-live: #0d9488;
-	--color-danger: #dc2626;
+	--color-live: #0f766e;
+	--color-danger: #b91c1c;
 }
 
 body {
