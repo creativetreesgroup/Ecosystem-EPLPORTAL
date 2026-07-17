@@ -88,8 +88,12 @@ export function createWsStore() {
 		},
 		close() {
 			closedByUs = true;
-			if (reconnectTimer) clearTimeout(reconnectTimer);
+			if (reconnectTimer) {
+				clearTimeout(reconnectTimer);
+				reconnectTimer = null;
+			}
 			socket?.close();
+			status = 'disconnected';
 		}
 	};
 }
