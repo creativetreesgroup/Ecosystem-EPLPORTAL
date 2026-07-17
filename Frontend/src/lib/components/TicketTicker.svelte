@@ -27,12 +27,20 @@
 				errorMsg = result.message;
 				return;
 			}
-			// Optimistic confirm now; the WS ticket_accepted event that follows (handled by the
-			// parent's WS subscription, Task 8) reconciles latency/localDispatchUs authoritatively.
-			rows = applyAccepted(rows, { bookingId: spxId, latencyMs: 0, localDispatchUs: 0 });
-		} catch {
+			// Manual accept never triggers a backend ticket_accepted WS event (that only fires for
+			// auto-accept dispatch), so there is no authoritative latency measurement to reconcile
+			// with here. Confirm the row optimistically but leave latency/localDispatchUs null —
+			// honest "we don't know" rather than a fabricated 0ms.
+			rows = applyAccepted(rows, { bookingId: spxId, latencyMs: null, localDispatchUs: null });
+		} catch (e) {
 			rows = revertAccepting(rows, spxId);
-			errorMsg = 'Tidak dapat menghubungi server. Coba lagi.';
+			if (e instanceof ApiError && e.status === 409) {
+				errorMsg = 'Booking ini sudah tidak tersedia — mungkin sudah diambil pihak lain.';
+			} else if (e instanceof ApiError) {
+				errorMsg = 'Server gagal memproses. Coba lagi.';
+			} else {
+				errorMsg = 'Tidak dapat menghubungi server. Coba lagi.';
+			}
 		}
 	}
 </script>
@@ -67,7 +75,7 @@
 						{row.accepting ? 'Memproses…' : 'Terima'}
 					</button>
 				{:else if row.status === 'accepted'}
-					<span class="font-mono text-live">{row.latencyMs}ms</span>
+					<span class="font-mono text-live">{row.latencyMs === null ? 'diterima' : `${row.latencyMs}ms`}</span>
 				{:else}
 					<span class="font-mono text-text-muted">diambil lain</span>
 				{/if}

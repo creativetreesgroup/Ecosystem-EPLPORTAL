@@ -27,11 +27,13 @@ export function applyAccepted(
 	rows: TicketRow[],
 	// Shape matches ws.svelte.ts's TicketAcceptedData (the real WS event payload); only
 	// bookingId/latencyMs/localDispatchUs are used here, the rest are accepted-and-ignored
-	// so callers can pass the full event data without a cast.
+	// so callers can pass the full event data without a cast. latencyMs/localDispatchUs accept
+	// `number | null` (not just `number`) because manual accepts have no measured latency at
+	// all — see TicketTicker.svelte's handleAccept, which passes null for both.
 	data: {
 		bookingId: string;
-		latencyMs: number;
-		localDispatchUs: number;
+		latencyMs: number | null;
+		localDispatchUs: number | null;
 		autoAccept?: boolean;
 		rule?: string;
 		route?: string[];

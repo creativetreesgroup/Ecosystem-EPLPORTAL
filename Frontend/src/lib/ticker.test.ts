@@ -68,6 +68,16 @@ describe('applyAccepted', () => {
 		});
 		expect(result.find((r) => r.spxId === 'SPX2')?.status).toBe('pending');
 	});
+
+	it('accepts latencyMs/localDispatchUs of null (manual accept — no measurement available) without coercing to 0', () => {
+		const rows = [row({ spxId: 'SPX1' })];
+		const result = applyAccepted(rows, { bookingId: 'SPX1', latencyMs: null, localDispatchUs: null });
+		const updated = result.find((r) => r.spxId === 'SPX1');
+		expect(updated?.status).toBe('accepted');
+		expect(updated?.latencyMs).toBeNull();
+		expect(updated?.localDispatchUs).toBeNull();
+		expect(updated?.accepting).toBe(false);
+	});
 });
 
 describe('applyRejected', () => {
