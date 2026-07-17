@@ -502,6 +502,155 @@ async fn manual_accept_happy_path_claims_dispatches_and_records() {
 }
 
 #[tokio::test]
+async fn detail_includes_route_derived_from_raw_data() {
+    let pool = store::connect(&database_url()).await.expect("connect");
+    store::run_migrations(&pool).await.expect("migrate");
+    let tenant_id = insert_tenant(&pool).await;
+    insert_portal_user(&pool, tenant_id, "owner").await;
+
+    store::upsert_booking(
+        &pool,
+        tenant_id,
+        &store::BookingUpsert {
+            account_id: "acct-1".to_string(),
+            spx_id: "detail-route-1".to_string(),
+            status: "pending".to_string(),
+            is_coc: false,
+            raw_data: serde_json::json!({
+                "route_detail_list": [{
+                    "node_info_list": [
+                        {"name": "Cikarang DC", "address_info": {"l1": "Jabar", "l2": "Bekasi"}},
+                    ]
+                }]
+            }),
+        },
+    )
+    .await
+    .expect("seed booking");
+
+    // NOTE: task brief's transcription used `store::bookings::list_live(&pool, tenant_id, 10,
+    // 0, &store::bookings::BookingFilter::default())` — Task 2's future signature, which does
+    // not exist yet. Using Task 1's CURRENT real signature here instead (no filter param).
+    // Task 2's implementer must update this call site when `list_live` gains the filter param.
+    let id = {
+        let live = store::bookings::list_live(&pool, tenant_id, 10, 0)
+            .await
+            .expect("list");
+        live.iter()
+            .find(|b| b.spx_id == "detail-route-1")
+            .expect("seeded row")
+            .id
+    };
+    let row = store::bookings::get_detail(&pool, tenant_id, id)
+        .await
+        .expect("get_detail")
+        .expect("row exists");
+    assert_eq!(row.status, "pending"); // sanity check on the row itself, not the route below
+
+    let state = build_state(pool.clone(), tenant_id).await;
+    let base = spawn_server(state).await;
+    let http = reqwest::Client::new();
+    let cookie = login_cookie(&http, &base, "owner").await;
+
+    let resp = http
+        .get(format!("{base}/bookings/{}/detail", row.id))
+        .header("Cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["route"], serde_json::json!(["Cikarang DC"]));
+
+    cleanup(&pool, tenant_id).await;
+}
+
+#[tokio::test]
+async fn audit_trail_returns_only_this_bookings_events_tenant_scoped() {
+    let pool = store::connect(&database_url()).await.expect("connect");
+    store::run_migrations(&pool).await.expect("migrate");
+    let tenant_id = insert_tenant(&pool).await;
+    insert_portal_user(&pool, tenant_id, "owner").await;
+
+    store::upsert_booking(
+        &pool,
+        tenant_id,
+        &store::BookingUpsert {
+            account_id: "acct-1".to_string(),
+            spx_id: "audit-1".to_string(),
+            status: "pending".to_string(),
+            is_coc: false,
+            raw_data: serde_json::json!({}),
+        },
+    )
+    .await
+    .expect("seed booking");
+    // Same pre-Task-2 `list_live` signature note as `detail_includes_route_derived_from_raw_data`
+    // above.
+    let booking = {
+        let live = store::bookings::list_live(&pool, tenant_id, 10, 0)
+            .await
+            .expect("list");
+        live.into_iter()
+            .find(|b| b.spx_id == "audit-1")
+            .expect("seeded row")
+    };
+
+    store::insert_accept_event(
+        &pool,
+        tenant_id,
+        &store::NewAcceptEvent {
+            booking_id: Some(booking.id),
+            rule_id: None,
+            outcome: "accepted".to_string(),
+            local_dispatch_us: Some(850),
+            accept_e2e_ms: Some(312),
+            detail: serde_json::json!({"manual": false}),
+        },
+    )
+    .await
+    .expect("seed accept_event for this booking");
+    // A second, unrelated booking's event — must NOT show up in booking's own audit trail.
+    store::insert_accept_event(
+        &pool,
+        tenant_id,
+        &store::NewAcceptEvent {
+            booking_id: None,
+            rule_id: None,
+            outcome: "failed".to_string(),
+            local_dispatch_us: None,
+            accept_e2e_ms: None,
+            detail: serde_json::json!({}),
+        },
+    )
+    .await
+    .expect("seed unrelated accept_event");
+
+    let state = build_state(pool.clone(), tenant_id).await;
+    let base = spawn_server(state).await;
+    let http = reqwest::Client::new();
+    let cookie = login_cookie(&http, &base, "owner").await;
+
+    let resp = http
+        .get(format!("{base}/bookings/{}/audit-trail", booking.id))
+        .header("Cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert_eq!(
+        body.len(),
+        1,
+        "must only return this booking's own event, not the unrelated one"
+    );
+    assert_eq!(body[0]["outcome"], "accepted");
+    assert_eq!(body[0]["local_dispatch_us"].as_i64(), Some(850));
+
+    cleanup(&pool, tenant_id).await;
+}
+
+#[tokio::test]
 async fn manual_accept_404s_for_unknown_booking_and_409s_for_disconnected_account() {
     let pool = store::connect(&database_url()).await.expect("connect");
     let tenant_id = insert_tenant(&pool).await;

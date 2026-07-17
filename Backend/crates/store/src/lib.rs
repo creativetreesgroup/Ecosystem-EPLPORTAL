@@ -26,7 +26,8 @@ pub mod tenants;
 // `list_for_tenant` bare would collide with `rule_booking_targets::list_for_tenant`'s
 // own re-export just below.
 pub use accept_events::{
-    insert as insert_accept_event, list_for_tenant as list_accept_events, NewAcceptEvent,
+    insert as insert_accept_event, list_for_booking, list_for_tenant as list_accept_events,
+    NewAcceptEvent,
 };
 pub use accept_rules::{
     list_all as list_accept_rules, replace_all as replace_accept_rules, NewAcceptRule,

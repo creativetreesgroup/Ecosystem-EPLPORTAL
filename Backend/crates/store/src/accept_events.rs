@@ -70,3 +70,24 @@ pub async fn list_for_tenant(
     tx.commit().await?;
     Ok(rows)
 }
+
+/// Per-booking audit trail — `GET /bookings/:id/audit-trail` (Fase 7c). A single booking has
+/// at most a handful of accept attempts (one per manual/auto try), so unlike `list_for_tenant`
+/// this takes no `limit`/`offset` — there is no realistic case where pagination matters here.
+pub async fn list_for_booking(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    booking_id: Uuid,
+) -> Result<Vec<AcceptEvent>, sqlx::Error> {
+    let mut tx = crate::begin_tenant_tx(pool, tenant_id).await?;
+    let rows = sqlx::query_as::<_, AcceptEvent>(
+        "SELECT id, tenant_id, booking_id, rule_id, outcome, local_dispatch_us, accept_e2e_ms, detail, created_at \
+         FROM accept_events WHERE tenant_id = $1 AND booking_id = $2 ORDER BY created_at DESC",
+    )
+    .bind(tenant_id)
+    .bind(booking_id)
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(rows)
+}

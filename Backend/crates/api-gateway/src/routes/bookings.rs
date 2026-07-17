@@ -89,10 +89,15 @@ pub struct BookingDetail {
     pub rule_matched: Option<Uuid>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Same derivation as `BookingListItem.route` (Fase 7b Task 1) — computed from `raw_data`
+    /// at read time, not a stored column. Added here because the detail drawer (Task 7) needs
+    /// it and this field was missed when `BookingListItem` got it in 7b.
+    pub route: Vec<String>,
 }
 
 impl From<store::models::Booking> for BookingDetail {
     fn from(b: store::models::Booking) -> Self {
+        let route = spx_client::normalize_booking(&b.raw_data).route_stops;
         Self {
             id: b.id,
             account_id: b.account_id,
@@ -108,6 +113,7 @@ impl From<store::models::Booking> for BookingDetail {
             rule_matched: b.rule_matched,
             created_at: b.created_at,
             updated_at: b.updated_at,
+            route,
         }
     }
 }
@@ -192,6 +198,20 @@ async fn spx_log(
         clamp_offset(params.offset),
     )
     .await?;
+    Ok(Json(rows.into_iter().map(AcceptEventItem::from).collect()))
+}
+
+/// `GET /bookings/:id/audit-trail` — the per-booking accept-attempt history (rule matched,
+/// outcome, timing) for Task 7's detail drawer. `session_auth` only, same gate as every other
+/// route in this router — this is per-booking data any logged-in tenant member should see,
+/// matching `/bookings/spx-log`'s existing gate rather than `bot_log`'s stricter
+/// `ManageBotSettings` permission (a different, coarser mechanism — see the design doc).
+async fn audit_trail(
+    State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Vec<AcceptEventItem>>, ApiError> {
+    let rows = store::accept_events::list_for_booking(&state.poller.pool, user.tenant_id, id).await?;
     Ok(Json(rows.into_iter().map(AcceptEventItem::from).collect()))
 }
 
@@ -457,6 +477,7 @@ pub fn bookings_router(state: AppState) -> Router<AppState> {
         .route("/live", get(live))
         .route("/history", get(history))
         .route("/{id}/detail", get(detail))
+        .route("/{id}/audit-trail", get(audit_trail))
         .route("/spx-log", get(spx_log))
         .route("/{id}/accept", post(accept))
         .route_layer(axum::middleware::from_fn_with_state(state, session_auth))
