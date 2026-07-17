@@ -1,5 +1,71 @@
 @import 'tailwindcss';
 
+/* Space Grotesk 700 (headings), IBM Plex Mono 400/600 (data/mono text), Inter 400/500/700
+   (body/UI) — self-hosted via @fontsource, no CDN. */
+@import '@fontsource/space-grotesk/700.css';
+@import '@fontsource/ibm-plex-mono/400.css';
+@import '@fontsource/ibm-plex-mono/600.css';
+@import '@fontsource/inter/400.css';
+@import '@fontsource/inter/500.css';
+@import '@fontsource/inter/700.css';
+
+/* Fase 7 "TOWER" design tokens — "Balanced Duo" (graphite + amber + teal), validated via
+   visual-companion brainstorming 2026-07-17 (see
+   Docs/superpowers/specs/2026-07-17-fase-7a-login-design-foundation-design.md). Dark values are
+   the base (this app's primary aesthetic is a dark "Command Center" console); [data-theme="light"]
+   below overrides the SAME custom-property names — Tailwind v4 utilities compile to
+   `var(--color-*)`, so every `bg-bg-base`/`text-text-primary`/etc. utility automatically follows
+   whichever theme is active with zero `dark:`-variant duplication anywhere in component markup.
+   Keep this block and Frontend/src/lib/tokens.ts's TOKENS object in sync — see that file's own
+   comment. */
 @theme {
-	/* Fase 7 fills this in with the Command Center design tokens. */
+	--color-bg-base: #15181c;
+	--color-bg-surface: #1c2025;
+	--color-border: #262b31;
+	--color-text-primary: #f1f3f5;
+	--color-text-muted: #8b95a1;
+	--color-accent: #eab308;
+	--color-live: #2dd4bf;
+	--color-danger: #f87171;
+
+	--radius-md: 0.5rem;
+	--radius-lg: 0.75rem;
+
+	--font-heading: 'Space Grotesk', system-ui, sans-serif;
+	--font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+	--font-body: 'Inter', system-ui, sans-serif;
+}
+
+/* Light-mode overrides — amber/teal are DELIBERATELY different values from the dark tokens
+   above (sharpened/darkened), not simply reused: the dark-mode amber (#eab308) and teal
+   (#2dd4bf) both fail WCAG 2.2 AA's 4.5:1 text-contrast ratio against a light background.
+   Verified with a real contrast-ratio tool (not eyeballed) as part of this task's own
+   verification step. */
+[data-theme='light'] {
+	--color-bg-base: #f7f6f3;
+	--color-bg-surface: #ffffff;
+	--color-border: #e4e1da;
+	--color-text-primary: #1c1e21;
+	--color-text-muted: #5c5952;
+	--color-accent: #b45309;
+	--color-live: #0d9488;
+	--color-danger: #dc2626;
+}
+
+body {
+	background-color: var(--color-bg-base);
+	color: var(--color-text-primary);
+	font-family: var(--font-body);
+}
+
+/* prefers-reduced-motion: disable/shrink every transition and animation globally, rather than
+   auditing each component individually — the cheapest correct way to honor this preference
+   project-wide as more components are added in later sub-phases. */
+@media (prefers-reduced-motion: reduce) {
+	*, *::before, *::after {
+		animation-duration: 0.01ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.01ms !important;
+		scroll-behavior: auto !important;
+	}
 }

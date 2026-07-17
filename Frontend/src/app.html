@@ -1,9 +1,30 @@
 <!doctype html>
-<html lang="en">
+<html lang="id">
 	<head>
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<meta name="text-scale" content="scale" />
+		<script>
+			// Anti-flash: set data-theme on <html> BEFORE any CSS paints, so the browser never
+			// renders one theme then swaps to another. localStorage wins if the user has
+			// explicitly chosen before; otherwise fall back to the OS preference; otherwise dark
+			// (this app's primary aesthetic). Deliberately synchronous, no async/defer — it MUST
+			// run before first paint.
+			(function () {
+				try {
+					var stored = localStorage.getItem('theme');
+					var theme =
+						stored === 'light' || stored === 'dark'
+							? stored
+							: window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches
+								? 'light'
+								: 'dark';
+					document.documentElement.setAttribute('data-theme', theme);
+				} catch (e) {
+					document.documentElement.setAttribute('data-theme', 'dark');
+				}
+			})();
+		</script>
 		%sveltekit.head%
 	</head>
 	<body data-sveltekit-preload-data="hover">

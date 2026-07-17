@@ -21,5 +21,10 @@
 		"tailwindcss": "^4.3.2",
 		"typescript": "^6.0.3",
 		"vite": "^8.0.16"
+	},
+	"dependencies": {
+		"@fontsource/ibm-plex-mono": "^5.2.7",
+		"@fontsource/inter": "^5.2.8",
+		"@fontsource/space-grotesk": "^5.2.10"
 	}
 }
