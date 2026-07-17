@@ -555,7 +555,7 @@ mod tests {
             }
         }
 
-        let live = bookings::list_live(&pool, tenant_id, 50, 0)
+        let live = bookings::list_live(&pool, tenant_id, 50, 0, &bookings::BookingFilter::default())
             .await
             .expect("list_live");
         let live_ids: Vec<&str> = live.iter().map(|b| b.spx_id.as_str()).collect();
@@ -595,7 +595,7 @@ mod tests {
         .await
         .expect("upsert");
 
-        let live = bookings::list_live(&pool, tenant_a, 50, 0)
+        let live = bookings::list_live(&pool, tenant_a, 50, 0, &bookings::BookingFilter::default())
             .await
             .expect("list_live");
         let id = live[0].id;
@@ -709,7 +709,7 @@ mod tests {
         .await
         .expect("upsert acct-b (same spx_id, different account, must NOT be rejected)");
 
-        let live = bookings::list_live(&pool, tenant_id, 50, 0)
+        let live = bookings::list_live(&pool, tenant_id, 50, 0, &bookings::BookingFilter::default())
             .await
             .expect("list_live");
         assert_eq!(
@@ -744,9 +744,10 @@ mod tests {
         .await
         .expect("re-upsert acct-a (same triple, must hit ON CONFLICT)");
 
-        let live_after_reupsert = bookings::list_live(&pool, tenant_id, 50, 0)
-            .await
-            .expect("list_live after re-upsert");
+        let live_after_reupsert =
+            bookings::list_live(&pool, tenant_id, 50, 0, &bookings::BookingFilter::default())
+                .await
+                .expect("list_live after re-upsert");
         assert_eq!(
             live_after_reupsert.len(),
             2,

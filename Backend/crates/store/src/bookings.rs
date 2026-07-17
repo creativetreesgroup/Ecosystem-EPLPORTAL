@@ -32,8 +32,29 @@
 use std::collections::HashSet;
 
 use serde_json::Value;
-use sqlx::PgPool;
+use sqlx::{PgPool, QueryBuilder};
 use uuid::Uuid;
+
+/// Optional filter conditions for `list_live`/`list_history` — the first dynamic-WHERE-clause
+/// pattern in this crate. `status` is `&'static str` because callers must validate against the
+/// real 3-value vocabulary BEFORE constructing this (see `api-gateway`'s `parse_status_filter`)
+/// — this type intentionally cannot represent an invalid status, so validation can't be
+/// forgotten at a call site.
+#[derive(Debug, Default, Clone)]
+pub struct BookingFilter {
+    pub status: Option<&'static str>,
+    pub spx_id: Option<String>,
+    pub from: Option<chrono::DateTime<chrono::Utc>>,
+    pub to: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// Escapes `%`/`_`/`\` in a caller-supplied search term before it's embedded in a `LIKE`
+/// pattern — without this, a user searching for a literal `%` or `_` in an spx_id would get
+/// unintended wildcard matches. Not a SQL-injection concern (the value is still `push_bind`-ed,
+/// never string-interpolated into the query) — this is purely about `LIKE` semantics.
+fn escape_like(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
+}
 
 /// Minimal fields the poller has at upsert time.
 #[derive(Debug, Clone)]
@@ -259,54 +280,100 @@ pub async fn resurrect_pending(
     Ok(res.rows_affected())
 }
 
-/// `/bookings/live`: pending bookings, newest first. Uses the `idx_bookings_live_covering`
-/// index (`(tenant_id, status, created_at DESC) INCLUDE (...)`, migration 0007).
-/// `limit`/`offset` are the caller's job to clamp to a sane range (the route layer does this,
-/// not this fn — mirrors this crate's existing "store trusts its caller" convention).
+/// `/bookings/live`: pending bookings by default (or `filter.status` if set), newest first.
+/// Uses the `idx_bookings_live_covering` index for the (typical) unfiltered/status-only case;
+/// `spx_id`/date-range filters add extra predicates the planner evaluates after that index scan
+/// (no additional index exists for those — acceptable at this table's expected volume, per the
+/// design doc's "Parity dulu, optimasi kedua" scoping).
+/// `limit`/`offset` are the caller's job to clamp to a sane range (the route layer does this).
 pub async fn list_live(
     pool: &PgPool,
     tenant_id: Uuid,
     limit: i64,
     offset: i64,
+    filter: &BookingFilter,
 ) -> Result<Vec<crate::models::Booking>, sqlx::Error> {
     let mut tx = crate::begin_tenant_tx(pool, tenant_id).await?;
-    let rows = sqlx::query_as::<_, crate::models::Booking>(
+    let mut qb = QueryBuilder::new(
         "SELECT id, tenant_id, account_id, spx_id, raw_data, status, is_coc, needs_enrichment, \
          service_type, weight, cod_amount, auto_accepted, accept_latency_ms, rule_matched, \
-         created_at, updated_at FROM bookings \
-         WHERE tenant_id = $1 AND status = 'pending' \
-         ORDER BY created_at DESC LIMIT $2 OFFSET $3",
-    )
-    .bind(tenant_id)
-    .bind(limit)
-    .bind(offset)
-    .fetch_all(&mut *tx)
-    .await?;
+         created_at, updated_at FROM bookings WHERE tenant_id = ",
+    );
+    qb.push_bind(tenant_id);
+    qb.push(" AND status = ");
+    qb.push_bind(filter.status.unwrap_or("pending"));
+    if let Some(spx_id) = &filter.spx_id {
+        qb.push(" AND spx_id LIKE ");
+        qb.push_bind(format!("{}%", escape_like(spx_id)));
+        qb.push(" ESCAPE '\\'");
+    }
+    if let Some(from) = filter.from {
+        qb.push(" AND created_at >= ");
+        qb.push_bind(from);
+    }
+    if let Some(to) = filter.to {
+        qb.push(" AND created_at <= ");
+        qb.push_bind(to);
+    }
+    qb.push(" ORDER BY created_at DESC LIMIT ");
+    qb.push_bind(limit);
+    qb.push(" OFFSET ");
+    qb.push_bind(offset);
+    let rows = qb
+        .build_query_as::<crate::models::Booking>()
+        .fetch_all(&mut *tx)
+        .await?;
     tx.commit().await?;
     Ok(rows)
 }
 
-/// `/bookings/history`: terminal bookings (`accepted`/`failed`), newest first. Uses the
-/// `idx_bookings_created_brin` BRIN index for the time-ordered scan.
+/// `/bookings/history`: terminal bookings (`accepted`/`failed` by default, or narrowed to just
+/// `filter.status` if set), newest first. Uses the `idx_bookings_created_brin` BRIN index for
+/// the time-ordered scan; same filter-cost caveat as `list_live` for `spx_id`/date-range.
 pub async fn list_history(
     pool: &PgPool,
     tenant_id: Uuid,
     limit: i64,
     offset: i64,
+    filter: &BookingFilter,
 ) -> Result<Vec<crate::models::Booking>, sqlx::Error> {
     let mut tx = crate::begin_tenant_tx(pool, tenant_id).await?;
-    let rows = sqlx::query_as::<_, crate::models::Booking>(
+    let mut qb = QueryBuilder::new(
         "SELECT id, tenant_id, account_id, spx_id, raw_data, status, is_coc, needs_enrichment, \
          service_type, weight, cod_amount, auto_accepted, accept_latency_ms, rule_matched, \
-         created_at, updated_at FROM bookings \
-         WHERE tenant_id = $1 AND status IN ('accepted', 'failed') \
-         ORDER BY created_at DESC LIMIT $2 OFFSET $3",
-    )
-    .bind(tenant_id)
-    .bind(limit)
-    .bind(offset)
-    .fetch_all(&mut *tx)
-    .await?;
+         created_at, updated_at FROM bookings WHERE tenant_id = ",
+    );
+    qb.push_bind(tenant_id);
+    match filter.status {
+        Some(status) => {
+            qb.push(" AND status = ");
+            qb.push_bind(status);
+        }
+        None => {
+            qb.push(" AND status IN ('accepted', 'failed')");
+        }
+    }
+    if let Some(spx_id) = &filter.spx_id {
+        qb.push(" AND spx_id LIKE ");
+        qb.push_bind(format!("{}%", escape_like(spx_id)));
+        qb.push(" ESCAPE '\\'");
+    }
+    if let Some(from) = filter.from {
+        qb.push(" AND created_at >= ");
+        qb.push_bind(from);
+    }
+    if let Some(to) = filter.to {
+        qb.push(" AND created_at <= ");
+        qb.push_bind(to);
+    }
+    qb.push(" ORDER BY created_at DESC LIMIT ");
+    qb.push_bind(limit);
+    qb.push(" OFFSET ");
+    qb.push_bind(offset);
+    let rows = qb
+        .build_query_as::<crate::models::Booking>()
+        .fetch_all(&mut *tx)
+        .await?;
     tx.commit().await?;
     Ok(rows)
 }

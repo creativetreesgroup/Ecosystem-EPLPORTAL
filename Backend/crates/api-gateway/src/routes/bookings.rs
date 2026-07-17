@@ -22,9 +22,31 @@ pub struct ListParams {
     pub limit: i64,
     #[serde(default)]
     pub offset: i64,
+    /// Optional status override — when present, replaces the endpoint's own default status
+    /// set (`live` defaults to `pending`, `history` defaults to `accepted`+`failed`). Validated
+    /// by `parse_status_filter` before use — never passed into SQL as a raw client string.
+    pub status: Option<String>,
+    /// Exact-or-prefix match on `spx_id` (uses the `(tenant_id, spx_id)` unique index).
+    pub spx_id: Option<String>,
+    /// Inclusive lower bound on `created_at`.
+    pub from: Option<DateTime<Utc>>,
+    /// Inclusive upper bound on `created_at`.
+    pub to: Option<DateTime<Utc>>,
 }
 fn default_limit() -> i64 {
     50
+}
+
+/// Validates a caller-supplied status filter against the real, exhaustive vocabulary
+/// `bookings.status` ever takes (no DB CHECK constraint exists on this column — this
+/// validation IS the enforcement; see `store::bookings`'s own writers for the 3 real values).
+fn parse_status_filter(status: &str) -> Result<&'static str, ApiError> {
+    match status {
+        "pending" => Ok("pending"),
+        "accepted" => Ok("accepted"),
+        "failed" => Ok("failed"),
+        other => Err(ApiError::BadRequest(format!("invalid status filter: {other}"))),
+    }
 }
 /// Clamp caller-supplied pagination to a sane range — `store`'s own list fns trust their
 /// caller (see `bookings.rs`'s doc comment on `list_live`), so this route is that caller.
@@ -123,11 +145,19 @@ async fn live(
     Extension(user): Extension<CurrentUser>,
     Query(params): Query<ListParams>,
 ) -> Result<Json<Vec<BookingListItem>>, ApiError> {
+    let status = params.status.as_deref().map(parse_status_filter).transpose()?;
+    let filter = store::bookings::BookingFilter {
+        status,
+        spx_id: params.spx_id.clone(),
+        from: params.from,
+        to: params.to,
+    };
     let rows = store::bookings::list_live(
         &state.poller.pool,
         user.tenant_id,
         clamp_limit(params.limit),
         clamp_offset(params.offset),
+        &filter,
     )
     .await?;
     Ok(Json(rows.into_iter().map(BookingListItem::from).collect()))
@@ -138,11 +168,19 @@ async fn history(
     Extension(user): Extension<CurrentUser>,
     Query(params): Query<ListParams>,
 ) -> Result<Json<Vec<BookingListItem>>, ApiError> {
+    let status = params.status.as_deref().map(parse_status_filter).transpose()?;
+    let filter = store::bookings::BookingFilter {
+        status,
+        spx_id: params.spx_id.clone(),
+        from: params.from,
+        to: params.to,
+    };
     let rows = store::bookings::list_history(
         &state.poller.pool,
         user.tenant_id,
         clamp_limit(params.limit),
         clamp_offset(params.offset),
+        &filter,
     )
     .await?;
     Ok(Json(rows.into_iter().map(BookingListItem::from).collect()))

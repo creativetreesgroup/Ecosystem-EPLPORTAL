@@ -528,14 +528,16 @@ async fn detail_includes_route_derived_from_raw_data() {
     .await
     .expect("seed booking");
 
-    // NOTE: task brief's transcription used `store::bookings::list_live(&pool, tenant_id, 10,
-    // 0, &store::bookings::BookingFilter::default())` — Task 2's future signature, which does
-    // not exist yet. Using Task 1's CURRENT real signature here instead (no filter param).
-    // Task 2's implementer must update this call site when `list_live` gains the filter param.
     let id = {
-        let live = store::bookings::list_live(&pool, tenant_id, 10, 0)
-            .await
-            .expect("list");
+        let live = store::bookings::list_live(
+            &pool,
+            tenant_id,
+            10,
+            0,
+            &store::bookings::BookingFilter::default(),
+        )
+        .await
+        .expect("list");
         live.iter()
             .find(|b| b.spx_id == "detail-route-1")
             .expect("seeded row")
@@ -585,12 +587,16 @@ async fn audit_trail_returns_only_this_bookings_events_tenant_scoped() {
     )
     .await
     .expect("seed booking");
-    // Same pre-Task-2 `list_live` signature note as `detail_includes_route_derived_from_raw_data`
-    // above.
     let booking = {
-        let live = store::bookings::list_live(&pool, tenant_id, 10, 0)
-            .await
-            .expect("list");
+        let live = store::bookings::list_live(
+            &pool,
+            tenant_id,
+            10,
+            0,
+            &store::bookings::BookingFilter::default(),
+        )
+        .await
+        .expect("list");
         live.into_iter()
             .find(|b| b.spx_id == "audit-1")
             .expect("seeded row")
@@ -692,9 +698,15 @@ async fn audit_trail_is_tenant_isolated_across_real_tenants() {
     .await
     .expect("seed booking under tenant A");
     let booking_a = {
-        let live = store::bookings::list_live(&pool, tenant_a, 10, 0)
-            .await
-            .expect("list");
+        let live = store::bookings::list_live(
+            &pool,
+            tenant_a,
+            10,
+            0,
+            &store::bookings::BookingFilter::default(),
+        )
+        .await
+        .expect("list");
         live.into_iter()
             .find(|b| b.spx_id == "audit-cross-1")
             .expect("seeded row")
@@ -740,6 +752,170 @@ async fn audit_trail_is_tenant_isolated_across_real_tenants() {
         .execute(&pool)
         .await
         .ok();
+}
+
+#[tokio::test]
+async fn history_status_filter_rejects_invalid_value_with_400() {
+    let pool = store::connect(&database_url()).await.expect("connect");
+    store::run_migrations(&pool).await.expect("migrate");
+    let tenant_id = insert_tenant(&pool).await;
+    insert_portal_user(&pool, tenant_id, "owner").await;
+
+    let state = build_state(pool.clone(), tenant_id).await;
+    let base = spawn_server(state).await;
+    let http = reqwest::Client::new();
+    let cookie = login_cookie(&http, &base, "owner").await;
+
+    let resp = http
+        .get(format!("{base}/bookings/history?status=bogus"))
+        .header("Cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+
+    cleanup(&pool, tenant_id).await;
+}
+
+#[tokio::test]
+async fn history_spx_id_filter_narrows_to_matching_prefix() {
+    let pool = store::connect(&database_url()).await.expect("connect");
+    store::run_migrations(&pool).await.expect("migrate");
+    let tenant_id = insert_tenant(&pool).await;
+    insert_portal_user(&pool, tenant_id, "owner").await;
+
+    for spx_id in ["filt-100", "filt-200", "other-300"] {
+        store::upsert_booking(
+            &pool,
+            tenant_id,
+            &store::BookingUpsert {
+                account_id: "acct-1".to_string(),
+                spx_id: spx_id.to_string(),
+                status: "pending".to_string(),
+                is_coc: false,
+                raw_data: serde_json::json!({}),
+            },
+        )
+        .await
+        .expect("seed booking");
+        store::update_booking_status(
+            &pool,
+            tenant_id,
+            spx_id,
+            store::BookingStatusUpdate {
+                status: "accepted",
+                latency_ms: Some(1),
+                auto_accepted: true,
+                rule_matched: None,
+                accept_reason: None,
+            },
+        )
+        .await
+        .expect("mark accepted");
+    }
+
+    let state = build_state(pool.clone(), tenant_id).await;
+    let base = spawn_server(state).await;
+    let http = reqwest::Client::new();
+    let cookie = login_cookie(&http, &base, "owner").await;
+
+    let resp = http
+        .get(format!("{base}/bookings/history?spx_id=filt-"))
+        .header("Cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Vec<serde_json::Value> = resp.json().await.unwrap();
+    let spx_ids: Vec<&str> = body.iter().map(|b| b["spx_id"].as_str().unwrap()).collect();
+    assert_eq!(spx_ids.len(), 2, "expected only the two filt-* rows, got {spx_ids:?}");
+    assert!(spx_ids.contains(&"filt-100"));
+    assert!(spx_ids.contains(&"filt-200"));
+    assert!(!spx_ids.contains(&"other-300"));
+
+    cleanup(&pool, tenant_id).await;
+}
+
+#[tokio::test]
+async fn history_status_filter_narrows_to_single_status() {
+    let pool = store::connect(&database_url()).await.expect("connect");
+    store::run_migrations(&pool).await.expect("migrate");
+    let tenant_id = insert_tenant(&pool).await;
+    insert_portal_user(&pool, tenant_id, "owner").await;
+
+    store::upsert_booking(
+        &pool,
+        tenant_id,
+        &store::BookingUpsert {
+            account_id: "acct-1".to_string(),
+            spx_id: "status-accepted-1".to_string(),
+            status: "pending".to_string(),
+            is_coc: false,
+            raw_data: serde_json::json!({}),
+        },
+    )
+    .await
+    .expect("seed booking");
+    store::update_booking_status(
+        &pool,
+        tenant_id,
+        "status-accepted-1",
+        store::BookingStatusUpdate {
+            status: "accepted",
+            latency_ms: Some(1),
+            auto_accepted: true,
+            rule_matched: None,
+            accept_reason: None,
+        },
+    )
+    .await
+    .expect("mark accepted");
+
+    store::upsert_booking(
+        &pool,
+        tenant_id,
+        &store::BookingUpsert {
+            account_id: "acct-1".to_string(),
+            spx_id: "status-failed-1".to_string(),
+            status: "pending".to_string(),
+            is_coc: false,
+            raw_data: serde_json::json!({}),
+        },
+    )
+    .await
+    .expect("seed booking");
+    store::update_booking_status(
+        &pool,
+        tenant_id,
+        "status-failed-1",
+        store::BookingStatusUpdate {
+            status: "failed",
+            latency_ms: None,
+            auto_accepted: false,
+            rule_matched: None,
+            accept_reason: Some("manual_accept_failed"),
+        },
+    )
+    .await
+    .expect("mark failed");
+
+    let state = build_state(pool.clone(), tenant_id).await;
+    let base = spawn_server(state).await;
+    let http = reqwest::Client::new();
+    let cookie = login_cookie(&http, &base, "owner").await;
+
+    let resp = http
+        .get(format!("{base}/bookings/history?status=failed"))
+        .header("Cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert_eq!(body.len(), 1);
+    assert_eq!(body[0]["spx_id"], "status-failed-1");
+
+    cleanup(&pool, tenant_id).await;
 }
 
 #[tokio::test]
