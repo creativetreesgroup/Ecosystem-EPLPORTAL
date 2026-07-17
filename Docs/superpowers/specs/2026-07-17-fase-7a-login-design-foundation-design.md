@@ -177,9 +177,19 @@ Backend/
 4. `docker compose up` end-to-end: request dari browser ke `tower-web` (login page) yang
    memanggil `/auth/portal-login` benar-benar tembus Caddy ke `reactor-core` dan kembali —
    ini bukti langsung bahwa perbaikan Caddyfile bekerja, bukan cuma dibaca ulang.
+   **Status: ditutup lewat verifikasi Task 2 sendiri** (real Caddy + real `tower-web` + stand-in
+   sementara untuk `tower-reactor-core` — lihat tracked note di bawah untuk alasannya), BUKAN
+   lewat Task 6 (Playwright Task 6 jalan terhadap `pnpm dev` + `cargo run` native, tidak
+   menyentuh Docker/Caddy sama sekali) — jangan berasumsi Task 6 menutup item ini juga.
 5. WS upgrade (`/ws`) menerima token dari cookie `HttpOnly` — dites dengan request WS nyata yang
    TIDAK menyertakan `?session=` sama sekali, hanya cookie, dan berhasil ter-autentikasi.
 6. Keyboard-only walkthrough penuh (isi form, toggle password, submit, baca error) tanpa mouse.
 7. `cargo test`/`clippy`/`deny` tetap bersih workspace-wide (perubahan `ws.rs` menyentuh kode
    Rust yang sudah di-review sebelumnya).
 8. `pnpm check` (svelte-check) bersih; build produksi (`pnpm build`) sukses.
+
+## Tracked note: `reactor-core`/`auth-sidecar` Docker image tidak bisa di-build (Task 2 whole-branch review finding, ditemukan sesi ini — disclosed, non-blocking untuk Fase 7a, tapi nyata)
+
+`Docker/reactor-core.Dockerfile` (dan kemungkinan besar `auth-sidecar.Dockerfile`, base builder yang sama) **tidak bisa membangun image `reactor-core` sungguhan** di lingkungan ini — builder stage-nya (`rust:1-slim-bookworm` + `cmake` saja) kekurangan toolchain yang genuinely dibutuhkan `spx-client`'s `wreq`→`btls-sys` dependency untuk vendor BoringSSL: `git` (bookkeeping vendoring), lalu `make`/`gcc`/`g++` (cmake butuh generator), lalu `libclang` (untuk `bindgen`). Dikonfirmasi langsung sesi ini (Task 2, dengan mem-patch sementara lalu me-revert penuh — tidak masuk commit). Bukti independen tambahan: image `tower-tower-reactor-core:latest` yang ter-cache di environment ini dibuild 2026-07-12/13, SEBELUM `api-gateway` benar-benar di-mount ke `reactor-core` (commit `4c820ec`, 2026-07-15) — artinya tidak pernah ada build sukses dari kode `reactor-core` yang sekarang.
+
+Ini gap infrastruktur nyata yang baru ketahuan karena baru sekarang (Task 2, verifikasi Caddyfile) ada yang benar-benar mencoba `docker compose up` penuh sejak Fase 0. **Ditutup untuk sub-fase ini** lewat strategi verifikasi Task 2 (stand-in sementara untuk proses `reactor-core`, real Caddy + real network + real `tower-web`, dihapus setelah verifikasi — lihat ledger Task 2). Perbaikan toolchain Dockerfile-nya sendiri **dilacak untuk Fase 8** (sudah memegang hardening Docker/deployment secara umum, pola yang sama seperti gap provisioning `app_role`) — bukan pekerjaan sub-fase login page.
