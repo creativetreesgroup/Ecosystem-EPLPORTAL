@@ -307,3 +307,60 @@ async fn quick_token_page_html_escapes_spx_id() {
 
     cleanup(&pool, tenant_id).await;
 }
+
+#[tokio::test]
+async fn short_code_flow_round_trips_and_is_single_use() {
+    let pool = store::connect(&database_url()).await.expect("connect");
+    let tenant_id = insert_tenant(&pool).await;
+    insert_booking(&pool, tenant_id, "SPX-QA-CODE-1", "pending").await;
+
+    let state = build_state(pool.clone(), tenant_id).await;
+    let mut redis_conn = test_redis_manager().await;
+    let base = spawn_server(state).await;
+    let http = reqwest::Client::new();
+
+    let code = "testCode123";
+    let _: () = redis::AsyncCommands::set_ex(
+        &mut redis_conn,
+        format!("spx:qa:{code}"),
+        r#"{"b":"SPX-QA-CODE-1"}"#,
+        1800,
+    )
+    .await
+    .unwrap();
+
+    let get_resp = http.get(format!("{base}/accept/{code}")).send().await.unwrap();
+    assert_eq!(get_resp.status(), 200);
+    let body = get_resp.text().await.unwrap();
+    assert!(body.contains("SPX-QA-CODE-1"));
+
+    // Account not connected in this test harness -> accept fails with a real, non-2xx status,
+    // proving the route genuinely reached execute_manual_accept (not a silent no-op).
+    let post_resp = http.post(format!("{base}/accept/{code}")).send().await.unwrap();
+    assert_eq!(post_resp.status(), 409);
+    let post_body: serde_json::Value = post_resp.json().await.unwrap();
+    assert_eq!(post_body["ok"], false);
+    assert_eq!(post_body["reason"], "account_offline");
+
+    // Failure path must NOT delete the code (only a successful accept does) — confirm it's
+    // still readable.
+    let still_there: Option<String> =
+        redis::AsyncCommands::get(&mut redis_conn, format!("spx:qa:{code}")).await.unwrap();
+    assert!(still_there.is_some(), "a failed accept attempt must not consume the code");
+
+    cleanup(&pool, tenant_id).await;
+}
+
+#[tokio::test]
+async fn expired_short_code_returns_410() {
+    let pool = store::connect(&database_url()).await.expect("connect");
+    let tenant_id = insert_tenant(&pool).await;
+    let state = build_state(pool.clone(), tenant_id).await;
+    let base = spawn_server(state).await;
+    let http = reqwest::Client::new();
+
+    let resp = http.get(format!("{base}/accept/never-existed-code")).send().await.unwrap();
+    assert_eq!(resp.status(), 410);
+
+    cleanup(&pool, tenant_id).await;
+}

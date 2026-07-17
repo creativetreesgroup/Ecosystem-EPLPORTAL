@@ -71,6 +71,12 @@ pub fn build_router(state: AppState) -> Router {
         // dedicated rate-limit layer added on this nest — that's a disclosed follow-up hardening
         // item, not silently dropped scope.
         .nest("/q", routes::quick_accept::hmac_router(state.clone()))
+        // `/accept/:code` (Redis short-code quick-accept, Task 5) — same reasoning as `/q` right
+        // above: also outside every `session_auth` nest (the short code itself is the
+        // authorization, resolved via Redis instead of an HMAC token), and mounted here now
+        // rather than deferred, because this task's own test suite drives it through this exact
+        // `build_router`. Same disclosed follow-up gap as `/q`: no dedicated rate-limit layer yet.
+        .nest("/accept", routes::quick_accept::short_code_router(state.clone()))
         .with_state(state.clone())
         .layer(RequestBodyLimitLayer::new(GLOBAL_BODY_LIMIT_BYTES));
 

@@ -238,3 +238,146 @@ pub fn hmac_router(_state: AppState) -> Router<AppState> {
         .route("/{token}", get(get_quick_token))
         .route("/accept", post(post_quick_accept))
 }
+
+/// `spx:qa:<code>` Redis key (30-min TTL, set by a future code-generator — see the struct doc
+/// below) → JSON `{"b": "<spx_id>"}`.
+fn short_code_redis_key(code: &str) -> String {
+    format!("spx:qa:{code}")
+}
+
+/// This task's minimal deserialization shape for a `spx:qa:<code>` value — the reference's own
+/// key ALSO carries display fields (`n/r/v/s/st/pe/ba`) for a richer page, but nothing in TOWER
+/// writes those yet since code *generation* is out of this plan's scope (see the plan's Global
+/// Constraints; a future generator can extend this shape additively — `serde`'s default
+/// behavior of ignoring unknown fields on deserialize already keeps this reader forward-compatible
+/// with any such addition).
+#[derive(Debug, Deserialize)]
+struct ShortCodeEntry {
+    b: String,
+}
+
+/// `GET /accept/:code` — same confirmation-page shape as `get_quick_token`, but resolving the
+/// booking via a short-lived Redis code instead of a self-contained HMAC token. Reuses
+/// `confirmation_page`/`error_page`/`is_valid_token_shape` verbatim (Task 4, same file) — this
+/// handler owns none of its own HTML-building, escaping, or CSP-setting logic, so it inherits
+/// both of Task 4's post-review fixes (CSP scoping, `spx_id` escaping) for free.
+async fn get_short_code(State(mut state): State<AppState>, Path(code): Path<String>) -> Response {
+    if !is_valid_token_shape(&code) {
+        return error_page(StatusCode::BAD_REQUEST, "Tautan tidak valid.");
+    }
+    let raw: Option<String> =
+        redis::AsyncCommands::get(&mut state.redis, short_code_redis_key(&code))
+            .await
+            .unwrap_or(None);
+    let Some(raw) = raw else {
+        return error_page(StatusCode::GONE, "Tautan sudah kedaluwarsa.");
+    };
+    let Ok(entry) = serde_json::from_str::<ShortCodeEntry>(&raw) else {
+        return error_page(StatusCode::INTERNAL_SERVER_ERROR, "Terjadi kesalahan.");
+    };
+    let booking = match store::bookings::get_by_spx_id(&state.poller.pool, state.tenant_id, &entry.b)
+        .await
+    {
+        Ok(Some(b)) => b,
+        Ok(None) => return error_page(StatusCode::NOT_FOUND, "Tiket tidak ditemukan."),
+        Err(_) => return error_page(StatusCode::INTERNAL_SERVER_ERROR, "Terjadi kesalahan."),
+    };
+    let page_status = match booking.status.as_str() {
+        "accepted" => "accepted",
+        "pending" => "available",
+        _ => "gone",
+    };
+    // `post_body` is `"{}"` — the short code lives in the URL path (`/accept/:code`) already, so
+    // unlike `get_quick_token`'s `{"token": ...}` body there's nothing else `post_short_code`
+    // needs to read out of the request body.
+    confirmation_page(&entry.b, page_status, &format!("/accept/{code}"), "{}")
+}
+
+/// `POST /accept/:code` — same outcome contract as `post_quick_accept`
+/// (`ManualAcceptResponse`/`status_for`, reused verbatim, not duplicated), but resolving the
+/// booking via the Redis short code instead of an HMAC token, and deleting the Redis key on a
+/// winning accept only (single-use). A failed/retriable attempt (`ok: false`) deliberately leaves
+/// the code in Redis untouched, matching the reference's own `redis.del(...)` call sitting on the
+/// winning path only — a `not_pending`/`account_offline`/`already_claimed`/`dispatch_failed`/
+/// `timeout`/`reply_dropped` outcome must remain retryable via the same link.
+async fn post_short_code(
+    State(mut state): State<AppState>,
+    Path(code): Path<String>,
+) -> (StatusCode, Json<ManualAcceptResponse>) {
+    if !is_valid_token_shape(&code) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ManualAcceptResponse {
+                ok: false,
+                reason: "bad_request".to_string(),
+                message: "Permintaan tidak valid".to_string(),
+            }),
+        );
+    }
+    let key = short_code_redis_key(&code);
+    let raw: Option<String> = redis::AsyncCommands::get(&mut state.redis, key.clone())
+        .await
+        .unwrap_or(None);
+    let Some(raw) = raw else {
+        return (
+            StatusCode::GONE,
+            Json(ManualAcceptResponse {
+                ok: false,
+                reason: "expired_or_invalid".to_string(),
+                message: "Tautan tidak valid atau kedaluwarsa".to_string(),
+            }),
+        );
+    };
+    let Ok(entry) = serde_json::from_str::<ShortCodeEntry>(&raw) else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ManualAcceptResponse {
+                ok: false,
+                reason: "internal".to_string(),
+                message: "Terjadi kesalahan".to_string(),
+            }),
+        );
+    };
+    let booking = match store::bookings::get_by_spx_id(&state.poller.pool, state.tenant_id, &entry.b)
+        .await
+    {
+        Ok(Some(b)) => b,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(ManualAcceptResponse {
+                    ok: false,
+                    reason: "not_found".to_string(),
+                    message: "Tiket tidak ditemukan".to_string(),
+                }),
+            );
+        }
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ManualAcceptResponse {
+                    ok: false,
+                    reason: "internal".to_string(),
+                    message: "Terjadi kesalahan".to_string(),
+                }),
+            );
+        }
+    };
+
+    let result = execute_manual_accept(&state, state.tenant_id, &booking).await;
+    // Single-use on success only — see this fn's own doc comment above.
+    if result.ok {
+        let _: Result<i64, redis::RedisError> = redis::AsyncCommands::del(&mut state.redis, key).await;
+    }
+    let status = status_for(&result);
+    (status, Json(result))
+}
+
+/// Mounted at `/accept` in `build_router` — mounted here now, in Task 5, for the same reason
+/// Task 4 mounted `/q` in its own task rather than deferring to Task 6: this task's own test
+/// suite (`tests/quick_accept_routes.rs`) drives it through the real `build_router`, so it has to
+/// be reachable for those tests to mean anything. Same disclosed gap as `/q`: no dedicated
+/// rate-limit layer yet.
+pub fn short_code_router(_state: AppState) -> Router<AppState> {
+    Router::new().route("/{code}", get(get_short_code).post(post_short_code))
+}
