@@ -97,7 +97,17 @@ fn is_safe_outbound_url(raw: &str) -> bool {
     match host {
         url::Host::Domain(d) => {
             let dl = d.to_lowercase();
-            if dl == "localhost" || dl.ends_with(".local") {
+            // `.internal` is a common convention for internal-only DNS zones across cloud
+            // providers, and covers GCP's canonical cloud-metadata hostname
+            // (`metadata.google.internal`) on its own; `metadata.goog` is GCP's shorter alias
+            // and does NOT end in `.internal`, so it needs its own explicit check. Both resolve
+            // to the same `169.254.169.254` IP-literal endpoint already blocked below, closing
+            // the DNS-name half of that same gap (whole-branch review finding).
+            if dl == "localhost"
+                || dl.ends_with(".local")
+                || dl.ends_with(".internal")
+                || dl == "metadata.goog"
+            {
                 return false;
             }
         }
@@ -193,14 +203,22 @@ async fn put_settings(
             ApiError::BadRequest("waha_api_key is required on first setup".to_string())
         })?
     } else {
-        WahaSettings::encrypt_new(
+        // `encrypt_new` always sets `portal_label: String::new()` internally (it has no way to
+        // know about a previous row) — carry the previous `portal_label` forward explicitly so a
+        // key rotation doesn't silently wipe it, matching the blank-key branch above (which
+        // reuses `existing` wholesale and so preserves it for free). Minor review finding.
+        let mut fresh = WahaSettings::encrypt_new(
             &state.master_key,
             user.tenant_id,
             &body.waha_url,
             &body.waha_session,
             &body.waha_api_key,
         )
-        .map_err(|e| ApiError::Internal(format!("{e:?}")))?
+        .map_err(|e| ApiError::Internal(format!("{e:?}")))?;
+        if let Some(prev) = &existing {
+            fresh.portal_label = prev.portal_label.clone();
+        }
+        fresh
     };
 
     waha.waha_url = body.waha_url.trim().to_string();
