@@ -10,8 +10,18 @@
 # attacker rotate it per request for an unlimited rate-limit budget, defeating
 # the limiter entirely. Do not remove this directive without also revisiting
 # `rate_limit.rs`'s trust-invariant doc comment.
+#
+# Fase 7a fix (this file's rule previously only matched `/api/*`, which no
+# route in `api-gateway`/`ws-hub` has ever actually used — every real mount
+# point is listed explicitly below instead, matching Fase 8's own documented
+# routing scheme ("label routing /api /auth /ws -> reactor-core, else web")
+# so the VPS Traefik overlay can mirror this list verbatim with "Nol
+# perubahan kode", per the master spec's own promise for that swap).
 :80 {
-	handle_path /api/* {
+	@backend path /healthz /auth/* /bookings/* /prices /prices/* /locations /locations/* \
+ /bot/* /branding /branding/* /q/* /accept/* /ws
+
+	handle @backend {
 		reverse_proxy tower-reactor-core:8081 {
 			header_up X-Forwarded-For {remote_host}
 		}
