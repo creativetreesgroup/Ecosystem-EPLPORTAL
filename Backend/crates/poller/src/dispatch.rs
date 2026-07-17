@@ -52,6 +52,8 @@ pub async fn dispatch_booking(
     st: &mut PollerState,
     booking: &SpxBooking,
 ) -> DispatchResult {
+    let decision_started = Instant::now();
+
     // 1. Match against compiled rules (first-wins index).
     let core = to_core_booking(booking);
     let idx = match find_best_matching_rule_compiled(&st.rules, &core, &st.match_state) {
@@ -64,6 +66,19 @@ pub async fn dispatch_booking(
     if !st.dedup.try_begin_accept(&booking.id) {
         return DispatchResult::Skipped;
     }
+    // Decision-path latency (master spec's "≤1ms p99" headline metric) ends HERE
+    // — the Layer 1 in-proc claim (a DashMap CAS, no I/O) just succeeded. Everything
+    // after this point — Layer 2's Redis round-trip below, then the HTTP accept call
+    // — is deliberately EXCLUDED: the master spec describes the Redis Lua gate as
+    // "async, OFF the critical path", and this metric exists to prove the in-proc
+    // decision stays fast independent of network I/O. Do not move this read to
+    // after Layer 2 or the HTTP dispatch — that would fold network I/O into a
+    // number the /command UI (Task 7) presents as the in-proc decision latency.
+    let local_dispatch_us: u64 = decision_started
+        .elapsed()
+        .as_micros()
+        .try_into()
+        .unwrap_or(u64::MAX);
 
     // 3. Layer 2 durable atomic gate (fail-closed).
     match shared
@@ -108,7 +123,7 @@ pub async fn dispatch_booking(
 
     match result.reason {
         AcceptReason::Ok => {
-            finalize_win(shared, st, booking, &meta, latency_ms).await;
+            finalize_win(shared, st, booking, &meta, latency_ms, local_dispatch_us).await;
             DispatchResult::Accepted
         }
         AcceptReason::AgencyDup => {
@@ -122,7 +137,7 @@ pub async fn dispatch_booking(
             .await
             {
                 AgencyDupOutcome::Ours | AgencyDupOutcome::Inconclusive => {
-                    finalize_win(shared, st, booking, &meta, latency_ms).await;
+                    finalize_win(shared, st, booking, &meta, latency_ms, local_dispatch_us).await;
                     DispatchResult::Accepted
                 }
                 AgencyDupOutcome::LostToAgency { rival_email } => {
@@ -147,19 +162,29 @@ pub async fn dispatch_booking(
                         let rule_name = meta.name.clone();
                         let latency_ms_i64 = latency_ms as i64;
                         tokio::spawn(async move {
-                            notifier::notify_agency_loss(&settings, &spx_id, &rival, latency_ms_i64, Some(&rule_name)).await;
+                            notifier::notify_agency_loss(
+                                &settings,
+                                &spx_id,
+                                &rival,
+                                latency_ms_i64,
+                                Some(&rule_name),
+                            )
+                            .await;
                         });
                     }
                     if let Some(pub_) = &shared.redis {
-                        pub_.record_bot_log(st.tenant_id, &notifier::bot_log::BotLogEntry {
-                            ts: chrono::Utc::now().timestamp_millis(),
-                            log_type: "error".to_string(),
-                            kind: Some("agency_loss".to_string()),
-                            booking_id: Some(booking.id.clone()),
-                            latency_ms: Some(latency_ms as i64),
-                            rule: Some(meta.name.clone()),
-                            error: Some(format!("lost to {rival_email}")),
-                        })
+                        pub_.record_bot_log(
+                            st.tenant_id,
+                            &notifier::bot_log::BotLogEntry {
+                                ts: chrono::Utc::now().timestamp_millis(),
+                                log_type: "error".to_string(),
+                                kind: Some("agency_loss".to_string()),
+                                booking_id: Some(booking.id.clone()),
+                                latency_ms: Some(latency_ms as i64),
+                                rule: Some(meta.name.clone()),
+                                error: Some(format!("lost to {rival_email}")),
+                            },
+                        )
                         .await;
                     }
                     DispatchResult::LostToAgency { rival: rival_email }
@@ -239,6 +264,7 @@ async fn finalize_win(
     booking: &SpxBooking,
     meta: &RuleMeta,
     latency_ms: i32,
+    local_dispatch_us: u64,
 ) {
     st.dedup.commit_accept(&booking.id);
     let _ = shared
@@ -276,7 +302,9 @@ async fn finalize_win(
     // `Default` rather than invented).
     if let Some(settings) = shared.notifier.clone() {
         let nb = notify_booking_from_spx_booking(booking);
-        tokio::spawn(async move { notifier::notify_accepted(&settings, &nb).await; });
+        tokio::spawn(async move {
+            notifier::notify_accepted(&settings, &nb).await;
+        });
     }
     if let Some(pub_) = &shared.redis {
         pub_.publish_ticket_accepted(
@@ -287,18 +315,22 @@ async fn finalize_win(
                 "autoAccept": true,
                 "rule": meta.name,
                 "route": booking.route_stops,
+                "localDispatchUs": local_dispatch_us,
             }),
         )
         .await;
-        pub_.record_bot_log(st.tenant_id, &notifier::bot_log::BotLogEntry {
-            ts: chrono::Utc::now().timestamp_millis(),
-            log_type: "success".to_string(),
-            kind: Some("accept".to_string()),
-            booking_id: Some(booking.id.clone()),
-            latency_ms: Some(latency_ms as i64),
-            rule: Some(meta.name.clone()),
-            error: None,
-        })
+        pub_.record_bot_log(
+            st.tenant_id,
+            &notifier::bot_log::BotLogEntry {
+                ts: chrono::Utc::now().timestamp_millis(),
+                log_type: "success".to_string(),
+                kind: Some("accept".to_string()),
+                booking_id: Some(booking.id.clone()),
+                latency_ms: Some(latency_ms as i64),
+                rule: Some(meta.name.clone()),
+                error: None,
+            },
+        )
         .await;
     }
 }

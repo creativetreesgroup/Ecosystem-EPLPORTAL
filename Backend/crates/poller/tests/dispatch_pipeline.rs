@@ -14,8 +14,10 @@ use std::sync::Arc;
 use core_domain::{CompiledRule, RuleBookingType, RuleConditions, RuleMode};
 use dashmap::DashMap;
 use executor::ExecutorHandle;
+use futures::StreamExt;
 use poller::{
-    dispatch_booking, DispatchResult, PollerShared, PollerState, RuleMeta, SidecarClient,
+    dispatch_booking, DispatchResult, PollerShared, PollerState, RedisPublisher, RuleMeta,
+    SidecarClient,
 };
 use secrecy::SecretString;
 use spx_client::{normalize_booking, SpxClient, SpxCookies};
@@ -499,6 +501,151 @@ async fn auth_outcome_releases_claim_and_leaves_booking_pending() {
         .ok();
 }
 
+/// Task 2 (Fase 7b): a real dispatched-and-won booking's `ticket_accepted` WS
+/// payload must carry `localDispatchUs` — the Layer-1-claim-only decision-path
+/// latency (see `dispatch_booking`'s own comment for exactly why the
+/// measurement boundary excludes Layer 2's Redis round-trip and the HTTP
+/// accept call). Read back via a REAL Redis pub/sub subscription (the same
+/// `spx:ws:acct:<id>` channel `RedisPublisher::publish_ticket_accepted`
+/// writes to — see `ws-hub/tests/redis_bridge.rs` for the same subscribe
+/// pattern), not a mock, so this proves the actual wire payload. The
+/// `< 50_000` (50ms) ceiling is deliberately generous to avoid CI flakiness
+/// while still being orders of magnitude below what a Redis round-trip
+/// (Layer 2) or the wiremock HTTP accept call would add if the measurement
+/// boundary regressed to include either.
+#[tokio::test]
+async fn ticket_accepted_payload_carries_local_dispatch_us_under_the_in_proc_ceiling() {
+    let pool = store::connect(&database_url()).await.expect("connect pg");
+    store::run_migrations(&pool).await.expect("migrate");
+    let tenant_id = insert_tenant(&pool).await;
+
+    let rule_uuid = Uuid::new_v4();
+    insert_rule(&pool, tenant_id, rule_uuid).await;
+
+    let spx_id = format!("SPXID-LOCALDISPATCH-{}", Uuid::new_v4().simple());
+    let raw =
+        serde_json::json!({ "booking_id": spx_id, "booking_name": spx_id, "request_id": "555" });
+    let normalized = normalize_booking(&raw);
+    store::upsert_booking(
+        &pool,
+        tenant_id,
+        &store::BookingUpsert {
+            account_id: "test-account".to_string(),
+            spx_id: spx_id.clone(),
+            status: "pending".into(),
+            is_coc: true,
+            raw_data: raw.clone(),
+        },
+    )
+    .await
+    .expect("seed booking row");
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/line_haul/agency/booking/bidding/accept"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "retcode": 0 })))
+        .mount(&server)
+        .await;
+
+    let executor = Arc::new(
+        ExecutorHandle::connect(&redis_url())
+            .await
+            .expect("connect redis"),
+    );
+    let client = Arc::new(SpxClient::new(server.uri()).expect("client"));
+    let redis_pub = RedisPublisher::connect(&redis_url())
+        .await
+        .expect("connect redis publisher");
+    let shared = PollerShared {
+        executor,
+        client,
+        pool: pool.clone(),
+        config: poller::PollerConfig::default(),
+        accounts: Arc::new(DashMap::new()),
+        notifier: None,
+        redis: Some(redis_pub),
+        sidecar: Arc::new(SidecarClient::new("http://127.0.0.1:0")),
+        rules_tx: tokio::sync::watch::channel(poller::RuleSet::empty()).0,
+    };
+
+    let account_id = format!("t{}", Uuid::new_v4().simple());
+    let (username, password) = creds();
+    let mut st = PollerState::new(
+        account_id.clone(),
+        tenant_id,
+        42,
+        SpxCookies::default(),
+        username,
+        password,
+    );
+
+    let compiled = CompiledRule::compile(&core_domain::AcceptRule {
+        id: rule_uuid.to_string(),
+        name: "COC catch-all".into(),
+        enabled: true,
+        priority: 0,
+        mode: RuleMode::Filter,
+        conditions: RuleConditions {
+            coc_only: true,
+            booking_type: RuleBookingType::All,
+            ..Default::default()
+        },
+    });
+    st.rules = Arc::new(vec![compiled]);
+    st.rule_meta = Arc::new(vec![RuleMeta {
+        uuid: rule_uuid,
+        cap: 0,
+        accepted_count: 0,
+        name: "COC catch-all".into(),
+    }]);
+
+    // Subscribe BEFORE dispatching — `PubSub::subscribe` only returns once
+    // Redis confirms the subscription is active, so there is no race with the
+    // publish that `finalize_win` performs during `dispatch_booking` below.
+    let sub_client = redis::Client::open(redis_url()).expect("redis client");
+    let mut pubsub = sub_client.get_async_pubsub().await.expect("pubsub conn");
+    pubsub
+        .subscribe(format!("spx:ws:acct:{account_id}"))
+        .await
+        .expect("subscribe");
+
+    let outcome = dispatch_booking(&shared, &mut st, &normalized).await;
+    assert_eq!(
+        outcome,
+        DispatchResult::Accepted,
+        "a matched, unclaimed booking must be accepted"
+    );
+
+    let msg = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        pubsub.on_message().next(),
+    )
+    .await
+    .expect("ticket_accepted published within 3s")
+    .expect("a pubsub message");
+    let payload: String = msg.get_payload().expect("payload string");
+    let envelope: serde_json::Value = serde_json::from_str(&payload).expect("valid JSON payload");
+    assert_eq!(
+        envelope["type"].as_str(),
+        Some("ticket_accepted"),
+        "unexpected event type published on the account's channel: {envelope}"
+    );
+    let local_dispatch_us = envelope["data"]["localDispatchUs"]
+        .as_u64()
+        .expect("localDispatchUs present");
+    assert!(
+        local_dispatch_us < 50_000,
+        "local_dispatch_us={local_dispatch_us} looks like it included network I/O (Layer 2's \
+         Redis round-trip or the HTTP accept call), not just the in-proc Layer 1 claim"
+    );
+
+    sqlx::query("DELETE FROM tenants WHERE id = $1")
+        .bind(tenant_id)
+        .execute(&pool)
+        .await
+        .ok();
+}
+
 /// Final review finding: `dispatch::ensure_self_email` must never permanently
 /// cache an empty self-email off a transient fetch failure. `ensure_self_email`
 /// is private to `dispatch.rs`, so this drives it indirectly through the public
@@ -641,7 +788,9 @@ async fn ensure_self_email_does_not_permanently_cache_a_transient_fetch_failure(
     // succeeds (proving the fix actually retries instead of ever
     // short-circuiting on a cached empty value).
     Mock::given(method("GET"))
-        .and(path("/api/basicserver/agency/account/current_user/basic_info"))
+        .and(path(
+            "/api/basicserver/agency/account/current_user/basic_info",
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "data": { "email": "  Us@OurCompany.COM " }
         })))
