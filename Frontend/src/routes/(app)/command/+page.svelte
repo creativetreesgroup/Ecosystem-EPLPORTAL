@@ -17,6 +17,7 @@
 
 	let rows = $state<TicketRow[]>([]);
 	let dispatchSamples = $state<number[]>([]);
+	let errorMsg = $state('');
 	const MAX_SAMPLES = 200;
 
 	function handleWsEvent(event: TowerWsEvent) {
@@ -35,14 +36,24 @@
 	let pollTimer: ReturnType<typeof setInterval> | undefined;
 
 	onMount(() => {
-		fetchLiveBookings().then((initial) => {
-			rows = mergeNewTickets(rows, initial);
-		});
+		fetchLiveBookings()
+			.then((initial) => {
+				rows = mergeNewTickets(rows, initial);
+				errorMsg = '';
+			})
+			.catch(() => {
+				errorMsg = 'Gagal memuat tiket terbaru. Mencoba lagi...';
+			});
 		const unsubscribe = ws.onEvent(handleWsEvent);
 		pollTimer = setInterval(() => {
-			fetchLiveBookings().then((fresh) => {
-				rows = mergeNewTickets(rows, fresh);
-			});
+			fetchLiveBookings()
+				.then((fresh) => {
+					rows = mergeNewTickets(rows, fresh);
+					errorMsg = '';
+				})
+				.catch(() => {
+					errorMsg = 'Gagal memuat tiket terbaru. Mencoba lagi...';
+				});
 		}, LIVE_POLL_INTERVAL_MS);
 		return () => {
 			unsubscribe();
@@ -59,6 +70,15 @@
 </svelte:head>
 
 <div class="p-4 flex flex-col gap-4 max-w-4xl mx-auto">
+	{#if errorMsg}
+		<div
+			role="alert"
+			aria-live="polite"
+			class="px-3.5 py-2.5 rounded-lg text-[13px] font-medium font-body border bg-danger/10 text-danger border-danger/30"
+		>
+			{errorMsg}
+		</div>
+	{/if}
 	<LatencyTape samples={dispatchSamples} />
 	<TicketTicker bind:rows />
 </div>
