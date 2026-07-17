@@ -189,7 +189,7 @@ async fn spx_log(
 }
 
 #[derive(Debug, Serialize)]
-pub struct ManualAcceptResponse {
+pub(crate) struct ManualAcceptResponse {
     pub ok: bool,
     pub reason: String,
     pub message: String,
@@ -217,35 +217,56 @@ fn outcome_for(reason: spx_client::AcceptReason) -> &'static str {
     }
 }
 
-/// `POST /bookings/:id/accept` — manual accept. NO `require_permission` gate — only
-/// `session_auth` (any logged-in tenant member may manually accept); see this file's module doc
-/// for the disclosed rationale (matches Task 8/9's read routes' precedent).
-async fn accept(
-    State(state): State<AppState>,
-    Extension(user): Extension<CurrentUser>,
-    Path(id): Path<Uuid>,
-) -> Result<Json<ManualAcceptResponse>, ApiError> {
-    let booking = store::bookings::get_detail(&state.poller.pool, user.tenant_id, id)
-        .await?
-        .ok_or(ApiError::NotFound)?;
-
+/// The manual-accept core shared by the session-gated `POST /bookings/:id/accept` (below) and
+/// Fase 6e's public quick-accept routes (`routes/quick_accept.rs`, not part of this extraction):
+/// resolve the owning account's poller handle, claim via `try_claim_manual`, dispatch through the
+/// manual-accept channel, map the outcome, persist the DB status update, and record the audit
+/// event. Returns `ManualAcceptResponse` directly — never `ApiError` — so every caller, whichever
+/// HTTP status convention it uses, gets the same plain data to render rather than a status code
+/// baked in at this layer.
+///
+/// Every early-exit failure mode gets its own `reason` string; callers map these to HTTP status
+/// codes (see `accept()`'s wrapper below for the session-gated route's mapping):
+/// - `"not_pending"` — booking isn't in `pending` status.
+/// - `"account_offline"` — no running `AccountHandle` for `booking.account_id`.
+/// - `"already_claimed"` — `try_claim_manual` says someone already has it.
+/// - `"dispatch_failed"` — the manual-accept mpsc `send` failed (account task not receiving).
+/// - `"timeout"` — the 15s reply wait elapsed with no reply.
+/// - `"reply_dropped"` — the account task dropped the reply `Sender` without answering (distinct
+///   from `"timeout"`: the ORIGINAL `accept()` mapped both cases to `ApiError::Internal` but with
+///   two different messages — `.map_err` chained on the outer `Elapsed` and then the inner
+///   `RecvError` — so this split preserves that distinction as data instead of collapsing it).
+///
+/// Once the executor actually dispatches (`reply_rx` resolves with an `AcceptResult`), `ok`/
+/// `reason`/`message` come straight from `outcome_for`/`result.message` — same as the pre-refactor
+/// code, this is NOT an early-exit failure mode (a `taken_by_agency`/`agency_dup_unverified`/
+/// `failed` outcome still returns `ok: false` here, but callers must NOT map it to an `ApiError`;
+/// `accept()`'s wrapper only intercepts the six reasons listed above).
+pub(crate) async fn execute_manual_accept(
+    state: &AppState,
+    tenant_id: Uuid,
+    booking: &store::models::Booking,
+) -> ManualAcceptResponse {
     if booking.status != "pending" {
-        return Err(ApiError::Conflict(format!(
-            "booking is not pending (status: {})",
-            booking.status
-        )));
+        return ManualAcceptResponse {
+            ok: false,
+            reason: "not_pending".to_string(),
+            message: format!("booking is not pending (status: {})", booking.status),
+        };
     }
 
     let (dedup, manual_tx) = {
-        let handle = state
-            .poller
-            .accounts
-            .get(&booking.account_id)
-            .ok_or_else(|| {
-                ApiError::Conflict(
-                    "the account this booking belongs to is not currently connected".to_string(),
-                )
-            })?;
+        let handle = match state.poller.accounts.get(&booking.account_id) {
+            Some(h) => h,
+            None => {
+                return ManualAcceptResponse {
+                    ok: false,
+                    reason: "account_offline".to_string(),
+                    message: "the account this booking belongs to is not currently connected"
+                        .to_string(),
+                };
+            }
+        };
         (handle.dedup.clone(), handle.manual_accept.clone())
     };
 
@@ -256,9 +277,11 @@ async fn accept(
         .await
     {
         executor::ManualClaimOutcome::AlreadyAccepted => {
-            return Err(ApiError::Conflict(
-                "booking is already claimed or accepted".to_string(),
-            ));
+            return ManualAcceptResponse {
+                ok: false,
+                reason: "already_claimed".to_string(),
+                message: "booking is already claimed or accepted".to_string(),
+            };
         }
         executor::ManualClaimOutcome::Ok => {}
     }
@@ -273,21 +296,39 @@ async fn accept(
         .collect();
 
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-    manual_tx
+    if manual_tx
         .send(poller::ManualAcceptRequest {
             booking_id: booking_id_i64,
             request_ids,
             reply: reply_tx,
         })
         .await
-        .map_err(|_| {
-            ApiError::Internal("account task is not accepting manual requests".to_string())
-        })?;
+        .is_err()
+    {
+        return ManualAcceptResponse {
+            ok: false,
+            reason: "dispatch_failed".to_string(),
+            message: "account task is not accepting manual requests".to_string(),
+        };
+    }
 
-    let result = tokio::time::timeout(std::time::Duration::from_secs(15), reply_rx)
-        .await
-        .map_err(|_| ApiError::Internal("manual accept dispatch timed out".to_string()))?
-        .map_err(|_| ApiError::Internal("account task dropped the manual accept reply".to_string()))?;
+    let result = match tokio::time::timeout(std::time::Duration::from_secs(15), reply_rx).await {
+        Err(_) => {
+            return ManualAcceptResponse {
+                ok: false,
+                reason: "timeout".to_string(),
+                message: "manual accept dispatch timed out".to_string(),
+            };
+        }
+        Ok(Err(_)) => {
+            return ManualAcceptResponse {
+                ok: false,
+                reason: "reply_dropped".to_string(),
+                message: "account task dropped the manual accept reply".to_string(),
+            };
+        }
+        Ok(Ok(r)) => r,
+    };
 
     let outcome = outcome_for(result.reason);
 
@@ -300,7 +341,7 @@ async fn accept(
             .await;
         let _ = store::update_booking_status(
             &state.poller.pool,
-            user.tenant_id,
+            tenant_id,
             &booking.spx_id,
             store::BookingStatusUpdate {
                 status: "accepted",
@@ -323,7 +364,7 @@ async fn accept(
         dedup.abort_accept(&booking.spx_id);
         let _ = store::update_booking_status(
             &state.poller.pool,
-            user.tenant_id,
+            tenant_id,
             &booking.spx_id,
             store::BookingStatusUpdate {
                 status: "failed",
@@ -338,7 +379,7 @@ async fn accept(
 
     let _ = store::insert_accept_event(
         &state.poller.pool,
-        user.tenant_id,
+        tenant_id,
         &store::NewAcceptEvent {
             booking_id: Some(booking.id),
             rule_id: None,
@@ -354,11 +395,51 @@ async fn accept(
     )
     .await;
 
-    Ok(Json(ManualAcceptResponse {
+    ManualAcceptResponse {
         ok: matches!(result.reason, spx_client::AcceptReason::Ok),
         reason: outcome.to_string(),
         message: result.message,
-    }))
+    }
+}
+
+/// `POST /bookings/:id/accept` — manual accept. NO `require_permission` gate — only
+/// `session_auth` (any logged-in tenant member may manually accept); see this file's module doc
+/// for the disclosed rationale (matches Task 8/9's read routes' precedent).
+///
+/// Thin wrapper (Fase 6e Task 3 extraction) around `execute_manual_accept`: resolves the booking,
+/// delegates to the shared core, then maps its `reason` back to the EXACT `ApiError` this route
+/// returned before the extraction — `Conflict`/409 for `"not_pending"`/`"already_claimed"`/
+/// `"account_offline"` (all three were `ApiError::Conflict` pre-refactor), `Internal`/500 for
+/// `"dispatch_failed"`/`"timeout"`/`"reply_dropped"` (all three were `ApiError::Internal`
+/// pre-refactor — see `execute_manual_accept`'s doc comment for why `"reply_dropped"` is a new,
+/// separately-named reason rather than folded into `"timeout"`). Any OTHER reason (the executor
+/// actually dispatched but the outcome itself wasn't a win — `"taken_by_agency"`,
+/// `"agency_dup_unverified"`, `"failed"`) is NOT an `ApiError` here, exactly as before: the route
+/// returns `200 OK` with `ok: false` in the body so the caller can render why.
+async fn accept(
+    State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<ManualAcceptResponse>, ApiError> {
+    let booking = store::bookings::get_detail(&state.poller.pool, user.tenant_id, id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+
+    let response = execute_manual_accept(&state, user.tenant_id, &booking).await;
+
+    if !response.ok {
+        match response.reason.as_str() {
+            "not_pending" | "already_claimed" | "account_offline" => {
+                return Err(ApiError::Conflict(response.message));
+            }
+            "dispatch_failed" | "timeout" | "reply_dropped" => {
+                return Err(ApiError::Internal(response.message));
+            }
+            _ => {}
+        }
+    }
+
+    Ok(Json(response))
 }
 
 /// Nested at `/bookings` by `build_router`. Task 10 appends `.route("/{id}/accept", post(...))`
