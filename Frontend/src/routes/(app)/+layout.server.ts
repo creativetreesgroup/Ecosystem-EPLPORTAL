@@ -10,6 +10,11 @@
 import { redirect } from '@sveltejs/kit';
 import type { LayoutServerLoad } from './$types';
 
+// Matches LoginResponse (Backend/crates/api-gateway/src/routes/auth.rs) — kept here rather than
+// `unknown` so descendant +page.svelte files (Fase 7d's /rules is the first) get a typed
+// `data.user` from SvelteKit's automatic ancestor-load merge, no per-page cast needed.
+type SessionUser = { username: string; display_name: string; is_main_account: boolean };
+
 export const load: LayoutServerLoad = async ({ fetch, cookies }) => {
 	if (!cookies.get('spx_session')) {
 		redirect(307, '/login');
@@ -20,7 +25,7 @@ export const load: LayoutServerLoad = async ({ fetch, cookies }) => {
 	// throws internally, and a redirect() call sitting inside this try would get swallowed by
 	// its own catch below instead of propagating to SvelteKit.
 	let res: Response;
-	let user: unknown;
+	let user: SessionUser;
 	try {
 		res = await fetch('/auth/me');
 		user = await res.json();
