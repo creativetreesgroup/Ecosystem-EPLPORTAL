@@ -5,7 +5,7 @@
      REAL wrap-around focus trap — implementing the upgrade path TicketDetailDrawer's own comment
      anticipated, for this component specifically. -->
 <script lang="ts">
-	import { onDestroy } from 'svelte';
+	import { onDestroy, tick } from 'svelte';
 	import { X, ShieldCheck, ShieldOff } from '@lucide/svelte';
 	import { requestAaOtp, verifyAaOtp } from '$lib/api-rules';
 	import { ApiError } from '$lib/api';
@@ -64,10 +64,26 @@
 		modalOpen = false;
 	}
 
+	// The `disabled` attribute on `requesting`/`verifying` is applied the instant those flags flip,
+	// and browsers natively blur an element the moment it becomes disabled — moving
+	// document.activeElement to <body>, OUTSIDE dialogEl. Since handleDialogKeydown is bound via
+	// onkeydown on the dialog div, keydown only bubbles from whatever currently has focus: once
+	// focus lands on <body>, the Tab-trap and Escape-close both silently stop working. Call this
+	// after every point requesting/verifying toggles to pull focus back inside the dialog.
+	async function refocusIfEscaped() {
+		await tick();
+		if (!modalOpen || !dialogEl) return;
+		if (document.activeElement !== null && !dialogEl.contains(document.activeElement)) {
+			const target = dialogEl.querySelector<HTMLElement>('button:not([disabled]), input:not([disabled])');
+			target?.focus();
+		}
+	}
+
 	async function sendCode() {
 		requesting = true;
 		errorMsg = '';
 		notConfigured = false;
+		await refocusIfEscaped();
 		try {
 			await requestAaOtp();
 			codeExpiresAt = Date.now() + CODE_TTL_MS;
@@ -82,12 +98,14 @@
 			}
 		} finally {
 			requesting = false;
+			await refocusIfEscaped();
 		}
 	}
 
 	async function submitCode() {
 		verifying = true;
 		errorMsg = '';
+		await refocusIfEscaped();
 		try {
 			await verifyAaOtp(code);
 			onChange(true);
@@ -102,6 +120,7 @@
 			}
 		} finally {
 			verifying = false;
+			await refocusIfEscaped();
 		}
 	}
 
