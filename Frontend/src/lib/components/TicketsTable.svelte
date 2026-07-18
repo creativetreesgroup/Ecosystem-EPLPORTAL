@@ -169,6 +169,8 @@
 					<div class="text-[12px] text-text-primary">{row.route.join(' → ') || '—'}</div>
 					<div class="text-[11px] text-text-muted">{row.bookingNumber}</div>
 					{#if row.vehicleType}<div class="text-[11px] text-text-muted">{row.vehicleType}</div>{/if}
+					{#if row.requestId}<div class="font-mono text-[11px] text-text-muted">REQ <span class="text-text-primary">{row.requestId}</span></div>{/if}
+					{#if row.onsiteId}<div class="font-mono text-[11px] text-text-muted">OID <span class="text-text-primary">{row.onsiteId}</span></div>{/if}
 					<div class="flex items-center gap-2">
 						<CountdownBadge target={row.deadlineAt} size="lg" />
 						<span class="text-[10px] px-1.5 py-0.5 rounded bg-live/10 text-live uppercase font-semibold">
@@ -180,6 +182,7 @@
 							</span>
 						{/if}
 					</div>
+					<div class="font-mono text-[10px] text-text-muted">{row.pickupTime ? formatDate(row.pickupTime) : '—'}</div>
 					<div class="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-text-muted">
 						<span>Layanan: {row.serviceType ?? '—'}</span>
 						<span>Berat: {row.weight.toFixed(1)} kg</span>
