@@ -1224,3 +1224,105 @@ async fn history_endpoint_filters_by_auto_accepted_and_vehicle_type() {
 
     cleanup(&pool, tenant_id).await;
 }
+
+/// Task 5: `/bookings/summary` endpoint requires session.
+#[tokio::test]
+async fn summary_endpoint_requires_session() {
+    let pool = store::connect(&database_url()).await.expect("connect");
+    store::run_migrations(&pool).await.expect("migrate");
+    let tenant_id = insert_tenant(&pool).await;
+
+    let state = build_state(pool.clone(), tenant_id).await;
+    let base = spawn_server(state).await;
+    let http = reqwest::Client::new();
+
+    // No session cookie → 401.
+    let res = http
+        .get(format!("{base}/bookings/summary"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 401);
+
+    cleanup(&pool, tenant_id).await;
+}
+
+/// Task 5: `/bookings/summary` endpoint returns today's counts.
+#[tokio::test]
+async fn summary_endpoint_returns_todays_counts() {
+    let pool = store::connect(&database_url()).await.expect("connect");
+    store::run_migrations(&pool).await.expect("migrate");
+    let tenant_id = insert_tenant(&pool).await;
+    insert_portal_user(&pool, tenant_id, "owner").await;
+
+    store::upsert_booking(
+        &pool,
+        tenant_id,
+        &store::BookingUpsert {
+            account_id: "acct-1".to_string(),
+            spx_id: "s1".to_string(),
+            status: "pending".to_string(),
+            is_coc: false,
+            raw_data: serde_json::json!({}),
+        },
+    )
+    .await
+    .expect("insert booking");
+
+    let state = build_state(pool.clone(), tenant_id).await;
+    let base = spawn_server(state).await;
+    let http = reqwest::Client::new();
+    let cookie = login_cookie(&http, &base, "owner").await;
+
+    let res = http
+        .get(format!("{base}/bookings/summary"))
+        .header("Cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["incoming_today"], 1);
+
+    cleanup(&pool, tenant_id).await;
+}
+
+/// Task 5: `/bookings/vehicle-types` endpoint returns distinct list.
+#[tokio::test]
+async fn vehicle_types_endpoint_returns_distinct_list() {
+    let pool = store::connect(&database_url()).await.expect("connect");
+    store::run_migrations(&pool).await.expect("migrate");
+    let tenant_id = insert_tenant(&pool).await;
+    insert_portal_user(&pool, tenant_id, "owner").await;
+
+    store::upsert_booking(
+        &pool,
+        tenant_id,
+        &store::BookingUpsert {
+            account_id: "acct-1".to_string(),
+            spx_id: "vt1".to_string(),
+            status: "pending".to_string(),
+            is_coc: false,
+            raw_data: serde_json::json!({"vehicle_type_name": "CDD"}),
+        },
+    )
+    .await
+    .expect("insert booking");
+
+    let state = build_state(pool.clone(), tenant_id).await;
+    let base = spawn_server(state).await;
+    let http = reqwest::Client::new();
+    let cookie = login_cookie(&http, &base, "owner").await;
+
+    let res = http
+        .get(format!("{base}/bookings/vehicle-types"))
+        .header("Cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body, serde_json::json!(["CDD"]));
+
+    cleanup(&pool, tenant_id).await;
+}

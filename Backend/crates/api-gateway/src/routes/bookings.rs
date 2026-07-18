@@ -320,6 +320,22 @@ async fn spx_log(
     Ok(Json(rows.into_iter().map(AcceptEventItem::from).collect()))
 }
 
+async fn summary(
+    State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
+) -> Result<Json<store::bookings::BookingSummary>, ApiError> {
+    let s = store::bookings::summary(&state.poller.pool, user.tenant_id).await?;
+    Ok(Json(s))
+}
+
+async fn vehicle_types(
+    State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
+) -> Result<Json<Vec<String>>, ApiError> {
+    let types = store::bookings::list_vehicle_types(&state.poller.pool, user.tenant_id).await?;
+    Ok(Json(types))
+}
+
 /// `GET /bookings/:id/audit-trail` — the per-booking accept-attempt history (rule matched,
 /// outcome, timing) for Task 7's detail drawer. `session_auth` only, same gate as every other
 /// route in this router — this is per-booking data any logged-in tenant member should see,
@@ -598,6 +614,8 @@ pub fn bookings_router(state: AppState) -> Router<AppState> {
         .route("/{id}/detail", get(detail))
         .route("/{id}/audit-trail", get(audit_trail))
         .route("/spx-log", get(spx_log))
+        .route("/summary", get(summary))
+        .route("/vehicle-types", get(vehicle_types))
         .route("/{id}/accept", post(accept))
         .route_layer(axum::middleware::from_fn_with_state(state, session_auth))
 }
