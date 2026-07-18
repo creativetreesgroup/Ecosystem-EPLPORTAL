@@ -87,6 +87,17 @@ test('main account can create a route-mode rule with a new inline location, save
 	// Reload from scratch — proves the save actually persisted server-side, not just local state.
 	await page.reload();
 	await expect(page.getByText('E2E Padang Lane')).toBeVisible({ timeout: 10_000 });
+
+	// Self-cleaning: delete this rule so reruns of this suite against the same (non-reset) dev DB
+	// don't accumulate duplicate "E2E Padang Lane" rows, which would turn the toBeVisible() locator
+	// above into a strict-mode violation on the next run (same pattern as the sibling test below).
+	await page.getByText('E2E Padang Lane').click();
+	await page.getByRole('button', { name: 'Hapus rule E2E Padang Lane' }).click();
+	await page.getByRole('button', { name: 'Simpan Perubahan' }).click();
+	await expect(page.getByRole('button', { name: 'Simpan Perubahan' })).toBeDisabled({ timeout: 10_000 });
+
+	await page.reload();
+	await expect(page.getByText('E2E Padang Lane')).toBeHidden({ timeout: 10_000 });
 });
 
 test('editing and deleting an existing rule persists after save and reload', async ({ page }) => {
