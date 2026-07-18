@@ -33,11 +33,12 @@
 	async function commit() {
 		const trimmed = draft.trim();
 		if (trimmed === '') return;
-		if (!multi && value.includes(trimmed)) {
-			draft = '';
-			return;
-		}
-		if (multi && (value.includes(trimmed) || (max !== undefined && value.length >= max))) {
+		errorMsg = '';
+		if (
+			multi &&
+			(value.some((v) => v.toLowerCase() === trimmed.toLowerCase()) ||
+				(max !== undefined && value.length >= max))
+		) {
 			draft = '';
 			return;
 		}
@@ -46,12 +47,10 @@
 		if (existing) {
 			onChange(multi ? [...value, existing.name] : [existing.name]);
 			draft = '';
-			errorMsg = '';
 			return;
 		}
 
 		creating = true;
-		errorMsg = '';
 		try {
 			const created = await onCreateLocation(trimmed);
 			onChange(multi ? [...value, created.name] : [created.name]);
