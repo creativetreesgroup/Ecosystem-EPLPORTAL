@@ -46,6 +46,11 @@ use uuid::Uuid;
 pub struct BookingFilter {
     pub status: Option<&'static str>,
     pub spx_id: Option<String>,
+    /// Exact-or-prefix match on `spx_tx_id` (the "Booking Number" display column, GENERATED from
+    /// `raw_data->>'booking_name'` with a fallback to `spx_id` — see migration
+    /// `0021_bookings_spx_derived_columns.sql`). Same `LIKE`-prefix/escaped/bound convention as
+    /// `spx_id` above, added for the `/tickets` "Nama Booking" search field.
+    pub booking_name: Option<String>,
     pub from: Option<chrono::DateTime<chrono::Utc>>,
     pub to: Option<chrono::DateTime<chrono::Utc>>,
     pub auto_accepted: Option<bool>,
@@ -85,6 +90,11 @@ fn push_common_filters(qb: &mut QueryBuilder<sqlx::Postgres>, f: &BookingFilter)
     if let Some(spx_id) = &f.spx_id {
         qb.push(" AND spx_id LIKE ");
         qb.push_bind(format!("{}%", escape_like(spx_id)));
+        qb.push(" ESCAPE '\\'");
+    }
+    if let Some(booking_name) = &f.booking_name {
+        qb.push(" AND spx_tx_id LIKE ");
+        qb.push_bind(format!("{}%", escape_like(booking_name)));
         qb.push(" ESCAPE '\\'");
     }
     if let Some(from) = f.from {
