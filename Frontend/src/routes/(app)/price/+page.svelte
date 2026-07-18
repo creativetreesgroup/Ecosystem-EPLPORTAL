@@ -61,6 +61,8 @@
 
 	function handleRemove(clientKey: string) {
 		rows = rows.filter((r) => r.clientKey !== clientKey);
+		const newPageCount = Math.max(1, Math.ceil(rows.filter((r) => matchesFilter(r, query)).length / PAGE_SIZE));
+		if (page > newPageCount) page = newPageCount;
 	}
 
 	async function handleCreateLocation(name: string): Promise<LocationItem> {
