@@ -10,12 +10,14 @@
 		label,
 		value,
 		onChange,
-		options
+		options,
+		multi = true
 	}: {
 		label: string;
 		value: string[];
 		onChange: (value: string[]) => void;
 		options?: { value: string; label: string }[];
+		multi?: boolean;
 	} = $props();
 
 	let draft = $state('');
@@ -34,10 +36,16 @@
 	}
 
 	function toggleOption(optValue: string) {
-		if (value.includes(optValue)) {
-			onChange(value.filter((v) => v !== optValue));
+		if (multi) {
+			if (value.includes(optValue)) {
+				onChange(value.filter((v) => v !== optValue));
+			} else {
+				onChange([...value, optValue]);
+			}
 		} else {
-			onChange([...value, optValue]);
+			// Single-select: clicking the already-selected option clears it (allows a genuine
+			// "nothing chosen yet" state); clicking any other option replaces the selection.
+			onChange(value.includes(optValue) ? [] : [optValue]);
 		}
 	}
 </script>
@@ -46,11 +54,17 @@
 	<span id={`${inputId}-label`} class="text-[10px] font-body text-text-muted uppercase tracking-wide">{label}</span>
 
 	{#if options}
-		<div class="flex flex-wrap gap-1.5" role="group" aria-labelledby={`${inputId}-label`}>
+		<div
+			class="flex flex-wrap gap-1.5"
+			role={multi ? 'group' : 'radiogroup'}
+			aria-labelledby={`${inputId}-label`}
+		>
 			{#each options as opt (opt.value)}
 				<button
 					type="button"
-					aria-pressed={value.includes(opt.value)}
+					role={multi ? undefined : 'radio'}
+					aria-pressed={multi ? value.includes(opt.value) : undefined}
+					aria-checked={multi ? undefined : value.includes(opt.value)}
 					onclick={() => toggleOption(opt.value)}
 					class={`min-h-[36px] px-3 rounded-md text-[12px] font-body border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
 						value.includes(opt.value)
