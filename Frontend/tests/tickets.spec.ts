@@ -145,6 +145,67 @@ test('clicking a row opens the detail drawer with audit trail section', async ({
 	await expect(page.getByText('Riwayat Percobaan')).toBeVisible();
 });
 
+// Whole-branch review Finding 3: every test above uses mouse `.click()` only. The
+// keyboard-bubbling bug Task 6's review rated Critical (Enter on the nested "Terima" button
+// bubbling up and ALSO firing the row's own onRowClick) had zero automated regression coverage —
+// this is that coverage, exercising REAL browser keydown events (not `.click()`).
+//
+// `.focus()` (rather than repeated `page.keyboard.press('Tab')`) is used to land keyboard focus
+// on the target element directly — a targeted alternative that avoids hardcoding the filter bar's
+// exact control count/tab order, which would make this test fragile to unrelated filter-bar
+// changes. What actually exercises the bug is the real `Enter` keydown `page.keyboard.press`
+// dispatches at whatever element is focused (a genuine browser KeyboardEvent that bubbles through
+// the real DOM), not how focus got there.
+//
+// Confirmed safe to actually press Enter on a real "Terima" button against the real dev stack
+// (not mocked): the seeded pending booking's `account_id` ("e2e-test-account") has no
+// `agency_credentials` row in `tower-dev`, so `POST /bookings/:id/accept` 409s
+// (`execute_manual_accept` in `Backend/crates/api-gateway/src/routes/bookings.rs` finds no running
+// `AccountHandle`) — `handleAccept` in `+page.svelte` catches this and shows an error message, no
+// real SPX dispatch and no booking-status mutation. Same reason `command.spec.ts`'s doc comment
+// gives for why THAT suite never clicks "Terima" either.
+//
+// Writing this test against the REAL browser (not just code inspection) caught a SECOND, previously
+// undetected bug of the exact same "keyboard interaction has zero coverage" class this finding
+// describes: opening the drawer via a keyboard Enter press (unlike a mouse click) left the original
+// Enter keydown event still mid-dispatch when `TicketDetailDrawer.svelte`'s focus-management
+// `$effect` synchronously moved focus onto the close `<button>` — which re-triggered Chromium's
+// native "Enter activates the currently focused button" default action a moment later, immediately
+// closing the drawer that had just opened. Fixed by deferring that focus move to a macrotask
+// (`setTimeout(() => closeButtonEl?.focus(), 0)` in `TicketDetailDrawer.svelte`) so it lands safely
+// after the original keydown event's native default-action processing finishes. Without THIS test,
+// that bug had no automated coverage either — same root cause class (untested real keyboard
+// interaction) as the Task 6 bug this test was written to guard.
+test('keyboard Enter on a row opens the detail drawer, but Enter on the nested Terima button does not', async ({
+	page
+}) => {
+	await login(page);
+	await page.goto('/tickets');
+	await expect(page.getByRole('table')).toBeVisible({ timeout: 10_000 });
+
+	// Focus the row itself (not a nested control) and press Enter — the intended, non-buggy
+	// keyboard path: the row's own onkeydown handler must open the detail drawer.
+	const row = page.getByRole('row').nth(1);
+	await row.focus();
+	await page.keyboard.press('Enter');
+	await expect(page.getByRole('dialog', { name: 'Detail tiket' })).toBeVisible();
+
+	// Close it (Escape, per TicketDetailDrawer.svelte's own handleKeydown) before the second
+	// scenario below.
+	await page.keyboard.press('Escape');
+	await expect(page.getByRole('dialog', { name: 'Detail tiket' })).toBeHidden();
+
+	// Now focus a "Terima" button specifically — nested inside a pending row's <td> — and press
+	// Enter on IT. Pre-fix, the button's native Enter->click activation dispatched a keydown that
+	// BUBBLED UP into the row's own onkeydown handler, which also called onRowClick and opened the
+	// drawer. Post-fix (`e.target !== e.currentTarget` guard in TicketsTable.svelte), only the
+	// button's own click fires — the drawer must stay closed.
+	const acceptButton = page.getByRole('button', { name: 'Terima' }).first();
+	await acceptButton.focus();
+	await page.keyboard.press('Enter');
+	await expect(page.getByRole('dialog', { name: 'Detail tiket' })).toBeHidden();
+});
+
 test('narrow viewport collapses the table into cards', async ({ page }) => {
 	await page.setViewportSize({ width: 375, height: 800 });
 	await login(page);

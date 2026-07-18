@@ -70,12 +70,31 @@
 	$effect(() => {
 		if (bookingId) {
 			previouslyFocusedEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-			closeButtonEl?.focus();
+			// Deferred via a macrotask, NOT called synchronously here — verified live with a real
+			// keyboard Playwright test (opening this drawer via Enter on a table row), not a
+			// hypothetical: opening via a KEYBOARD Enter press (vs. a mouse click) can leave the
+			// ORIGINAL Enter keydown event still mid-dispatch when this effect runs (Svelte
+			// flushes state changes from a DOM event handler synchronously, still inside that same
+			// keydown's call stack). Synchronously focusing this close <button> inside that window
+			// re-triggers Chromium's native "Enter activates the currently focused button"
+			// default action a moment later — firing an unwanted click on the close button and
+			// immediately closing the drawer that had just opened. `setTimeout(..., 0)` pushes the
+			// focus move to the next macrotask, safely after the current keydown event's native
+			// default-action processing has fully finished.
+			setTimeout(() => closeButtonEl?.focus(), 0);
 		} else if (previouslyFocusedEl) {
 			previouslyFocusedEl.focus();
 			previouslyFocusedEl = null;
 		}
 	});
+
+	// Indonesian labels for `detail.failureReason` — same mapping convention as
+	// TicketsTable.svelte's `statusLabel` (internal value -> Indonesian display text).
+	function failureReasonLabel(reason: NonNullable<TicketDetailRow['failureReason']>): string {
+		if (reason === 'expired') return 'Kedaluwarsa';
+		if (reason === 'taken_by_other') return 'Diambil agensi lain';
+		return 'Gagal saat diproses'; // 'manual_accept_failed'
+	}
 
 	function handleKeydown(e: KeyboardEvent) {
 		if (e.key === 'Escape') {
@@ -131,6 +150,10 @@
 				<dd class="font-mono text-text-primary">{detail.spxId}</dd>
 				<dt class="text-text-muted">Status</dt>
 				<dd class="text-text-primary">{detail.status}</dd>
+				{#if detail.status === 'failed' && detail.failureReason !== null}
+					<dt class="text-text-muted">Alasan Gagal</dt>
+					<dd class="text-danger">{failureReasonLabel(detail.failureReason)}</dd>
+				{/if}
 				<dt class="text-text-muted">Rute</dt>
 				<dd class="text-text-primary">{detail.route.join(' → ') || '—'}</dd>
 				<dt class="text-text-muted">Layanan</dt>

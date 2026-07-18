@@ -32,7 +32,11 @@
 
 	function updateTo(e: Event) {
 		const raw = (e.target as HTMLInputElement).value;
-		onFiltersChange({ ...filters, to: raw ? new Date(raw).toISOString() : null });
+		// End-of-day (23:59:59.999 UTC), NOT start-of-day like updateFrom — the backend applies
+		// `created_at <= $to` (an inclusive upper bound), so a midnight-start timestamp would only
+		// match bookings created at exactly that instant and silently exclude every booking
+		// created during the rest of the picked day (whole-branch review finding).
+		onFiltersChange({ ...filters, to: raw ? new Date(`${raw}T23:59:59.999Z`).toISOString() : null });
 	}
 
 	function clearAll() {

@@ -976,3 +976,109 @@ async fn manual_accept_404s_for_unknown_booking_and_409s_for_disconnected_accoun
 
     cleanup(&pool, tenant_id).await;
 }
+
+/// Whole-branch review Finding 1: the `to` date-range filter's SQL is `created_at <= $to`
+/// (an inclusive upper bound) — `TicketFilterBar.svelte`'s `updateTo` used to convert the
+/// picked date to START-of-day UTC midnight, which only matches a booking created at exactly
+/// that instant, silently excluding every booking created LATER that same day. The fix makes
+/// `updateTo` send END-of-day (`23:59:59.999Z`) instead. This test seeds a booking backdated to
+/// mid-afternoon on a fixed day and proves: (a) `to` = that day's END-of-day (what the FIXED
+/// frontend now sends) includes it, and (b) `to` = that day's START-of-day (the OLD, buggy
+/// value) excludes it — i.e. this test would have caught the original bug, not just confirmed
+/// the fix in isolation.
+#[tokio::test]
+async fn history_to_filter_end_of_day_includes_bookings_created_that_day() {
+    let pool = store::connect(&database_url()).await.expect("connect");
+    store::run_migrations(&pool).await.expect("migrate");
+    let tenant_id = insert_tenant(&pool).await;
+    insert_portal_user(&pool, tenant_id, "owner").await;
+
+    store::upsert_booking(
+        &pool,
+        tenant_id,
+        &store::BookingUpsert {
+            account_id: "acct-1".to_string(),
+            spx_id: "to-filter-1".to_string(),
+            status: "pending".to_string(),
+            is_coc: false,
+            raw_data: serde_json::json!({}),
+        },
+    )
+    .await
+    .expect("seed booking");
+    store::update_booking_status(
+        &pool,
+        tenant_id,
+        "to-filter-1",
+        store::BookingStatusUpdate {
+            status: "accepted",
+            latency_ms: Some(1),
+            auto_accepted: true,
+            rule_matched: None,
+            accept_reason: None,
+        },
+    )
+    .await
+    .expect("mark accepted");
+
+    // `upsert_booking` has no way to pass an explicit `created_at` (it always writes `now()`),
+    // so backdate the row directly — mid-afternoon on a fixed day, well away from either
+    // boundary being tested.
+    let created_at = chrono::DateTime::parse_from_rfc3339("2026-07-18T15:30:00Z")
+        .expect("valid fixed timestamp")
+        .with_timezone(&chrono::Utc);
+    sqlx::query("UPDATE bookings SET created_at = $1 WHERE tenant_id = $2 AND spx_id = $3")
+        .bind(created_at)
+        .bind(tenant_id)
+        .bind("to-filter-1")
+        .execute(&pool)
+        .await
+        .expect("backdate created_at");
+
+    let state = build_state(pool.clone(), tenant_id).await;
+    let base = spawn_server(state).await;
+    let http = reqwest::Client::new();
+    let cookie = login_cookie(&http, &base, "owner").await;
+
+    // `to` = exactly what the FIXED TicketFilterBar.svelte's `updateTo` now sends for "include
+    // 2026-07-18 as the end date": end-of-day UTC, not midnight-start. Proves the frontend fix
+    // and the backend's `created_at <= $to` semantics compose correctly.
+    let end_of_day_resp = http
+        .get(format!("{base}/bookings/history?to=2026-07-18T23:59:59.999Z"))
+        .header("Cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(end_of_day_resp.status(), 200);
+    let end_of_day_body: Vec<serde_json::Value> = end_of_day_resp.json().await.unwrap();
+    let end_of_day_ids: Vec<&str> = end_of_day_body
+        .iter()
+        .map(|b| b["spx_id"].as_str().unwrap())
+        .collect();
+    assert!(
+        end_of_day_ids.contains(&"to-filter-1"),
+        "a booking created during the selected end day must be included when `to` is end-of-day, got {end_of_day_ids:?}"
+    );
+
+    // Sanity check on the OLD, buggy `to` value (midnight start-of-day) this fix replaces — this
+    // booking was created at 15:30, AFTER midnight, so it must be excluded. Proves this test
+    // actually distinguishes the two behaviors instead of trivially passing either way.
+    let start_of_day_resp = http
+        .get(format!("{base}/bookings/history?to=2026-07-18T00:00:00.000Z"))
+        .header("Cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(start_of_day_resp.status(), 200);
+    let start_of_day_body: Vec<serde_json::Value> = start_of_day_resp.json().await.unwrap();
+    let start_of_day_ids: Vec<&str> = start_of_day_body
+        .iter()
+        .map(|b| b["spx_id"].as_str().unwrap())
+        .collect();
+    assert!(
+        !start_of_day_ids.contains(&"to-filter-1"),
+        "sanity check: the OLD midnight-start `to` value must exclude a booking created later that day, got {start_of_day_ids:?}"
+    );
+
+    cleanup(&pool, tenant_id).await;
+}
