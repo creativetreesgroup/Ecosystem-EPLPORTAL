@@ -124,7 +124,18 @@ test('filtering by status narrows the visible rows', async ({ page }) => {
 	await login(page);
 	await page.goto('/tickets');
 	await expect(page.getByRole('table')).toBeVisible({ timeout: 10_000 });
-	await page.getByLabel('Status').selectOption('pending');
+
+	// Task 15 fix: the status filter moved from an always-visible inline TicketFilterBar (see this
+	// file's own header comment, written when that was still the shape) into the FilterDrawer
+	// slide-in panel during Tasks 1-14's implementation — this test pre-dates that change and its
+	// original unscoped `page.getByLabel('Status').selectOption(...)` now times out (the inline bar
+	// no longer exists on the page at all). Open the drawer first, same as the real user flow.
+	await page.getByRole('button', { name: 'Filter' }).click();
+	const dialog = page.getByRole('dialog', { name: 'Filter Lanjutan' });
+	await dialog.getByLabel('Status').selectOption('pending');
+	await dialog.getByRole('button', { name: 'Selesai' }).click();
+	await expect(dialog).not.toBeVisible();
+
 	// After filtering to pending-only, no TABLE ROW should show a "Diterima" (accepted) status
 	// label. Scoped to the table specifically — the status filter's own <select> always renders
 	// an `<option value="accepted">Diterima</option>` regardless of which option is selected, so
@@ -211,4 +222,54 @@ test('narrow viewport collapses the table into cards', async ({ page }) => {
 	await login(page);
 	await page.goto('/tickets');
 	await expect(page.getByRole('table')).toBeHidden({ timeout: 10_000 });
+});
+
+// Task 15: real end-to-end proof of FilterDrawer.svelte's (Task 6/9) slide-in panel — opens via a
+// real click, its own real focus trap (Tab/Shift+Tab, not mocked) is exercised in both directions,
+// a real filter field is typed into (triggers the real onFiltersChange -> loadTickets() ->
+// GET /bookings/... round trip in +page.svelte), and it closes via a real Escape keydown.
+//
+// FilterDrawer's own $effect auto-focuses the FIRST focusable element inside the dialog on open —
+// that is the "Tutup filter" close button (it's earlier in DOM order than the "Urutkan" <select>,
+// see the header markup), not the first form field. handleKeydown's trap computes the same
+// first/last pair via the identical querySelectorAll, so asserting focus lands there first (rather
+// than assuming any particular field) is what actually matches the real component, not the plan's
+// illustrative shape.
+test('filter drawer opens, traps focus with real Tab/Shift+Tab, filters, and closes on Escape', async ({ page }) => {
+	await login(page);
+	await page.goto('/tickets');
+	await page.getByRole('button', { name: 'Filter' }).click();
+	const dialog = page.getByRole('dialog', { name: 'Filter Lanjutan' });
+	await expect(dialog).toBeVisible();
+
+	await expect(page.getByRole('button', { name: 'Tutup filter' })).toBeFocused();
+
+	// Shift+Tab from the FIRST focusable must wrap around to the LAST one ("Selesai"), proving the
+	// trap actually holds focus inside the dialog instead of letting it escape onto the page behind.
+	await page.keyboard.press('Shift+Tab');
+	await expect(page.getByRole('button', { name: 'Selesai' })).toBeFocused();
+
+	// ...and a plain Tab from the LAST wraps back to the FIRST, confirming the trap works in both
+	// directions, not just the one the plan's example happened to exercise.
+	await page.keyboard.press('Tab');
+	await expect(page.getByRole('button', { name: 'Tutup filter' })).toBeFocused();
+
+	const requestIdInput = dialog.getByLabel('ID Request');
+	await requestIdInput.fill('R1');
+	await expect(requestIdInput).toHaveValue('R1');
+
+	await page.keyboard.press('Escape');
+	await expect(dialog).not.toBeVisible();
+});
+
+// Task 15: TicketsTable.svelte's new booking-number/vehicle-type columns (Task 6/7) have had zero
+// automated coverage until now — confirms the desktop table actually renders them as real
+// <th scope="col"> headers, not just that some table exists (the pre-existing
+// "shows the seeded bookings in a table" test above only asserts `getByRole('table')`).
+test('ticket table shows the new booking-number and vehicle columns', async ({ page }) => {
+	await login(page);
+	await page.goto('/tickets');
+	await expect(page.getByRole('table')).toBeVisible({ timeout: 10_000 });
+	await expect(page.getByRole('columnheader', { name: 'Booking Number' })).toBeVisible();
+	await expect(page.getByRole('columnheader', { name: 'Deadline Bidding' })).toBeVisible();
 });
