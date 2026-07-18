@@ -151,6 +151,7 @@ async fn live(
         spx_id: params.spx_id.clone(),
         from: params.from,
         to: params.to,
+        ..Default::default()
     };
     let rows = store::bookings::list_live(
         &state.poller.pool,
@@ -174,6 +175,7 @@ async fn history(
         spx_id: params.spx_id.clone(),
         from: params.from,
         to: params.to,
+        ..Default::default()
     };
     let rows = store::bookings::list_history(
         &state.poller.pool,
