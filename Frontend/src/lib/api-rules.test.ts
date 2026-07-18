@@ -1,12 +1,18 @@
 // Frontend/src/lib/api-rules.test.ts
-// No network here — these test the pure wire<->domain mapping functions in isolation by
-// exporting them for testing. fetchSettings/saveSettings themselves are exercised for real by
-// Frontend/tests/rules.spec.ts (Task 8) against a live backend; a mocked-fetch unit test of a
-// thin wrapper would just re-assert its own mock, providing no real coverage (same reasoning
-// TicketFilterBar's sibling api-tickets.ts module was NOT given its own mock-fetch unit tests).
-import { describe, it, expect } from 'vitest';
-import { ruleOutputToDraft, draftToRuleInput } from './api-rules';
+// Tests the pure wire<->domain mapping functions (ruleOutputToDraft/draftToRuleInput) directly,
+// plus mock-fetch regression tests for saveSettings/fetchSettings guarding the actual HTTP verb
+// each issues (saveSettings uses a raw PUT — apiPost hardcodes POST and would 405) — same
+// vi.stubGlobal('fetch', ...) pattern as Frontend/src/lib/api-tickets.test.ts, added for the same
+// reason: a load-bearing fetch-call detail needs its own regression test beyond pure-function
+// unit tests. fetchSettings/saveSettings are additionally exercised end-to-end against a live
+// backend by Frontend/tests/rules.spec.ts (Task 8).
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { ruleOutputToDraft, draftToRuleInput, fetchSettings, saveSettings } from './api-rules';
 import { newRuleDraft } from './rules';
+
+afterEach(() => {
+	vi.unstubAllGlobals();
+});
 
 describe('ruleOutputToDraft', () => {
 	it('maps every snake_case field to its camelCase RuleDraft equivalent', () => {
@@ -101,5 +107,60 @@ describe('draftToRuleInput', () => {
 		};
 		const { id: _id, ...expected } = wire;
 		expect(draftToRuleInput(ruleOutputToDraft(wire))).toEqual(expected);
+	});
+});
+
+describe('saveSettings', () => {
+	it('issues a real PUT (not apiPost\'s POST) to /bookings/settings with the mapped request body', async () => {
+		let calledUrl: string | undefined;
+		let calledInit: RequestInit | undefined;
+		const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+			calledUrl = url;
+			calledInit = init;
+			return Promise.resolve({
+				ok: true,
+				json: async () => ({ auto_accept_enabled: true, rules: [] })
+			});
+		});
+		vi.stubGlobal('fetch', fetchMock);
+
+		const draft = {
+			...newRuleDraft('booking_id'),
+			name: 'Test Rule',
+			conditions: { ...newRuleDraft('booking_id').conditions, bookingIds: ['SPX1'] }
+		};
+
+		await saveSettings({ autoAcceptEnabled: true, rules: [draft] });
+
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(calledUrl).toBe('/bookings/settings');
+		expect(calledInit?.method).toBe('PUT');
+		const body = JSON.parse(String(calledInit?.body));
+		expect(body.auto_accept_enabled).toBe(true);
+		expect(body.rules[0].name).toBe('Test Rule');
+		expect(body.rules[0].booking_ids).toEqual(['SPX1']);
+	});
+});
+
+describe('fetchSettings', () => {
+	it('issues a GET (no body) to /bookings/settings', async () => {
+		let calledUrl: string | undefined;
+		let calledInit: RequestInit | undefined;
+		const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+			calledUrl = url;
+			calledInit = init;
+			return Promise.resolve({
+				ok: true,
+				json: async () => ({ auto_accept_enabled: false, rules: [] })
+			});
+		});
+		vi.stubGlobal('fetch', fetchMock);
+
+		await fetchSettings();
+
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(calledUrl).toBe('/bookings/settings');
+		expect(calledInit?.method ?? 'GET').toBe('GET');
+		expect(calledInit?.body).toBeUndefined();
 	});
 });
