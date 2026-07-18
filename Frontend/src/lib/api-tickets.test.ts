@@ -6,6 +6,7 @@
 // passing even if api-tickets.ts's fix were reverted; this test calls the actual fetched code.
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { fetchTickets } from './api-tickets';
+import { EMPTY_TICKET_FILTERS } from './tickets';
 
 afterEach(() => {
 	vi.unstubAllGlobals();
@@ -20,7 +21,7 @@ describe('fetchTickets', () => {
 		});
 		vi.stubGlobal('fetch', fetchMock);
 
-		await fetchTickets({ status: 'pending', spxId: '', from: null, to: null }, 2);
+		await fetchTickets({ ...EMPTY_TICKET_FILTERS, status: 'pending' }, 2);
 
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 		const params = new URL(String(calledUrl), 'http://localhost').searchParams;
