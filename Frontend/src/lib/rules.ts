@@ -44,7 +44,7 @@ export type RulesPageState = {
 	rules: RuleDraft[];
 };
 
-export const SERVICE_TYPE_OPTIONS = [
+export const SERVICE_TYPE_OPTIONS: string[] = [
 	'TRONTON',
 	'FUSO',
 	'CDD LONG',
@@ -53,7 +53,7 @@ export const SERVICE_TYPE_OPTIONS = [
 	'WINGBOX',
 	'ENGKEL',
 	'40FCL'
-] as const;
+];
 
 export const SHIFT_TYPE_OPTIONS: { value: number; label: string }[] = [
 	{ value: 1, label: 'Pagi' },
