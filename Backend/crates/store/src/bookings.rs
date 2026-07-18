@@ -481,6 +481,8 @@ pub async fn get_detail(
     let row = sqlx::query_as::<_, crate::models::Booking>(
         "SELECT id, tenant_id, account_id, spx_id, raw_data, status, is_coc, needs_enrichment, \
          service_type, weight, cod_amount, auto_accepted, accept_latency_ms, rule_matched, \
+         spx_request_id, spx_onsite_id, spx_tx_id, spx_vehicle_type, spx_deadline_at, \
+         spx_pickup_time, spx_trip_type, \
          created_at, updated_at FROM bookings WHERE tenant_id = $1 AND id = $2",
     )
     .bind(tenant_id)
@@ -515,6 +517,8 @@ pub async fn get_by_spx_id(
     let row = sqlx::query_as::<_, crate::models::Booking>(
         "SELECT id, tenant_id, account_id, spx_id, raw_data, status, is_coc, needs_enrichment, \
          service_type, weight, cod_amount, auto_accepted, accept_latency_ms, rule_matched, \
+         spx_request_id, spx_onsite_id, spx_tx_id, spx_vehicle_type, spx_deadline_at, \
+         spx_pickup_time, spx_trip_type, \
          created_at, updated_at FROM bookings WHERE tenant_id = $1 AND spx_id = $2 LIMIT 1",
     )
     .bind(tenant_id)
