@@ -6,7 +6,9 @@ import {
 	revertRowAccepting,
 	applyRowAccepted,
 	mergeAndSlicePage,
-	type TicketDetailRow
+	EMPTY_TICKET_FILTERS,
+	type TicketDetailRow,
+	type TicketFilters
 } from './tickets';
 
 function row(overrides: Partial<TicketDetailRow> = {}): TicketDetailRow {
@@ -22,18 +24,26 @@ function row(overrides: Partial<TicketDetailRow> = {}): TicketDetailRow {
 		autoAccepted: false,
 		createdAt: '2026-07-18T00:00:00Z',
 		accepting: false,
+		requestId: null,
+		onsiteId: null,
+		bookingNumber: 'SPX1',
+		vehicleType: null,
+		deadlineAt: null,
+		pickupTime: null,
+		tripType: null,
+		bookingType: 'reguler',
 		...overrides
 	};
 }
 
 describe('filtersToQueryString', () => {
 	it('omits empty/undefined filters entirely', () => {
-		const qs = filtersToQueryString({ status: null, spxId: '', from: null, to: null }, 1, 50);
+		const qs = filtersToQueryString(EMPTY_TICKET_FILTERS, 1, 50);
 		expect(qs).toBe('limit=50&offset=0');
 	});
 
 	it('includes only the filters that are set, plus computed offset from page', () => {
-		const qs = filtersToQueryString({ status: 'failed', spxId: 'SPX', from: null, to: null }, 3, 50);
+		const qs = filtersToQueryString({ ...EMPTY_TICKET_FILTERS, status: 'failed', spxId: 'SPX' }, 3, 50);
 		expect(qs).toContain('status=failed');
 		expect(qs).toContain('spx_id=SPX');
 		expect(qs).toContain('limit=50');
@@ -42,12 +52,52 @@ describe('filtersToQueryString', () => {
 
 	it('includes from/to as ISO strings when set', () => {
 		const qs = filtersToQueryString(
-			{ status: null, spxId: '', from: '2026-07-01T00:00:00Z', to: '2026-07-18T00:00:00Z' },
+			{ ...EMPTY_TICKET_FILTERS, from: '2026-07-01T00:00:00Z', to: '2026-07-18T00:00:00Z' },
 			1,
 			50
 		);
 		expect(qs).toContain('from=2026-07-01T00%3A00%3A00Z');
 		expect(qs).toContain('to=2026-07-18T00%3A00%3A00Z');
+	});
+});
+
+describe('filtersToQueryString — expanded filters', () => {
+	it('includes every new filter field only when set', () => {
+		const filters: TicketFilters = {
+			status: null,
+			spxId: '',
+			from: null,
+			to: null,
+			requestId: 'R1',
+			bookingName: '',
+			vehicleType: 'TRONTON',
+			tripType: 1,
+			bookingType: 'coc',
+			originStation: null,
+			destStation: null,
+			weightMin: 10,
+			weightMax: null,
+			cod: true,
+			pickupFrom: null,
+			pickupTo: null,
+			deadlineFrom: null,
+			deadlineTo: null,
+			sort: 'deadline_soonest',
+			autoAccepted: true,
+			acceptReason: null
+		};
+		const qs = filtersToQueryString(filters, 1, 50);
+		const params = new URLSearchParams(qs);
+		expect(params.get('request_id')).toBe('R1');
+		expect(params.get('booking_name')).toBeNull();
+		expect(params.get('vehicle_type')).toBe('TRONTON');
+		expect(params.get('trip_type')).toBe('1');
+		expect(params.get('booking_type')).toBe('coc');
+		expect(params.get('weight_min')).toBe('10');
+		expect(params.get('weight_max')).toBeNull();
+		expect(params.get('cod')).toBe('true');
+		expect(params.get('sort')).toBe('deadline_soonest');
+		expect(params.get('auto_accepted')).toBe('true');
 	});
 });
 

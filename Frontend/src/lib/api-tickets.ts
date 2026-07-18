@@ -25,6 +25,14 @@ type BookingListItemWire = {
 	auto_accepted: boolean;
 	created_at: string;
 	route: string[];
+	request_id: string | null;
+	onsite_id: string | null;
+	booking_number: string;
+	vehicle_type: string | null;
+	deadline_at: string | null;
+	pickup_time: string | null;
+	trip_type: number | null;
+	booking_type: 'coc' | 'reguler';
 };
 
 function failureReasonFromRaw(status: string, raw: Record<string, unknown> | undefined): FailureReason {
@@ -34,7 +42,22 @@ function failureReasonFromRaw(status: string, raw: Record<string, unknown> | und
 	return null;
 }
 
-function toDetailRow(item: BookingListItemWire, failureReason: FailureReason = null): TicketDetailRow {
+// The list-only fields (request_id/onsite_id/.../booking_type) are declared `Partial` here, not
+// required, so this same function can also take a `BookingDetailWire` below — `BookingDetail`
+// (the /:id/detail wire shape) does not yet carry these fields (only `BookingListItem` does, per
+// Task 7's backend scope), so a detail-sourced row falls back to null/''/'reguler' for them.
+// Known, disclosed scope gap (mirrors this module's existing `failureReason`-is-always-null-for-
+// list-rows note below) — not a bug; extending `BookingDetail` is a later task's job if/when the
+// detail drawer needs these fields.
+type ListOnlyFields = Pick<
+	BookingListItemWire,
+	'request_id' | 'onsite_id' | 'booking_number' | 'vehicle_type' | 'deadline_at' | 'pickup_time' | 'trip_type' | 'booking_type'
+>;
+
+function toDetailRow(
+	item: Omit<BookingListItemWire, keyof ListOnlyFields> & Partial<ListOnlyFields>,
+	failureReason: FailureReason = null
+): TicketDetailRow {
 	return {
 		id: item.id,
 		spxId: item.spx_id,
@@ -46,7 +69,15 @@ function toDetailRow(item: BookingListItemWire, failureReason: FailureReason = n
 		codAmount: item.cod_amount,
 		autoAccepted: item.auto_accepted,
 		createdAt: item.created_at,
-		accepting: false
+		accepting: false,
+		requestId: item.request_id ?? null,
+		onsiteId: item.onsite_id ?? null,
+		bookingNumber: item.booking_number ?? '',
+		vehicleType: item.vehicle_type ?? null,
+		deadlineAt: item.deadline_at ?? null,
+		pickupTime: item.pickup_time ?? null,
+		tripType: item.trip_type ?? null,
+		bookingType: item.booking_type ?? 'reguler'
 	};
 }
 
