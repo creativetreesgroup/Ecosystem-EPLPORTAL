@@ -72,16 +72,15 @@
 			previouslyFocusedEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
 			// Deferred via a macrotask, NOT called synchronously here — verified live with a real
 			// keyboard Playwright test (opening this drawer via Enter on a table row), not a
-			// hypothetical: opening via a KEYBOARD Enter press (vs. a mouse click) can leave the
-			// ORIGINAL Enter keydown event still mid-dispatch when this effect runs (Svelte
-			// flushes state changes from a DOM event handler synchronously, still inside that same
-			// keydown's call stack). Synchronously focusing this close <button> inside that window
-			// re-triggers Chromium's native "Enter activates the currently focused button"
-			// default action a moment later — firing an unwanted click on the close button and
-			// immediately closing the drawer that had just opened. `setTimeout(..., 0)` pushes the
-			// focus move to the next macrotask, safely after the current keydown event's native
-			// default-action processing has fully finished.
-			setTimeout(() => closeButtonEl?.focus(), 0);
+			// hypothetical: opening via a KEYBOARD Enter press (vs. a mouse click) and focusing this
+			// close <button> too early re-triggers Chromium's native "Enter activates the currently
+			// focused button" default action a moment later — firing an unwanted click on the close
+			// button and immediately closing the drawer that had just opened. `setTimeout(..., 0)`
+			// pushes the focus move to the next macrotask, safely after the triggering keydown's
+			// native default-action processing has fully finished, regardless of the exact
+			// effect-vs-keydown ordering Svelte uses under the hood.
+			const focusTimeoutId = setTimeout(() => closeButtonEl?.focus(), 0);
+			return () => clearTimeout(focusTimeoutId);
 		} else if (previouslyFocusedEl) {
 			previouslyFocusedEl.focus();
 			previouslyFocusedEl = null;
