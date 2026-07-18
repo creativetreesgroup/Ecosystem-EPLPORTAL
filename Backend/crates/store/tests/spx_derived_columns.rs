@@ -149,3 +149,17 @@ async fn trip_type_absent_is_null_not_zero() {
         .expect("query");
     assert_eq!(trip_type, None);
 }
+
+#[tokio::test]
+async fn trip_type_non_numeric_is_null_not_an_error() {
+    let pool = test_pool().await;
+    let tenant_id = seed_tenant(&pool).await;
+    insert_booking(&pool, tenant_id, "malformed-trip-type", serde_json::json!({"trip_type": "N/A"})).await;
+
+    let trip_type: Option<i32> = sqlx::query_scalar("SELECT spx_trip_type FROM bookings WHERE tenant_id = $1 AND spx_id = 'malformed-trip-type'")
+        .bind(tenant_id)
+        .fetch_one(&pool)
+        .await
+        .expect("query — the INSERT above must NOT have errored");
+    assert_eq!(trip_type, None);
+}

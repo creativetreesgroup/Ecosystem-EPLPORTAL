@@ -85,9 +85,15 @@ ALTER TABLE bookings ADD COLUMN spx_pickup_time TIMESTAMPTZ GENERATED ALWAYS AS 
 
 -- Absent -> NULL (distinct from an explicit 0, which is itself a meaningful trip_type value —
 -- unlike normalize_booking's pick_num, which defaults absent to 0.0, a persisted/filterable
--- column must not conflate "no data" with "explicitly type 0".
+-- column must not conflate "no data" with "explicitly type 0". A non-numeric picked value
+-- becomes NULL rather than erroring the whole INSERT/UPDATE (real SPX data is defensively
+-- parsed everywhere else in this codebase; a generated column must not be the one place a
+-- malformed field breaks writes).
 ALTER TABLE bookings ADD COLUMN spx_trip_type INT GENERATED ALWAYS AS (
-    NULLIF(raw_data->>'trip_type', '')::int
+    CASE
+        WHEN raw_data->>'trip_type' IS NULL OR raw_data->>'trip_type' !~ '^-?[0-9]+$' THEN NULL
+        ELSE (raw_data->>'trip_type')::int
+    END
 ) STORED;
 
 -- Deliberate simplification (see design doc's Open Questions): only the route_detail_list path
