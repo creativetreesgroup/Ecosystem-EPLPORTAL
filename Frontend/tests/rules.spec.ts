@@ -184,4 +184,19 @@ test('OTP arm flow: request code, read it from Redis, verify, and auto-accept st
 		'true',
 		{ timeout: 10_000 }
 	);
+
+	// Self-cleaning: turn auto-accept back OFF and save, so reruns of this suite against the same
+	// (non-reset) dev DB start from OFF again instead of relying on the test.skip() guard above as
+	// the normal path (same self-cleaning pattern the sibling rule-editing tests already use).
+	// Disarming needs no OTP — turning off is immediate, no gate.
+	await page.getByRole('switch', { name: 'Aktifkan atau nonaktifkan Auto-Accept' }).click();
+	await page.getByRole('button', { name: 'Simpan Perubahan' }).click();
+	await expect(page.getByRole('button', { name: 'Simpan Perubahan' })).toBeDisabled({ timeout: 10_000 });
+
+	await page.reload();
+	await expect(page.getByRole('switch', { name: 'Aktifkan atau nonaktifkan Auto-Accept' })).toHaveAttribute(
+		'aria-checked',
+		'false',
+		{ timeout: 10_000 }
+	);
 });

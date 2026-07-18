@@ -26,6 +26,9 @@
 
 	const CODE_TTL_MS = 180_000;
 	const RESEND_COOLDOWN_MS = 60_000;
+	// Matches the backend's PWVERIFY_TTL_SECS (Backend/crates/api-gateway/src/otp.rs) — the
+	// window in which Save must happen for a successful arm to actually persist.
+	const ARM_WINDOW_MS = 120_000;
 
 	let modalOpen = $state(false);
 	let code = $state('');
@@ -35,13 +38,14 @@
 	let verifying = $state(false);
 	let codeExpiresAt = $state<number | null>(null);
 	let resendReadyAt = $state<number | null>(null);
+	let armWindowExpiresAt = $state<number | null>(null);
 	let now = $state(Date.now());
 	let dialogEl: HTMLDivElement | undefined = $state();
 	let previouslyFocusedEl: HTMLElement | null = null;
 
 	let ticker: ReturnType<typeof setInterval> | undefined;
 	$effect(() => {
-		if (modalOpen) {
+		if (modalOpen || armWindowExpiresAt !== null) {
 			ticker = setInterval(() => (now = Date.now()), 1000);
 			return () => clearInterval(ticker);
 		}
@@ -50,6 +54,17 @@
 
 	const codeSecondsLeft = $derived(codeExpiresAt ? Math.max(0, Math.ceil((codeExpiresAt - now) / 1000)) : 0);
 	const resendSecondsLeft = $derived(resendReadyAt ? Math.max(0, Math.ceil((resendReadyAt - now) / 1000)) : 0);
+	const armWindowSecondsLeft = $derived(
+		armWindowExpiresAt ? Math.max(0, Math.ceil((armWindowExpiresAt - now) / 1000)) : 0
+	);
+
+	// Stop ticking once the window naturally lapses — otherwise the interval above would never
+	// clear itself (armWindowExpiresAt stays non-null forever unless something resets it).
+	$effect(() => {
+		if (armWindowExpiresAt !== null && armWindowSecondsLeft === 0) {
+			armWindowExpiresAt = null;
+		}
+	});
 
 	function openModal(withMessage: string = '') {
 		modalOpen = true;
@@ -58,6 +73,7 @@
 		code = '';
 		codeExpiresAt = null;
 		resendReadyAt = null;
+		armWindowExpiresAt = null;
 	}
 
 	function closeModal() {
@@ -110,6 +126,7 @@
 			await verifyAaOtp(code);
 			onChange(true);
 			modalOpen = false;
+			armWindowExpiresAt = Date.now() + ARM_WINDOW_MS;
 		} catch (e) {
 			if (e instanceof ApiError && e.status === 401) {
 				errorMsg = 'Kode salah atau kedaluwarsa, coba lagi.';
@@ -128,6 +145,7 @@
 		if (readOnly) return;
 		if (enabled) {
 			onChange(false);
+			armWindowExpiresAt = null;
 		} else {
 			openModal();
 		}
@@ -188,6 +206,11 @@
 			<p class="text-[11px] font-body text-text-muted" aria-live="polite">
 				{enabled ? 'Aktif — booking cocok diterima otomatis' : 'Nonaktif'}
 			</p>
+			{#if armWindowSecondsLeft > 0}
+				<p class="text-[11px] font-body text-accent" aria-live="polite">
+					Simpan dalam {armWindowSecondsLeft} detik agar Auto-Accept benar-benar aktif
+				</p>
+			{/if}
 		</div>
 	</div>
 	<button
