@@ -4,6 +4,7 @@
 	// narrow viewports — ONE component, ONE source of row data, toggled via Tailwind's `md:`
 	// breakpoint rather than two separate components that could drift out of sync.
 	import type { TicketDetailRow } from '$lib/tickets';
+	import CountdownBadge from './CountdownBadge.svelte';
 
 	let {
 		rows,
@@ -30,6 +31,15 @@
 	function formatDate(iso: string): string {
 		return new Date(iso).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' });
 	}
+
+	// Best-effort mapping, NOT independently verified against a captured SPX payload — see the
+	// design doc's Open Questions. Single named constant so it's a one-line fix if reversed.
+	const TRIP_TYPE_ADHOC = 0;
+
+	function tripTypeLabel(tripType: number | null): string | null {
+		if (tripType === null) return null;
+		return tripType === TRIP_TYPE_ADHOC ? 'ADHOC' : 'FIX';
+	}
 </script>
 
 {#if rows.length === 0}
@@ -42,13 +52,14 @@
 		<caption class="sr-only">Daftar tiket booking</caption>
 		<thead>
 			<tr class="border-b border-border text-left text-[10px] uppercase tracking-wide text-text-muted">
+				<th scope="col" class="py-2 pr-3">ID</th>
+				<th scope="col" class="py-2 pr-3">Booking Number</th>
+				<th scope="col" class="py-2 pr-3">Route & Vehicle</th>
+				<th scope="col" class="py-2 pr-3">Jadwal Booking</th>
+				<th scope="col" class="py-2 pr-3">Deadline Bidding</th>
+				<th scope="col" class="py-2 pr-3">Tags</th>
 				<th scope="col" class="py-2 pr-3">Status</th>
-				<th scope="col" class="py-2 pr-3">SPX ID</th>
-				<th scope="col" class="py-2 pr-3">Rute</th>
-				<th scope="col" class="py-2 pr-3">Layanan</th>
-				<th scope="col" class="py-2 pr-3 text-right">Berat</th>
-				<th scope="col" class="py-2 pr-3 text-right">COD</th>
-				<th scope="col" class="py-2 pr-3">Waktu</th>
+				<th scope="col" class="py-2 pr-3">Accept By</th>
 				<th scope="col" class="py-2 pr-3"><span class="sr-only">Aksi</span></th>
 			</tr>
 		</thead>
@@ -68,20 +79,42 @@
 					}}
 					class="border-b border-border hover:bg-bg-base cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset"
 				>
+					<td class="py-2.5 pr-3 font-mono text-[11px] text-text-muted whitespace-nowrap">
+						<div>BK <span class="text-text-primary">{row.bookingNumber}</span></div>
+						{#if row.requestId}<div>REQ <span class="text-text-primary">{row.requestId}</span></div>{/if}
+						{#if row.onsiteId}<div>OID <span class="text-text-primary">{row.onsiteId}</span></div>{/if}
+					</td>
+					<td class="py-2.5 pr-3 font-mono text-text-primary">{row.bookingNumber}</td>
+					<td class="py-2.5 pr-3 text-text-primary truncate max-w-[220px]">
+						<div>{row.route.join(' → ') || '—'}</div>
+						{#if row.vehicleType}<div class="text-[10px] text-text-muted">{row.vehicleType}</div>{/if}
+					</td>
+					<td class="py-2.5 pr-3 font-mono text-text-muted whitespace-nowrap">
+						{row.pickupTime ? formatDate(row.pickupTime) : '—'}
+					</td>
+					<td class="py-2.5 pr-3 whitespace-nowrap">
+						<CountdownBadge target={row.deadlineAt} size="lg" />
+						<div class="mt-0.5"><CountdownBadge target={row.deadlineAt} size="sm" /></div>
+					</td>
+					<td class="py-2.5 pr-3">
+						<span class="inline-flex flex-wrap gap-1">
+							<span class="text-[10px] px-1.5 py-0.5 rounded bg-live/10 text-live uppercase font-semibold">
+								{row.bookingType === 'coc' ? 'COC' : 'REG'}
+							</span>
+							{#if tripTypeLabel(row.tripType)}
+								<span class="text-[10px] px-1.5 py-0.5 rounded bg-accent/10 text-accent uppercase font-semibold">
+									{tripTypeLabel(row.tripType)}
+								</span>
+							{/if}
+						</span>
+					</td>
 					<td class="py-2.5 pr-3">
 						<span class="inline-flex items-center gap-1.5">
 							<span aria-hidden="true" class="w-1.5 h-1.5 rounded-full shrink-0 {statusDotClass(row.status)}"></span>
 							<span class="text-text-primary">{statusLabel(row.status)}</span>
 						</span>
 					</td>
-					<td class="py-2.5 pr-3 font-mono text-text-muted">{row.spxId}</td>
-					<td class="py-2.5 pr-3 text-text-primary truncate max-w-[220px]">{row.route.join(' → ') || '—'}</td>
-					<td class="py-2.5 pr-3 text-text-muted">{row.serviceType ?? '—'}</td>
-					<td class="py-2.5 pr-3 text-right font-mono text-text-muted">{row.weight.toFixed(1)} kg</td>
-					<td class="py-2.5 pr-3 text-right font-mono text-text-muted">
-						{row.codAmount > 0 ? row.codAmount.toLocaleString('id-ID') : '—'}
-					</td>
-					<td class="py-2.5 pr-3 font-mono text-text-muted whitespace-nowrap">{formatDate(row.createdAt)}</td>
+					<td class="py-2.5 pr-3 text-text-muted">—</td>
 					<td class="py-2.5 pr-3">
 						{#if row.status === 'pending'}
 							<button
@@ -134,6 +167,19 @@
 						<span class="font-mono text-[11px] text-text-muted">{row.spxId}</span>
 					</div>
 					<div class="text-[12px] text-text-primary">{row.route.join(' → ') || '—'}</div>
+					<div class="text-[11px] text-text-muted">{row.bookingNumber}</div>
+					{#if row.vehicleType}<div class="text-[11px] text-text-muted">{row.vehicleType}</div>{/if}
+					<div class="flex items-center gap-2">
+						<CountdownBadge target={row.deadlineAt} size="lg" />
+						<span class="text-[10px] px-1.5 py-0.5 rounded bg-live/10 text-live uppercase font-semibold">
+							{row.bookingType === 'coc' ? 'COC' : 'REG'}
+						</span>
+						{#if tripTypeLabel(row.tripType)}
+							<span class="text-[10px] px-1.5 py-0.5 rounded bg-accent/10 text-accent uppercase font-semibold">
+								{tripTypeLabel(row.tripType)}
+							</span>
+						{/if}
+					</div>
 					<div class="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-text-muted">
 						<span>Layanan: {row.serviceType ?? '—'}</span>
 						<span>Berat: {row.weight.toFixed(1)} kg</span>
