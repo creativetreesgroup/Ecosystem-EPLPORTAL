@@ -27,14 +27,14 @@
 // key this constant builds.
 
 import { test, expect } from '@playwright/test';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 
 const TENANT_ID = 'e03ac22f-729b-436f-a112-08aab5022614';
 const E2E_TEST_USER_ID = '0b93247e-2e8d-494a-bcc2-0908389605f0';
 
 function readOtpCodeFromRedis(): string {
 	const key = `spx:aa_otp:${TENANT_ID}:${E2E_TEST_USER_ID}`;
-	return execSync(`redis-cli -h 127.0.0.1 -p 16379 GET "${key}"`).toString().trim();
+	return execFileSync('redis-cli', ['-h', '127.0.0.1', '-p', '16379', 'GET', key]).toString().trim();
 }
 
 async function login(page: import('@playwright/test').Page, username: string, password: string) {
