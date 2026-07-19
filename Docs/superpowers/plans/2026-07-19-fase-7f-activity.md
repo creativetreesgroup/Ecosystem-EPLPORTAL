@@ -1016,17 +1016,17 @@ test('main account sees Log Bot entries and can clear them (confirm dialog accep
 });
 ```
 
-- [ ] **Step 3: Run the new e2e file alone**
+- [x] **Step 3: Run the new e2e file alone**
 
 Run: `cd Frontend && pnpm exec playwright test tests/activity.spec.ts`
 Expected: all tests pass (a live `reactor-core` + `tower-postgres` + `tower-redis` stack must already be running — see `tests/login.spec.ts`'s header comment for the exact env a manually-started `reactor-core` needs).
 
-- [ ] **Step 4: Run the full Playwright suite (regression check)**
+- [x] **Step 4: Run the full Playwright suite (regression check)**
 
 Run: `cd Frontend && pnpm exec playwright test`
 Expected: all tests across `login.spec.ts`, `command.spec.ts`, `tickets.spec.ts`, `rules.spec.ts`, `price.spec.ts`, `activity.spec.ts` pass — no regression in earlier phases' coverage.
 
-- [ ] **Step 5: Full backend verification**
+- [x] **Step 5: Full backend verification**
 
 ```bash
 cd Backend
@@ -1038,7 +1038,7 @@ cargo deny check
 
 Expected: all green. **Use the `tower` superuser URL for `cargo test`, not `app_role`** (the same local-dev-only gotcha every prior phase's plan has flagged). This task makes no backend changes, so this is a pure regression check.
 
-- [ ] **Step 6: Full frontend verification**
+- [x] **Step 6: Full frontend verification**
 
 ```bash
 cd Frontend
@@ -1049,7 +1049,7 @@ pnpm build
 
 Expected: `svelte-check` 0 errors/0 warnings; all Vitest suites pass (Task 1's `activity.test.ts`, Task 2's `api-activity.test.ts`, plus every pre-existing suite — no regression); production build succeeds.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add Frontend/tests/activity.spec.ts
