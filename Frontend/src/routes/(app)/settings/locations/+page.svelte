@@ -85,7 +85,7 @@
 				id="new-location-name"
 				type="text"
 				bind:value={newName}
-				onkeydown={(e) => e.key === 'Enter' && handleAdd()}
+				onkeydown={(e) => e.key === 'Enter' && !adding && handleAdd()}
 				placeholder="Nama lokasi baru"
 				class="flex-1 min-h-[40px] px-2.5 rounded-md text-[13px] font-body bg-bg-base border border-border text-text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
 			/>
