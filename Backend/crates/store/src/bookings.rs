@@ -51,6 +51,11 @@ pub struct BookingFilter {
     /// `0021_bookings_spx_derived_columns.sql`). Same `LIKE`-prefix/escaped/bound convention as
     /// `spx_id` above, added for the `/tickets` "Nama Booking" search field.
     pub booking_name: Option<String>,
+    /// Exact-or-prefix match on `spx_request_id` (GENERATED from `raw_data`'s `request_id`/
+    /// `requestId`/`req_id` keys — see migration `0021_bookings_spx_derived_columns.sql`). Same
+    /// `LIKE`-prefix/escaped/bound convention as `booking_name` above, added for the `/tickets`
+    /// "ID Request" search field.
+    pub request_id: Option<String>,
     pub from: Option<chrono::DateTime<chrono::Utc>>,
     pub to: Option<chrono::DateTime<chrono::Utc>>,
     pub auto_accepted: Option<bool>,
@@ -95,6 +100,11 @@ fn push_common_filters(qb: &mut QueryBuilder<sqlx::Postgres>, f: &BookingFilter)
     if let Some(booking_name) = &f.booking_name {
         qb.push(" AND spx_tx_id LIKE ");
         qb.push_bind(format!("{}%", escape_like(booking_name)));
+        qb.push(" ESCAPE '\\'");
+    }
+    if let Some(request_id) = &f.request_id {
+        qb.push(" AND spx_request_id LIKE ");
+        qb.push_bind(format!("{}%", escape_like(request_id)));
         qb.push(" ESCAPE '\\'");
     }
     if let Some(from) = f.from {

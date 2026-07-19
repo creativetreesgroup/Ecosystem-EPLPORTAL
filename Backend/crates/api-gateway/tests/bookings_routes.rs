@@ -907,6 +907,77 @@ async fn history_booking_name_filter_narrows_to_matching_prefix() {
     cleanup(&pool, tenant_id).await;
 }
 
+/// Whole-branch review finding: `request_id` query param — new `LIKE`-prefix filter on
+/// `spx_request_id` (the "ID Request" display column, GENERATED from `raw_data->>'request_id'`),
+/// added to `ListParams`/`build_filter`/`store::bookings::BookingFilter` following the exact same
+/// pattern as `booking_name` above (see `history_booking_name_filter_narrows_to_matching_prefix`).
+#[tokio::test]
+async fn history_request_id_filter_narrows_to_matching_prefix() {
+    let pool = store::connect(&database_url()).await.expect("connect");
+    store::run_migrations(&pool).await.expect("migrate");
+    let tenant_id = insert_tenant(&pool).await;
+    insert_portal_user(&pool, tenant_id, "owner").await;
+
+    for (spx_id, request_id) in [
+        ("req-1", "REQ-100"),
+        ("req-2", "REQ-200"),
+        ("req-3", "OTHER-300"),
+    ] {
+        store::upsert_booking(
+            &pool,
+            tenant_id,
+            &store::BookingUpsert {
+                account_id: "acct-1".to_string(),
+                spx_id: spx_id.to_string(),
+                status: "pending".to_string(),
+                is_coc: false,
+                raw_data: serde_json::json!({ "request_id": request_id }),
+            },
+        )
+        .await
+        .expect("seed booking");
+        store::update_booking_status(
+            &pool,
+            tenant_id,
+            spx_id,
+            store::BookingStatusUpdate {
+                status: "accepted",
+                latency_ms: Some(1),
+                auto_accepted: true,
+                rule_matched: None,
+                accept_reason: None,
+            },
+        )
+        .await
+        .expect("mark accepted");
+    }
+
+    let state = build_state(pool.clone(), tenant_id).await;
+    let base = spawn_server(state).await;
+    let http = reqwest::Client::new();
+    let cookie = login_cookie(&http, &base, "owner").await;
+
+    let resp = http
+        .get(format!("{base}/bookings/history?request_id=REQ-"))
+        .header("Cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Vec<serde_json::Value> = resp.json().await.unwrap();
+    let request_ids: Vec<&str> = body.iter().map(|b| b["request_id"].as_str().unwrap()).collect();
+    assert_eq!(
+        request_ids.len(),
+        2,
+        "expected only the two REQ-* rows, got {request_ids:?}"
+    );
+    assert!(request_ids.contains(&"REQ-100"));
+    assert!(request_ids.contains(&"REQ-200"));
+    assert!(!request_ids.contains(&"OTHER-300"));
+
+    cleanup(&pool, tenant_id).await;
+}
+
 #[tokio::test]
 async fn history_status_filter_narrows_to_single_status() {
     let pool = store::connect(&database_url()).await.expect("connect");

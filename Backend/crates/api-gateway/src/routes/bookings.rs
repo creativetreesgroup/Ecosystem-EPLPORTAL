@@ -31,6 +31,9 @@ pub struct ListParams {
     /// Exact-or-prefix match on `spx_tx_id` (the "Booking Number"/"Nama Booking" display
     /// column) — see `store::bookings::BookingFilter.booking_name`.
     pub booking_name: Option<String>,
+    /// Exact-or-prefix match on `spx_request_id` (the "ID Request" filter field) — see
+    /// `store::bookings::BookingFilter.request_id`.
+    pub request_id: Option<String>,
     /// Inclusive lower bound on `created_at`.
     pub from: Option<DateTime<Utc>>,
     /// Inclusive upper bound on `created_at`.
@@ -99,6 +102,7 @@ fn build_filter(
         status,
         spx_id: params.spx_id.clone(),
         booking_name: params.booking_name.clone(),
+        request_id: params.request_id.clone(),
         from: params.from,
         to: params.to,
         auto_accepted: params.auto_accepted,
