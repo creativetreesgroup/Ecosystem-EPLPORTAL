@@ -61,3 +61,20 @@ No changes. Existing surface this sub-phase depends on (`Backend/crates/api-gate
 ## Open Questions for the Implementer
 
 None — this design resolves every scope question raised during brainstorming. Any genuinely new ambiguity found during implementation should be raised through the normal task-brief escalation path.
+
+## Tracked, deliberately-deferred follow-ups from implementation + whole-branch review
+
+A whole-branch quality review (opus) found the implementation correctly satisfies all 4 named behavioral constraints above and required exactly one Important fix before merge — a missing read-only explanatory banner (`/rules`/`/price` both show one when `readOnly`; this design's own text only specified the `<fieldset disabled>` mechanism and never mentioned the banner both sibling pages actually carry, a genuine plan gap now fixed post-review, not an implementer miss). Fixed pre-merge along with two cheap Minors (missing `<svelte:head><title>`, `validateImageFile` not rejecting a 0-byte file). A dedicated security review (opus, run in parallel) returned zero findings — the mutation boundary (`PUT /branding` → `Permission::ManageBranding`) is genuinely backend-enforced independent of the frontend, and the backend's own image validation independently re-derives type/size from the payload, never trusting the client.
+
+Remaining Minor findings, deliberately left unfixed (none block merge):
+- `branding.ts`'s length validation uses JS UTF-16 `.length` vs. the backend's Unicode-scalar `chars().count()` — confirmed by review to diverge only in the SAFE direction (UTF-16 length ≥ scalar count always), so the client can only be stricter than the backend, never more permissive. No data-loss/security impact.
+- `credentials: 'include'` is sent on the public, unauthenticated `GET /branding` call — harmless, cookies are simply ignored server-side for that route.
+- No test asserts the `Content-Type: application/json` header on `saveBranding`'s `PUT` — low value given the body is already `JSON.stringify`'d in the same function.
+- The "Hapus" (remove image) buttons use `min-h-[36px]` instead of this page's own `min-h-[44px]` primary tap-target bar.
+- `fileToDataUri` calls in the file-select handlers have no try/catch — a `File.arrayBuffer()` read failure on an otherwise-valid file would surface as an unhandled promise rejection rather than a shown error. Low probability once a file has already passed type/size validation.
+- Cosmetic "Memuat..."/"Menyimpan..." (three periods) vs. this codebase's usual "…" ellipsis character elsewhere.
+- The save-success message (`"Branding tersimpan."`) isn't cleared when the user starts a new edit after a successful save — it can sit stale on screen.
+- No load-failure hardening: if `fetchBranding()` fails, the page shows an error banner AND a blank editable form; saving from that state would blind-clobber the real record with empties. `GET /branding` is designed to always 200 (real-or-default), so this only triggers on a transport/5xx — `/rules` has the identical shape, so this isn't a new or unique gap.
+- No unsaved-changes navigation guard (`/rules` has one via `beforeNavigate`, `/price` doesn't) — inconsistent across the codebase already, not a regression introduced here.
+
+**How to apply:** if a future `/settings/*` sub-phase (7h-7k) touches shared form patterns, consider addressing the read-only-banner and tap-target-size items as a shared fix rather than one-off per page, since they'll likely recur.
