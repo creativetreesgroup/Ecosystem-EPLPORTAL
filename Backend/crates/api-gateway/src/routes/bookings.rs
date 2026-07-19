@@ -152,6 +152,21 @@ pub struct BookingListItem {
     /// JSONB blob is the source of truth, matching how `routes/bookings.rs::accept` already
     /// derives `SpxBooking` from `raw_data` for the manual-accept path.
     pub route: Vec<String>,
+    /// `request_id`/`onsite_id`/`booking_number`/`vehicle_type`/`deadline_at`/`pickup_time`/
+    /// `trip_type` below are sourced from `store::models::Booking`'s `spx_*` generated columns
+    /// (migration 0021), NOT re-derived from `raw_data` via `spx_client::normalize_booking` at
+    /// read time — a deliberate ratification, not an oversight, found and resolved during this
+    /// sub-phase's whole-branch review. The original design doc's intent was "all display fields
+    /// go through `normalize_booking`, generated columns are for SQL filter/sort only" (to avoid
+    /// a row being filtered as one value but displayed as another); the implementation instead
+    /// unified BOTH filter and display on the same generated-column source, which achieves the
+    /// same goal by construction (filter and display can never disagree, because they're the
+    /// same read) rather than by convention. `route` above is the one exception, still sourced
+    /// from `normalize_booking` — left as-is since it predates this sub-phase and isn't SQL-filterable anyway.
+    /// **If `BookingDetail` is ever expanded to carry these same fields (tracked as a Task 7
+    /// disclosed gap), it MUST source them from the same `spx_*` generated columns, not
+    /// `normalize_booking` — mixing the two sources across list vs. detail views is exactly the
+    /// display-inconsistency hazard this comment exists to prevent.**
     pub request_id: Option<String>,
     pub onsite_id: Option<String>,
     /// The SPXID-prefixed display name shown as "Booking Number" — distinct from `spx_id`
