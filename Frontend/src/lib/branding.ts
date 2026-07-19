@@ -55,6 +55,9 @@ export function validateImageFile(file: File): string | null {
 	if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
 		return 'Format harus PNG, JPEG, atau WEBP';
 	}
+	if (file.size === 0) {
+		return 'File tidak boleh kosong';
+	}
 	if (file.size > IMAGE_MAX_BYTES) {
 		return 'Ukuran gambar maksimal 5MB';
 	}

@@ -66,6 +66,10 @@ describe('validateImageFile', () => {
 		expect(validateImageFile(makeFile('image/png', IMAGE_MAX_BYTES + 1))).not.toBeNull();
 	});
 
+	it('rejects a 0-byte file', () => {
+		expect(validateImageFile(makeFile('image/png', 0))).not.toBeNull();
+	});
+
 	it('accepts a file at exactly IMAGE_MAX_BYTES', () => {
 		expect(validateImageFile(makeFile('image/png', IMAGE_MAX_BYTES))).toBeNull();
 	});

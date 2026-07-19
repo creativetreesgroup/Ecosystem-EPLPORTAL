@@ -103,7 +103,19 @@
 	}
 </script>
 
+<svelte:head>
+	<title>Branding — TOWER</title>
+</svelte:head>
+
 <div class="flex flex-col gap-4 max-w-xl">
+	{#if readOnly}
+		<div
+			role="alert"
+			class="px-3.5 py-2.5 rounded-lg text-[13px] font-body border bg-accent/10 text-accent border-accent/30"
+		>
+			Hanya akun utama yang dapat mengubah branding.
+		</div>
+	{/if}
 	{#if loading}
 		<p class="text-[13px] text-text-muted">Memuat...</p>
 	{:else}
