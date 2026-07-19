@@ -71,3 +71,14 @@ This scales cleanly to 7j (Sub-users, main-account-only like Bot) and 7k (SPX Cr
 ## Open Questions for the Implementer
 
 None — this design resolves every scope question raised during brainstorming (list-vs-pagination scale, delete safety confirmed via schema inspection, the nav-array refactor point). Any genuinely new ambiguity found during implementation should be raised through the normal task-brief escalation path.
+
+## Tracked, deliberately-deferred follow-ups from implementation + whole-branch review
+
+A whole-branch quality review (opus) and a dedicated security review (opus, parallel) both returned **Ready to merge: Yes**, zero Critical/Important findings. Security review found nothing at all — POST/DELETE's `Permission::ManageLocations` gate, tenant-scoping (explicit `WHERE tenant_id` + forced RLS, no IDOR on delete), and the "no FK references into `route_locations`" delete-safety claim were all independently re-derived from the real migrations/route handlers, not just trusted from this doc. Quality review found the nav-array refactor clean and sufficient for 7j/7k (each needs only a one-line array append). One Minor acted on for consistency: the read-only view had no explanatory banner, unlike `/settings/branding`'s "Hanya akun utama yang dapat mengubah branding." — added the equivalent "Hanya akun utama yang dapat mengubah lokasi." banner. A stale migration filename in this doc's own Context section (cited `0002_accept_rules_and_targets.sql`, which doesn't exist) was corrected to `0005_accept_rules.sql`.
+
+Remaining Minor findings, deliberately left unfixed (none block merge):
+- The client-side optimistic re-sort after adding a location uses JS `localeCompare`, while the list from `fetchLocations()` (a fresh load or reload) is ordered by Postgres' collation via `ORDER BY name`. These agree for plain ASCII place names but could disagree for names with diacritics/mixed case — cosmetic only (a reload always shows the authoritative order), not worth adding a refetch-after-add just to guarantee byte-identical ordering.
+- No e2e test specifically asserts a delete button is disabled for a non-main-account session (only the add-input and Tambah button are asserted disabled) — the delete-disabling mechanism (`disabled={readOnly || ...}`) is simple and shares the exact same `readOnly` derivation already covered by the add-form assertions, so this is a coverage gap without a corresponding risk.
+- `api-locations.test.ts`'s `deleteLocation` 404 test uses a generic `rejects.toThrow()` instead of matching the specific status code like its sibling tests — already noted in Task 1's own review, not fixed, not blocking.
+
+**How to apply:** if a future `/settings/*` sub-phase (7j-7k) builds another read-only-gated (not content-gated) list page, copy the read-only banner pattern from the start rather than needing a review to catch its absence a second time.
