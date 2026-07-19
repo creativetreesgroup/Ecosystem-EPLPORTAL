@@ -5,7 +5,11 @@
 	// prefers-reduced-motion: renders one static frame instead of a continuous animation loop
 	// when the media query matches (checked once on mount; this page doesn't need to react to
 	// the preference changing mid-session).
-	let { samples }: { samples: number[] } = $props();
+	// fallbackMs: today's summary p99 (already in ms, from a different metric — accept_latency_ms,
+	// not local_dispatch_us — see command/+page.svelte's header comment). Shown only until the
+	// first live WS sample arrives, so a real accept history doesn't read as "stuck at 0.00ms"
+	// on page load (whole-branch review finding). Never mixed into `samples`.
+	let { samples, fallbackMs }: { samples: number[]; fallbackMs?: number } = $props();
 
 	let canvasEl: HTMLCanvasElement | undefined = $state();
 	const BUDGET_US = 1000; // 1ms — spikes above this render in --color-accent, not --color-live.
@@ -70,14 +74,22 @@
 		const idx = Math.floor(sorted.length * 0.99);
 		return sorted[Math.min(idx, sorted.length - 1)];
 	});
+
+	// Until a live sample arrives, show today's summary latency (already ms) instead of a raw
+	// 0.00ms; once samples start flowing this reverts to the usual samples-derived p99.
+	const usingFallback = $derived(samples.length === 0 && fallbackMs !== undefined);
+	const displayMs = $derived(usingFallback ? (fallbackMs as number) : p99 / 1000);
 </script>
 
 <div class="rounded-lg border border-border bg-bg-surface p-4">
 	<canvas bind:this={canvasEl} width="600" height="140" class="w-full" aria-hidden="true"></canvas>
 	<div class="flex items-baseline gap-2 mt-2">
 		<span class="font-mono text-live text-2xl font-semibold">
-			{(p99 / 1000).toFixed(2)}<span class="text-xs text-text-muted">ms p99</span>
+			{displayMs.toFixed(2)}<span class="text-xs text-text-muted">ms p99</span>
 		</span>
+		{#if usingFallback}
+			<span class="text-xs text-text-muted">(rata-rata hari ini, menunggu data live)</span>
+		{/if}
 	</div>
-	<p class="sr-only" aria-live="polite">Latency keputusan p99: {(p99 / 1000).toFixed(2)} milidetik</p>
+	<p class="sr-only" aria-live="polite">Latency keputusan p99: {displayMs.toFixed(2)} milidetik</p>
 </div>

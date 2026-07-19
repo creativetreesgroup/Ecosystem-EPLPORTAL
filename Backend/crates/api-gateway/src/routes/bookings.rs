@@ -28,10 +28,33 @@ pub struct ListParams {
     pub status: Option<String>,
     /// Exact-or-prefix match on `spx_id` (uses the `(tenant_id, spx_id)` unique index).
     pub spx_id: Option<String>,
+    /// Exact-or-prefix match on `spx_tx_id` (the "Booking Number"/"Nama Booking" display
+    /// column) — see `store::bookings::BookingFilter.booking_name`.
+    pub booking_name: Option<String>,
+    /// Exact-or-prefix match on `spx_request_id` (the "ID Request" filter field) — see
+    /// `store::bookings::BookingFilter.request_id`.
+    pub request_id: Option<String>,
     /// Inclusive lower bound on `created_at`.
     pub from: Option<DateTime<Utc>>,
     /// Inclusive upper bound on `created_at`.
     pub to: Option<DateTime<Utc>>,
+    pub auto_accepted: Option<bool>,
+    pub accept_reason: Option<String>,
+    pub vehicle_type: Option<String>,
+    pub trip_type: Option<i32>,
+    /// `"coc"` | `"reguler"` — any other value is a 400 (see `parse_booking_type_filter`).
+    pub booking_type: Option<String>,
+    pub origin_station: Option<String>,
+    pub dest_station: Option<String>,
+    pub weight_min: Option<f64>,
+    pub weight_max: Option<f64>,
+    pub cod: Option<bool>,
+    pub pickup_from: Option<DateTime<Utc>>,
+    pub pickup_to: Option<DateTime<Utc>>,
+    pub deadline_from: Option<DateTime<Utc>>,
+    pub deadline_to: Option<DateTime<Utc>>,
+    /// `"newest"` (default) | `"deadline_soonest"` — any other value is a 400.
+    pub sort: Option<String>,
 }
 fn default_limit() -> i64 {
     50
@@ -47,6 +70,61 @@ fn parse_status_filter(status: &str) -> Result<&'static str, ApiError> {
         "failed" => Ok("failed"),
         other => Err(ApiError::BadRequest(format!("invalid status filter: {other}"))),
     }
+}
+
+/// Same validate-before-use pattern as `parse_status_filter` — `store::bookings::BookingFilter`
+/// cannot represent an invalid `booking_type`, so this is the one place that vocabulary is
+/// enforced.
+fn parse_booking_type_filter(v: &str) -> Result<store::bookings::BookingTypeFilter, ApiError> {
+    match v {
+        "coc" => Ok(store::bookings::BookingTypeFilter::Coc),
+        "reguler" => Ok(store::bookings::BookingTypeFilter::Reguler),
+        other => Err(ApiError::BadRequest(format!("invalid booking_type filter: {other}"))),
+    }
+}
+
+fn parse_sort(v: &str) -> Result<store::bookings::SortKey, ApiError> {
+    match v {
+        "newest" => Ok(store::bookings::SortKey::NewestFirst),
+        "deadline_soonest" => Ok(store::bookings::SortKey::DeadlineSoonest),
+        other => Err(ApiError::BadRequest(format!("invalid sort: {other}"))),
+    }
+}
+
+/// Single place `ListParams` becomes `store::bookings::BookingFilter` — shared by `live` and
+/// `history` so their filter behavior can never drift apart (mirrors `push_common_filters`'s own
+/// "one place new filter dimensions get wired in" rationale on the `store` side).
+fn build_filter(
+    params: &ListParams,
+    status: Option<&'static str>,
+) -> Result<store::bookings::BookingFilter, ApiError> {
+    Ok(store::bookings::BookingFilter {
+        status,
+        spx_id: params.spx_id.clone(),
+        booking_name: params.booking_name.clone(),
+        request_id: params.request_id.clone(),
+        from: params.from,
+        to: params.to,
+        auto_accepted: params.auto_accepted,
+        accept_reason: params.accept_reason.clone(),
+        vehicle_type: params.vehicle_type.clone(),
+        trip_type: params.trip_type,
+        booking_type: params
+            .booking_type
+            .as_deref()
+            .map(parse_booking_type_filter)
+            .transpose()?,
+        origin_station: params.origin_station.clone(),
+        dest_station: params.dest_station.clone(),
+        weight_min: params.weight_min,
+        weight_max: params.weight_max,
+        cod: params.cod,
+        pickup_from: params.pickup_from,
+        pickup_to: params.pickup_to,
+        deadline_from: params.deadline_from,
+        deadline_to: params.deadline_to,
+        sort: params.sort.as_deref().map(parse_sort).transpose()?.unwrap_or_default(),
+    })
 }
 /// Clamp caller-supplied pagination to a sane range — `store`'s own list fns trust their
 /// caller (see `bookings.rs`'s doc comment on `list_live`), so this route is that caller.
@@ -74,11 +152,39 @@ pub struct BookingListItem {
     /// JSONB blob is the source of truth, matching how `routes/bookings.rs::accept` already
     /// derives `SpxBooking` from `raw_data` for the manual-accept path.
     pub route: Vec<String>,
+    /// `request_id`/`onsite_id`/`booking_number`/`vehicle_type`/`deadline_at`/`pickup_time`/
+    /// `trip_type` below are sourced from `store::models::Booking`'s `spx_*` generated columns
+    /// (migration 0021), NOT re-derived from `raw_data` via `spx_client::normalize_booking` at
+    /// read time — a deliberate ratification, not an oversight, found and resolved during this
+    /// sub-phase's whole-branch review. The original design doc's intent was "all display fields
+    /// go through `normalize_booking`, generated columns are for SQL filter/sort only" (to avoid
+    /// a row being filtered as one value but displayed as another); the implementation instead
+    /// unified BOTH filter and display on the same generated-column source, which achieves the
+    /// same goal by construction (filter and display can never disagree, because they're the
+    /// same read) rather than by convention. `route` above is the one exception, still sourced
+    /// from `normalize_booking` — left as-is since it predates this sub-phase and isn't SQL-filterable anyway.
+    /// **If `BookingDetail` is ever expanded to carry these same fields (tracked as a Task 7
+    /// disclosed gap), it MUST source them from the same `spx_*` generated columns, not
+    /// `normalize_booking` — mixing the two sources across list vs. detail views is exactly the
+    /// display-inconsistency hazard this comment exists to prevent.**
+    pub request_id: Option<String>,
+    pub onsite_id: Option<String>,
+    /// The SPXID-prefixed display name shown as "Booking Number" — distinct from `spx_id`
+    /// (this row's internal external-id column). Sourced from `store::models::Booking.spx_tx_id`.
+    pub booking_number: String,
+    pub vehicle_type: Option<String>,
+    pub deadline_at: Option<DateTime<Utc>>,
+    pub pickup_time: Option<DateTime<Utc>>,
+    pub trip_type: Option<i32>,
+    /// `"coc"` | `"reguler"` — reuses the existing `is_coc` signal (already the established
+    /// COC/REG ground truth elsewhere in this codebase), not a new derivation.
+    pub booking_type: &'static str,
 }
 
 impl From<store::models::Booking> for BookingListItem {
     fn from(b: store::models::Booking) -> Self {
         let route = spx_client::normalize_booking(&b.raw_data).route_stops;
+        let booking_type = if b.is_coc { "coc" } else { "reguler" };
         Self {
             id: b.id,
             account_id: b.account_id,
@@ -91,6 +197,14 @@ impl From<store::models::Booking> for BookingListItem {
             rule_matched: b.rule_matched,
             created_at: b.created_at,
             route,
+            request_id: b.spx_request_id,
+            onsite_id: b.spx_onsite_id,
+            booking_number: b.spx_tx_id,
+            vehicle_type: b.spx_vehicle_type,
+            deadline_at: b.spx_deadline_at,
+            pickup_time: b.spx_pickup_time,
+            trip_type: b.spx_trip_type,
+            booking_type,
         }
     }
 }
@@ -146,12 +260,7 @@ async fn live(
     Query(params): Query<ListParams>,
 ) -> Result<Json<Vec<BookingListItem>>, ApiError> {
     let status = params.status.as_deref().map(parse_status_filter).transpose()?;
-    let filter = store::bookings::BookingFilter {
-        status,
-        spx_id: params.spx_id.clone(),
-        from: params.from,
-        to: params.to,
-    };
+    let filter = build_filter(&params, status)?;
     let rows = store::bookings::list_live(
         &state.poller.pool,
         user.tenant_id,
@@ -169,12 +278,7 @@ async fn history(
     Query(params): Query<ListParams>,
 ) -> Result<Json<Vec<BookingListItem>>, ApiError> {
     let status = params.status.as_deref().map(parse_status_filter).transpose()?;
-    let filter = store::bookings::BookingFilter {
-        status,
-        spx_id: params.spx_id.clone(),
-        from: params.from,
-        to: params.to,
-    };
+    let filter = build_filter(&params, status)?;
     let rows = store::bookings::list_history(
         &state.poller.pool,
         user.tenant_id,
@@ -237,6 +341,22 @@ async fn spx_log(
     )
     .await?;
     Ok(Json(rows.into_iter().map(AcceptEventItem::from).collect()))
+}
+
+async fn summary(
+    State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
+) -> Result<Json<store::bookings::BookingSummary>, ApiError> {
+    let s = store::bookings::summary(&state.poller.pool, user.tenant_id).await?;
+    Ok(Json(s))
+}
+
+async fn vehicle_types(
+    State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
+) -> Result<Json<Vec<String>>, ApiError> {
+    let types = store::bookings::list_vehicle_types(&state.poller.pool, user.tenant_id).await?;
+    Ok(Json(types))
 }
 
 /// `GET /bookings/:id/audit-trail` — the per-booking accept-attempt history (rule matched,
@@ -517,6 +637,8 @@ pub fn bookings_router(state: AppState) -> Router<AppState> {
         .route("/{id}/detail", get(detail))
         .route("/{id}/audit-trail", get(audit_trail))
         .route("/spx-log", get(spx_log))
+        .route("/summary", get(summary))
+        .route("/vehicle-types", get(vehicle_types))
         .route("/{id}/accept", post(accept))
         .route_layer(axum::middleware::from_fn_with_state(state, session_auth))
 }

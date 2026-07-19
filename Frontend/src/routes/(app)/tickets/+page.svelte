@@ -14,10 +14,11 @@
 		markRowAccepting,
 		revertRowAccepting,
 		applyRowAccepted,
+		EMPTY_TICKET_FILTERS,
 		type TicketDetailRow,
 		type TicketFilters
 	} from '$lib/tickets';
-	import TicketFilterBar from '$lib/components/TicketFilterBar.svelte';
+	import FilterDrawer from '$lib/components/FilterDrawer.svelte';
 	import TicketsTable from '$lib/components/TicketsTable.svelte';
 	import Pagination from '$lib/components/Pagination.svelte';
 	import TicketDetailDrawer from '$lib/components/TicketDetailDrawer.svelte';
@@ -25,13 +26,14 @@
 
 	const ws = getContext<WsStore>('ws');
 
-	let filters = $state<TicketFilters>({ status: null, spxId: '', from: null, to: null });
+	let filters = $state<TicketFilters>({ ...EMPTY_TICKET_FILTERS });
 	let page = $state(1);
 	let rows = $state<TicketDetailRow[]>([]);
 	let hasMore = $state(false);
 	let loading = $state(false);
 	let errorMsg = $state('');
 	let selectedBookingId = $state<string | null>(null);
+	let filterDrawerOpen = $state(false);
 
 	// Monotonic guard against out-of-order responses: same bug class TicketDetailDrawer (Task 7)
 	// had to fix with its `requestedId` check — a slow request for a PREVIOUS filters/page landing
@@ -117,7 +119,22 @@
 <div class="p-4 flex flex-col gap-4 max-w-6xl mx-auto">
 	<h1 class="font-heading font-bold text-text-primary text-lg">Tickets</h1>
 
-	<TicketFilterBar {filters} onFiltersChange={handleFiltersChange} />
+	<div class="flex items-center justify-between">
+		<button
+			type="button"
+			onclick={() => (filterDrawerOpen = true)}
+			class="min-h-[44px] px-3.5 rounded-md text-[12px] font-body border border-border bg-bg-surface text-text-primary hover:bg-bg-base focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+		>
+			Filter
+		</button>
+	</div>
+	<FilterDrawer
+		open={filterDrawerOpen}
+		{filters}
+		onFiltersChange={handleFiltersChange}
+		onClose={() => (filterDrawerOpen = false)}
+		resultCount={rows.length}
+	/>
 
 	{#if errorMsg}
 		<div

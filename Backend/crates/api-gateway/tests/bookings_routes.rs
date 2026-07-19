@@ -836,6 +836,148 @@ async fn history_spx_id_filter_narrows_to_matching_prefix() {
     cleanup(&pool, tenant_id).await;
 }
 
+/// Task 7: `booking_name` query param — new `LIKE`-prefix filter on `spx_tx_id` (the "Booking
+/// Number"/"Nama Booking" display column, GENERATED from `raw_data->>'booking_name'`), added to
+/// `ListParams`/`build_filter`/`store::bookings::BookingFilter` following the exact same pattern
+/// as `spx_id` above (see `history_spx_id_filter_narrows_to_matching_prefix`).
+#[tokio::test]
+async fn history_booking_name_filter_narrows_to_matching_prefix() {
+    let pool = store::connect(&database_url()).await.expect("connect");
+    store::run_migrations(&pool).await.expect("migrate");
+    let tenant_id = insert_tenant(&pool).await;
+    insert_portal_user(&pool, tenant_id, "owner").await;
+
+    for (spx_id, booking_name) in [
+        ("bn-1", "BKG-100"),
+        ("bn-2", "BKG-200"),
+        ("bn-3", "OTHER-300"),
+    ] {
+        store::upsert_booking(
+            &pool,
+            tenant_id,
+            &store::BookingUpsert {
+                account_id: "acct-1".to_string(),
+                spx_id: spx_id.to_string(),
+                status: "pending".to_string(),
+                is_coc: false,
+                raw_data: serde_json::json!({ "booking_name": booking_name }),
+            },
+        )
+        .await
+        .expect("seed booking");
+        store::update_booking_status(
+            &pool,
+            tenant_id,
+            spx_id,
+            store::BookingStatusUpdate {
+                status: "accepted",
+                latency_ms: Some(1),
+                auto_accepted: true,
+                rule_matched: None,
+                accept_reason: None,
+            },
+        )
+        .await
+        .expect("mark accepted");
+    }
+
+    let state = build_state(pool.clone(), tenant_id).await;
+    let base = spawn_server(state).await;
+    let http = reqwest::Client::new();
+    let cookie = login_cookie(&http, &base, "owner").await;
+
+    let resp = http
+        .get(format!("{base}/bookings/history?booking_name=BKG-"))
+        .header("Cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Vec<serde_json::Value> = resp.json().await.unwrap();
+    let booking_numbers: Vec<&str> = body.iter().map(|b| b["booking_number"].as_str().unwrap()).collect();
+    assert_eq!(
+        booking_numbers.len(),
+        2,
+        "expected only the two BKG-* rows, got {booking_numbers:?}"
+    );
+    assert!(booking_numbers.contains(&"BKG-100"));
+    assert!(booking_numbers.contains(&"BKG-200"));
+    assert!(!booking_numbers.contains(&"OTHER-300"));
+
+    cleanup(&pool, tenant_id).await;
+}
+
+/// Whole-branch review finding: `request_id` query param — new `LIKE`-prefix filter on
+/// `spx_request_id` (the "ID Request" display column, GENERATED from `raw_data->>'request_id'`),
+/// added to `ListParams`/`build_filter`/`store::bookings::BookingFilter` following the exact same
+/// pattern as `booking_name` above (see `history_booking_name_filter_narrows_to_matching_prefix`).
+#[tokio::test]
+async fn history_request_id_filter_narrows_to_matching_prefix() {
+    let pool = store::connect(&database_url()).await.expect("connect");
+    store::run_migrations(&pool).await.expect("migrate");
+    let tenant_id = insert_tenant(&pool).await;
+    insert_portal_user(&pool, tenant_id, "owner").await;
+
+    for (spx_id, request_id) in [
+        ("req-1", "REQ-100"),
+        ("req-2", "REQ-200"),
+        ("req-3", "OTHER-300"),
+    ] {
+        store::upsert_booking(
+            &pool,
+            tenant_id,
+            &store::BookingUpsert {
+                account_id: "acct-1".to_string(),
+                spx_id: spx_id.to_string(),
+                status: "pending".to_string(),
+                is_coc: false,
+                raw_data: serde_json::json!({ "request_id": request_id }),
+            },
+        )
+        .await
+        .expect("seed booking");
+        store::update_booking_status(
+            &pool,
+            tenant_id,
+            spx_id,
+            store::BookingStatusUpdate {
+                status: "accepted",
+                latency_ms: Some(1),
+                auto_accepted: true,
+                rule_matched: None,
+                accept_reason: None,
+            },
+        )
+        .await
+        .expect("mark accepted");
+    }
+
+    let state = build_state(pool.clone(), tenant_id).await;
+    let base = spawn_server(state).await;
+    let http = reqwest::Client::new();
+    let cookie = login_cookie(&http, &base, "owner").await;
+
+    let resp = http
+        .get(format!("{base}/bookings/history?request_id=REQ-"))
+        .header("Cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Vec<serde_json::Value> = resp.json().await.unwrap();
+    let request_ids: Vec<&str> = body.iter().map(|b| b["request_id"].as_str().unwrap()).collect();
+    assert_eq!(
+        request_ids.len(),
+        2,
+        "expected only the two REQ-* rows, got {request_ids:?}"
+    );
+    assert!(request_ids.contains(&"REQ-100"));
+    assert!(request_ids.contains(&"REQ-200"));
+    assert!(!request_ids.contains(&"OTHER-300"));
+
+    cleanup(&pool, tenant_id).await;
+}
+
 #[tokio::test]
 async fn history_status_filter_narrows_to_single_status() {
     let pool = store::connect(&database_url()).await.expect("connect");
@@ -1079,6 +1221,250 @@ async fn history_to_filter_end_of_day_includes_bookings_created_that_day() {
         !start_of_day_ids.contains(&"to-filter-1"),
         "sanity check: the OLD midnight-start `to` value must exclude a booking created later that day, got {start_of_day_ids:?}"
     );
+
+    cleanup(&pool, tenant_id).await;
+}
+
+/// Task 4: `/bookings/live` must expose the SPX-derived generated columns (Task 1/3) on
+/// `BookingListItem` — `request_id`/`onsite_id`/`booking_number`/`vehicle_type`/`trip_type`, and
+/// `booking_type` must reuse the existing `is_coc` signal (`booking_name` matching `^SPXID`
+/// makes this row COC), not invent a new derivation.
+#[tokio::test]
+async fn live_endpoint_returns_spx_derived_fields() {
+    let pool = store::connect(&database_url()).await.expect("connect");
+    store::run_migrations(&pool).await.expect("migrate");
+    let tenant_id = insert_tenant(&pool).await;
+    insert_portal_user(&pool, tenant_id, "owner").await;
+
+    store::upsert_booking(
+        &pool,
+        tenant_id,
+        &store::BookingUpsert {
+            account_id: "acct-1".to_string(),
+            spx_id: "derived-1".to_string(),
+            status: "pending".to_string(),
+            is_coc: false, // ignored — `is_coc` is a generated column, computed from `booking_name` below
+            raw_data: serde_json::json!({
+                "request_id": "R123",
+                "onsite_id": "O456",
+                "booking_name": "SPXID_DERIVED_1",
+                "vehicle_type_name": "TRONTON",
+                "deadline_at": 1_800_000_000,
+                "trip_type": 1
+            }),
+        },
+    )
+    .await
+    .expect("seed booking with spx-derived raw_data fields");
+
+    let state = build_state(pool.clone(), tenant_id).await;
+    let base = spawn_server(state).await;
+    let http = reqwest::Client::new();
+    let cookie = login_cookie(&http, &base, "owner").await;
+
+    let resp = http
+        .get(format!("{base}/bookings/live"))
+        .header("Cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert_eq!(body.len(), 1);
+    let item = &body[0];
+    assert_eq!(item["request_id"], "R123");
+    assert_eq!(item["onsite_id"], "O456");
+    assert_eq!(item["booking_number"], "SPXID_DERIVED_1");
+    assert_eq!(item["vehicle_type"], "TRONTON");
+    assert_eq!(item["trip_type"], 1);
+    assert_eq!(item["booking_type"], "coc");
+
+    cleanup(&pool, tenant_id).await;
+}
+
+/// Task 4: `/bookings/history` must apply the new `auto_accepted`/`vehicle_type` query params
+/// together (AND, not OR) — proves `build_filter` actually wires both dimensions into the same
+/// `BookingFilter`, not just whichever one a naive implementation might wire up first.
+#[tokio::test]
+async fn history_endpoint_filters_by_auto_accepted_and_vehicle_type() {
+    let pool = store::connect(&database_url()).await.expect("connect");
+    store::run_migrations(&pool).await.expect("migrate");
+    let tenant_id = insert_tenant(&pool).await;
+    insert_portal_user(&pool, tenant_id, "owner").await;
+
+    store::upsert_booking(
+        &pool,
+        tenant_id,
+        &store::BookingUpsert {
+            account_id: "acct-1".to_string(),
+            spx_id: "f1".to_string(),
+            status: "pending".to_string(),
+            is_coc: false,
+            raw_data: serde_json::json!({"vehicle_type_name": "CDD"}),
+        },
+    )
+    .await
+    .expect("seed f1");
+    store::update_booking_status(
+        &pool,
+        tenant_id,
+        "f1",
+        store::BookingStatusUpdate {
+            status: "accepted",
+            latency_ms: None,
+            auto_accepted: true,
+            rule_matched: None,
+            accept_reason: None,
+        },
+    )
+    .await
+    .expect("mark f1 accepted, auto_accepted=true");
+
+    store::upsert_booking(
+        &pool,
+        tenant_id,
+        &store::BookingUpsert {
+            account_id: "acct-1".to_string(),
+            spx_id: "f2".to_string(),
+            status: "pending".to_string(),
+            is_coc: false,
+            raw_data: serde_json::json!({"vehicle_type_name": "TRONTON"}),
+        },
+    )
+    .await
+    .expect("seed f2");
+    store::update_booking_status(
+        &pool,
+        tenant_id,
+        "f2",
+        store::BookingStatusUpdate {
+            status: "accepted",
+            latency_ms: None,
+            auto_accepted: false,
+            rule_matched: None,
+            accept_reason: None,
+        },
+    )
+    .await
+    .expect("mark f2 accepted, auto_accepted=false");
+
+    let state = build_state(pool.clone(), tenant_id).await;
+    let base = spawn_server(state).await;
+    let http = reqwest::Client::new();
+    let cookie = login_cookie(&http, &base, "owner").await;
+
+    let resp = http
+        .get(format!("{base}/bookings/history?auto_accepted=true&vehicle_type=CDD"))
+        .header("Cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert_eq!(body.len(), 1, "expected only f1 (auto_accepted=true AND vehicle_type=CDD), got {body:?}");
+    assert_eq!(body[0]["spx_id"], "f1");
+
+    cleanup(&pool, tenant_id).await;
+}
+
+/// Task 5: `/bookings/summary` endpoint requires session.
+#[tokio::test]
+async fn summary_endpoint_requires_session() {
+    let pool = store::connect(&database_url()).await.expect("connect");
+    store::run_migrations(&pool).await.expect("migrate");
+    let tenant_id = insert_tenant(&pool).await;
+
+    let state = build_state(pool.clone(), tenant_id).await;
+    let base = spawn_server(state).await;
+    let http = reqwest::Client::new();
+
+    // No session cookie → 401.
+    let res = http
+        .get(format!("{base}/bookings/summary"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 401);
+
+    cleanup(&pool, tenant_id).await;
+}
+
+/// Task 5: `/bookings/summary` endpoint returns today's counts.
+#[tokio::test]
+async fn summary_endpoint_returns_todays_counts() {
+    let pool = store::connect(&database_url()).await.expect("connect");
+    store::run_migrations(&pool).await.expect("migrate");
+    let tenant_id = insert_tenant(&pool).await;
+    insert_portal_user(&pool, tenant_id, "owner").await;
+
+    store::upsert_booking(
+        &pool,
+        tenant_id,
+        &store::BookingUpsert {
+            account_id: "acct-1".to_string(),
+            spx_id: "s1".to_string(),
+            status: "pending".to_string(),
+            is_coc: false,
+            raw_data: serde_json::json!({}),
+        },
+    )
+    .await
+    .expect("insert booking");
+
+    let state = build_state(pool.clone(), tenant_id).await;
+    let base = spawn_server(state).await;
+    let http = reqwest::Client::new();
+    let cookie = login_cookie(&http, &base, "owner").await;
+
+    let res = http
+        .get(format!("{base}/bookings/summary"))
+        .header("Cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["incoming_today"], 1);
+
+    cleanup(&pool, tenant_id).await;
+}
+
+/// Task 5: `/bookings/vehicle-types` endpoint returns distinct list.
+#[tokio::test]
+async fn vehicle_types_endpoint_returns_distinct_list() {
+    let pool = store::connect(&database_url()).await.expect("connect");
+    store::run_migrations(&pool).await.expect("migrate");
+    let tenant_id = insert_tenant(&pool).await;
+    insert_portal_user(&pool, tenant_id, "owner").await;
+
+    store::upsert_booking(
+        &pool,
+        tenant_id,
+        &store::BookingUpsert {
+            account_id: "acct-1".to_string(),
+            spx_id: "vt1".to_string(),
+            status: "pending".to_string(),
+            is_coc: false,
+            raw_data: serde_json::json!({"vehicle_type_name": "CDD"}),
+        },
+    )
+    .await
+    .expect("insert booking");
+
+    let state = build_state(pool.clone(), tenant_id).await;
+    let base = spawn_server(state).await;
+    let http = reqwest::Client::new();
+    let cookie = login_cookie(&http, &base, "owner").await;
+
+    let res = http
+        .get(format!("{base}/bookings/vehicle-types"))
+        .header("Cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body, serde_json::json!(["CDD"]));
 
     cleanup(&pool, tenant_id).await;
 }

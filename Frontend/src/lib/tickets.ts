@@ -21,6 +21,14 @@ export type TicketDetailRow = {
 	createdAt: string;
 	/** True while an optimistic accept is in flight for this row. */
 	accepting: boolean;
+	requestId: string | null;
+	onsiteId: string | null;
+	bookingNumber: string;
+	vehicleType: string | null;
+	deadlineAt: string | null;
+	pickupTime: string | null;
+	tripType: number | null;
+	bookingType: 'coc' | 'reguler';
 };
 
 export type TicketFilters = {
@@ -28,6 +36,51 @@ export type TicketFilters = {
 	spxId: string;
 	from: string | null;
 	to: string | null;
+	requestId: string;
+	bookingName: string;
+	vehicleType: string | null;
+	tripType: number | null;
+	bookingType: 'coc' | 'reguler' | null;
+	originStation: string | null;
+	destStation: string | null;
+	weightMin: number | null;
+	weightMax: number | null;
+	cod: boolean | null;
+	pickupFrom: string | null;
+	pickupTo: string | null;
+	deadlineFrom: string | null;
+	deadlineTo: string | null;
+	sort: 'newest' | 'deadline_soonest';
+	/** Drives `/command`'s "Accept by Bot" vs "Diambil Operator" widgets — maps straight to the
+	 * backend's existing `auto_accepted` param (Task 4). `null` = no filter (both). */
+	autoAccepted: boolean | null;
+	/** Drives `/command`'s "Close (Agency Lain)" widget — maps to the backend's existing
+	 * `accept_reason` param (Task 4), e.g. `'taken_by_other'`. `null` = no filter. */
+	acceptReason: string | null;
+};
+
+export const EMPTY_TICKET_FILTERS: TicketFilters = {
+	status: null,
+	spxId: '',
+	from: null,
+	to: null,
+	requestId: '',
+	bookingName: '',
+	vehicleType: null,
+	tripType: null,
+	bookingType: null,
+	originStation: null,
+	destStation: null,
+	weightMin: null,
+	weightMax: null,
+	cod: null,
+	pickupFrom: null,
+	pickupTo: null,
+	deadlineFrom: null,
+	deadlineTo: null,
+	sort: 'newest',
+	autoAccepted: null,
+	acceptReason: null
 };
 
 const PAGE_SIZE_DEFAULT = 50;
@@ -36,7 +89,7 @@ const PAGE_SIZE_DEFAULT = 50;
  * includes filter params that are actually set — an omitted param means "no filter", not an
  * empty-string filter, matching the backend's `Option<T>` query-param semantics. */
 export function filtersToQueryString(
-	filters: Pick<TicketFilters, 'status' | 'spxId' | 'from' | 'to'>,
+	filters: Omit<TicketFilters, 'status'> & { status?: TicketStatus | null },
 	page: number,
 	pageSize: number = PAGE_SIZE_DEFAULT
 ): string {
@@ -45,6 +98,23 @@ export function filtersToQueryString(
 	if (filters.spxId) params.set('spx_id', filters.spxId);
 	if (filters.from) params.set('from', filters.from);
 	if (filters.to) params.set('to', filters.to);
+	if (filters.requestId) params.set('request_id', filters.requestId);
+	if (filters.bookingName) params.set('booking_name', filters.bookingName);
+	if (filters.vehicleType) params.set('vehicle_type', filters.vehicleType);
+	if (filters.tripType !== null) params.set('trip_type', String(filters.tripType));
+	if (filters.bookingType) params.set('booking_type', filters.bookingType);
+	if (filters.originStation) params.set('origin_station', filters.originStation);
+	if (filters.destStation) params.set('dest_station', filters.destStation);
+	if (filters.weightMin !== null) params.set('weight_min', String(filters.weightMin));
+	if (filters.weightMax !== null) params.set('weight_max', String(filters.weightMax));
+	if (filters.cod !== null) params.set('cod', String(filters.cod));
+	if (filters.pickupFrom) params.set('pickup_from', filters.pickupFrom);
+	if (filters.pickupTo) params.set('pickup_to', filters.pickupTo);
+	if (filters.deadlineFrom) params.set('deadline_from', filters.deadlineFrom);
+	if (filters.deadlineTo) params.set('deadline_to', filters.deadlineTo);
+	if (filters.sort !== 'newest') params.set('sort', filters.sort);
+	if (filters.autoAccepted !== null) params.set('auto_accepted', String(filters.autoAccepted));
+	if (filters.acceptReason) params.set('accept_reason', filters.acceptReason);
 	params.set('limit', String(pageSize));
 	params.set('offset', String((page - 1) * pageSize));
 	return params.toString();

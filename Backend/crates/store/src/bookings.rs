@@ -31,6 +31,7 @@
 //!    functions.
 use std::collections::HashSet;
 
+use chrono::{TimeZone, Utc};
 use serde_json::Value;
 use sqlx::{PgPool, QueryBuilder};
 use uuid::Uuid;
@@ -39,13 +40,151 @@ use uuid::Uuid;
 /// pattern in this crate. `status` is `&'static str` because callers must validate against the
 /// real 3-value vocabulary BEFORE constructing this (see `api-gateway`'s `parse_status_filter`)
 /// — this type intentionally cannot represent an invalid status, so validation can't be
-/// forgotten at a call site.
-#[derive(Debug, Default, Clone)]
+/// forgotten at a call site. Every new field beyond the original 4 is `Option<T>`; `None` means
+/// "no filter", same convention.
+#[derive(Debug, Clone, Default)]
 pub struct BookingFilter {
     pub status: Option<&'static str>,
     pub spx_id: Option<String>,
+    /// Exact-or-prefix match on `spx_tx_id` (the "Booking Number" display column, GENERATED from
+    /// `raw_data->>'booking_name'` with a fallback to `spx_id` — see migration
+    /// `0021_bookings_spx_derived_columns.sql`). Same `LIKE`-prefix/escaped/bound convention as
+    /// `spx_id` above, added for the `/tickets` "Nama Booking" search field.
+    pub booking_name: Option<String>,
+    /// Exact-or-prefix match on `spx_request_id` (GENERATED from `raw_data`'s `request_id`/
+    /// `requestId`/`req_id` keys — see migration `0021_bookings_spx_derived_columns.sql`). Same
+    /// `LIKE`-prefix/escaped/bound convention as `booking_name` above, added for the `/tickets`
+    /// "ID Request" search field.
+    pub request_id: Option<String>,
     pub from: Option<chrono::DateTime<chrono::Utc>>,
     pub to: Option<chrono::DateTime<chrono::Utc>>,
+    pub auto_accepted: Option<bool>,
+    pub accept_reason: Option<String>,
+    pub vehicle_type: Option<String>,
+    pub trip_type: Option<i32>,
+    pub booking_type: Option<BookingTypeFilter>,
+    pub origin_station: Option<String>,
+    pub dest_station: Option<String>,
+    pub weight_min: Option<f64>,
+    pub weight_max: Option<f64>,
+    pub cod: Option<bool>,
+    pub pickup_from: Option<chrono::DateTime<chrono::Utc>>,
+    pub pickup_to: Option<chrono::DateTime<chrono::Utc>>,
+    pub deadline_from: Option<chrono::DateTime<chrono::Utc>>,
+    pub deadline_to: Option<chrono::DateTime<chrono::Utc>>,
+    pub sort: SortKey,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BookingTypeFilter {
+    Coc,
+    Reguler,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SortKey {
+    #[default]
+    NewestFirst,
+    DeadlineSoonest,
+}
+
+/// Appends every `Some` filter field in `f` to `qb` as `AND ...` clauses, then the `ORDER BY`.
+/// Shared by `list_live` and `list_history` so the two endpoints' filter behavior can never drift
+/// apart — this is the SINGLE place new filter dimensions get wired into SQL.
+fn push_common_filters(qb: &mut QueryBuilder<sqlx::Postgres>, f: &BookingFilter) {
+    if let Some(spx_id) = &f.spx_id {
+        qb.push(" AND spx_id LIKE ");
+        qb.push_bind(format!("{}%", escape_like(spx_id)));
+        qb.push(" ESCAPE '\\'");
+    }
+    if let Some(booking_name) = &f.booking_name {
+        qb.push(" AND spx_tx_id LIKE ");
+        qb.push_bind(format!("{}%", escape_like(booking_name)));
+        qb.push(" ESCAPE '\\'");
+    }
+    if let Some(request_id) = &f.request_id {
+        qb.push(" AND spx_request_id LIKE ");
+        qb.push_bind(format!("{}%", escape_like(request_id)));
+        qb.push(" ESCAPE '\\'");
+    }
+    if let Some(from) = f.from {
+        qb.push(" AND created_at >= ");
+        qb.push_bind(from);
+    }
+    if let Some(to) = f.to {
+        qb.push(" AND created_at <= ");
+        qb.push_bind(to);
+    }
+    if let Some(auto_accepted) = f.auto_accepted {
+        qb.push(" AND auto_accepted = ");
+        qb.push_bind(auto_accepted);
+    }
+    if let Some(reason) = &f.accept_reason {
+        // A loss to a rival agency is tagged one of two ways depending on which code path
+        // caught it — `accept_reason` when the bot actively raced and lost (dispatch.rs),
+        // `drift_reason` when the periodic reconciliation sweep found the booking silently
+        // vanished from SPX's active pool with no rule ever matching it at all
+        // (expire_stale_bookings). Same COALESCE priority as the frontend's
+        // `failureReasonFromRaw` (`drift_reason ?? accept_reason`) — see also `summary()`
+        // below, which must stay in lockstep with this filter.
+        qb.push(" AND COALESCE(raw_data->>'accept_reason', raw_data->>'drift_reason') = ");
+        qb.push_bind(reason.clone());
+    }
+    if let Some(vehicle_type) = &f.vehicle_type {
+        qb.push(" AND spx_vehicle_type = ");
+        qb.push_bind(vehicle_type.clone());
+    }
+    if let Some(trip_type) = f.trip_type {
+        qb.push(" AND spx_trip_type = ");
+        qb.push_bind(trip_type);
+    }
+    if let Some(booking_type) = f.booking_type {
+        qb.push(" AND is_coc = ");
+        qb.push_bind(matches!(booking_type, BookingTypeFilter::Coc));
+    }
+    if let Some(origin) = &f.origin_station {
+        qb.push(" AND spx_origin_station = ");
+        qb.push_bind(origin.clone());
+    }
+    if let Some(dest) = &f.dest_station {
+        qb.push(" AND spx_dest_station = ");
+        qb.push_bind(dest.clone());
+    }
+    if let Some(weight_min) = f.weight_min {
+        qb.push(" AND weight >= ");
+        qb.push_bind(weight_min);
+    }
+    if let Some(weight_max) = f.weight_max {
+        qb.push(" AND weight <= ");
+        qb.push_bind(weight_max);
+    }
+    if let Some(cod) = f.cod {
+        if cod {
+            qb.push(" AND cod_amount > 0");
+        } else {
+            qb.push(" AND cod_amount = 0");
+        }
+    }
+    if let Some(pickup_from) = f.pickup_from {
+        qb.push(" AND spx_pickup_time >= ");
+        qb.push_bind(pickup_from);
+    }
+    if let Some(pickup_to) = f.pickup_to {
+        qb.push(" AND spx_pickup_time <= ");
+        qb.push_bind(pickup_to);
+    }
+    if let Some(deadline_from) = f.deadline_from {
+        qb.push(" AND spx_deadline_at >= ");
+        qb.push_bind(deadline_from);
+    }
+    if let Some(deadline_to) = f.deadline_to {
+        qb.push(" AND spx_deadline_at <= ");
+        qb.push_bind(deadline_to);
+    }
+    match f.sort {
+        SortKey::NewestFirst => qb.push(" ORDER BY created_at DESC"),
+        SortKey::DeadlineSoonest => qb.push(" ORDER BY spx_deadline_at ASC NULLS LAST"),
+    };
 }
 
 /// Escapes `%`/`_`/`\` in a caller-supplied search term before it's embedded in a `LIKE`
@@ -297,25 +436,15 @@ pub async fn list_live(
     let mut qb = QueryBuilder::new(
         "SELECT id, tenant_id, account_id, spx_id, raw_data, status, is_coc, needs_enrichment, \
          service_type, weight, cod_amount, auto_accepted, accept_latency_ms, rule_matched, \
+         spx_request_id, spx_onsite_id, spx_tx_id, spx_vehicle_type, spx_deadline_at, \
+         spx_pickup_time, spx_trip_type, \
          created_at, updated_at FROM bookings WHERE tenant_id = ",
     );
     qb.push_bind(tenant_id);
     qb.push(" AND status = ");
     qb.push_bind(filter.status.unwrap_or("pending"));
-    if let Some(spx_id) = &filter.spx_id {
-        qb.push(" AND spx_id LIKE ");
-        qb.push_bind(format!("{}%", escape_like(spx_id)));
-        qb.push(" ESCAPE '\\'");
-    }
-    if let Some(from) = filter.from {
-        qb.push(" AND created_at >= ");
-        qb.push_bind(from);
-    }
-    if let Some(to) = filter.to {
-        qb.push(" AND created_at <= ");
-        qb.push_bind(to);
-    }
-    qb.push(" ORDER BY created_at DESC LIMIT ");
+    push_common_filters(&mut qb, filter);
+    qb.push(" LIMIT ");
     qb.push_bind(limit);
     qb.push(" OFFSET ");
     qb.push_bind(offset);
@@ -341,6 +470,8 @@ pub async fn list_history(
     let mut qb = QueryBuilder::new(
         "SELECT id, tenant_id, account_id, spx_id, raw_data, status, is_coc, needs_enrichment, \
          service_type, weight, cod_amount, auto_accepted, accept_latency_ms, rule_matched, \
+         spx_request_id, spx_onsite_id, spx_tx_id, spx_vehicle_type, spx_deadline_at, \
+         spx_pickup_time, spx_trip_type, \
          created_at, updated_at FROM bookings WHERE tenant_id = ",
     );
     qb.push_bind(tenant_id);
@@ -353,20 +484,8 @@ pub async fn list_history(
             qb.push(" AND status IN ('accepted', 'failed')");
         }
     }
-    if let Some(spx_id) = &filter.spx_id {
-        qb.push(" AND spx_id LIKE ");
-        qb.push_bind(format!("{}%", escape_like(spx_id)));
-        qb.push(" ESCAPE '\\'");
-    }
-    if let Some(from) = filter.from {
-        qb.push(" AND created_at >= ");
-        qb.push_bind(from);
-    }
-    if let Some(to) = filter.to {
-        qb.push(" AND created_at <= ");
-        qb.push_bind(to);
-    }
-    qb.push(" ORDER BY created_at DESC LIMIT ");
+    push_common_filters(&mut qb, filter);
+    qb.push(" LIMIT ");
     qb.push_bind(limit);
     qb.push(" OFFSET ");
     qb.push_bind(offset);
@@ -389,6 +508,8 @@ pub async fn get_detail(
     let row = sqlx::query_as::<_, crate::models::Booking>(
         "SELECT id, tenant_id, account_id, spx_id, raw_data, status, is_coc, needs_enrichment, \
          service_type, weight, cod_amount, auto_accepted, accept_latency_ms, rule_matched, \
+         spx_request_id, spx_onsite_id, spx_tx_id, spx_vehicle_type, spx_deadline_at, \
+         spx_pickup_time, spx_trip_type, \
          created_at, updated_at FROM bookings WHERE tenant_id = $1 AND id = $2",
     )
     .bind(tenant_id)
@@ -423,6 +544,8 @@ pub async fn get_by_spx_id(
     let row = sqlx::query_as::<_, crate::models::Booking>(
         "SELECT id, tenant_id, account_id, spx_id, raw_data, status, is_coc, needs_enrichment, \
          service_type, weight, cod_amount, auto_accepted, accept_latency_ms, rule_matched, \
+         spx_request_id, spx_onsite_id, spx_tx_id, spx_vehicle_type, spx_deadline_at, \
+         spx_pickup_time, spx_trip_type, \
          created_at, updated_at FROM bookings WHERE tenant_id = $1 AND spx_id = $2 LIMIT 1",
     )
     .bind(tenant_id)
@@ -431,4 +554,77 @@ pub async fn get_by_spx_id(
     .await?;
     tx.commit().await?;
     Ok(row)
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+pub struct BookingSummary {
+    pub incoming_today: i64,
+    pub accepted_auto_today: i64,
+    pub accepted_manual_today: i64,
+    pub taken_by_other_today: i64,
+    pub latency_p99_ms: Option<f64>,
+}
+
+/// "Today" is fixed WIB (UTC+7, no DST) — matches spx_client::booking's format_times convention
+/// (this codebase's only existing timezone precedent) and this design doc's own decision (no
+/// per-tenant timezone column exists; TOWER is single-region).
+fn wib_midnight_utc_today() -> chrono::DateTime<chrono::Utc> {
+    let wib = chrono::FixedOffset::east_opt(7 * 3600).expect("valid +7 offset");
+    let now_wib = Utc::now().with_timezone(&wib);
+    let midnight_wib = now_wib
+        .date_naive()
+        .and_hms_opt(0, 0, 0)
+        .expect("valid midnight");
+    wib.from_local_datetime(&midnight_wib)
+        .single()
+        .expect("unambiguous")
+        .with_timezone(&Utc)
+}
+
+/// `/bookings/summary`: today's (WIB) counters for the dashboard header — incoming, auto/manual
+/// accepted, taken-by-other, and the p99 accept latency among today's auto-accepts.
+pub async fn summary(pool: &PgPool, tenant_id: Uuid) -> Result<BookingSummary, sqlx::Error> {
+    let mut tx = crate::begin_tenant_tx(pool, tenant_id).await?;
+    let today_start = wib_midnight_utc_today();
+    let row = sqlx::query_as::<_, (i64, i64, i64, i64, Option<f64>)>(
+        "SELECT \
+            COUNT(*) FILTER (WHERE created_at >= $2), \
+            COUNT(*) FILTER (WHERE created_at >= $2 AND status = 'accepted' AND auto_accepted = true), \
+            COUNT(*) FILTER (WHERE created_at >= $2 AND status = 'accepted' AND auto_accepted = false), \
+            COUNT(*) FILTER (WHERE created_at >= $2 AND status = 'failed' AND COALESCE(raw_data->>'accept_reason', raw_data->>'drift_reason') = 'taken_by_other'), \
+            percentile_cont(0.99) WITHIN GROUP (ORDER BY accept_latency_ms) \
+                FILTER (WHERE created_at >= $2 AND auto_accepted = true AND accept_latency_ms IS NOT NULL) \
+         FROM bookings WHERE tenant_id = $1",
+    )
+    .bind(tenant_id)
+    .bind(today_start)
+    .fetch_one(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(BookingSummary {
+        incoming_today: row.0,
+        accepted_auto_today: row.1,
+        accepted_manual_today: row.2,
+        taken_by_other_today: row.3,
+        latency_p99_ms: row.4,
+    })
+}
+
+/// Distinct, non-null vehicle types seen for this tenant — backs the vehicle-type filter
+/// dropdown (no separate lookup table exists; `spx_vehicle_type` is a generated column derived
+/// from each booking's own `raw_data`, per Task 1).
+pub async fn list_vehicle_types(
+    pool: &PgPool,
+    tenant_id: Uuid,
+) -> Result<Vec<String>, sqlx::Error> {
+    let mut tx = crate::begin_tenant_tx(pool, tenant_id).await?;
+    let types: Vec<String> = sqlx::query_scalar(
+        "SELECT DISTINCT spx_vehicle_type FROM bookings \
+         WHERE tenant_id = $1 AND spx_vehicle_type IS NOT NULL ORDER BY spx_vehicle_type",
+    )
+    .bind(tenant_id)
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(types)
 }

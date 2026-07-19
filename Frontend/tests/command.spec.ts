@@ -93,3 +93,25 @@ test('keyboard-only: tab to a nav link and activate it', async ({ page }) => {
 	await page.keyboard.press('Enter');
 	await expect(page).toHaveURL(/\/tickets/);
 });
+
+// Task 15: proves clicking a KPI widget (Task 8/10/13) actually switches the query driving the
+// list below, not just its own visual state. Real interaction end to end: a real click, a real
+// GET /bookings/history?status=accepted&auto_accepted=true round trip (widgetFilter('auto') in
+// +page.svelte), and a real DOM swap (TicketTicker unmounts, the awaited <ul> mounts in its
+// place). No seeded booking has auto_accepted=true (command.spec.ts's own seed above and
+// tickets.spec.ts's seeded `accepted` row were both inserted directly via psql with that column
+// left at its default), so the awaited list's empty state is what proves the switch happened —
+// if the click were a no-op, the seeded pending booking's "Terima" button (from the ticker,
+// asserted above) would still be showing instead.
+test('clicking a KPI widget switches the list below to that category', async ({ page }) => {
+	await login(page);
+	await expect(page.getByText('Terima')).toBeVisible({ timeout: 10_000 });
+
+	const widget = page.getByRole('button', { name: /Accept by Bot/ });
+	await expect(widget).toBeVisible();
+	await widget.click();
+	await expect(widget).toHaveAttribute('aria-pressed', 'true');
+
+	await expect(page.getByText('Tidak ada tiket di kategori ini.')).toBeVisible({ timeout: 10_000 });
+	await expect(page.getByText('Terima')).toBeHidden();
+});
