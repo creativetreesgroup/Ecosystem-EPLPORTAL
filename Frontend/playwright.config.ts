@@ -12,11 +12,11 @@ import { defineConfig } from '@playwright/test';
 export default defineConfig({
 	testDir: 'tests',
 	webServer: {
-		command: 'pnpm exec vite dev --port 5176',
-		url: 'http://localhost:5176',
+		command: 'pnpm dev',
+		url: 'http://localhost:5173',
 		reuseExistingServer: !process.env.CI
 	},
 	use: {
-		baseURL: 'http://localhost:5176'
+		baseURL: 'http://localhost:5173'
 	}
 });
