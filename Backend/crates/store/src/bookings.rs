@@ -120,7 +120,14 @@ fn push_common_filters(qb: &mut QueryBuilder<sqlx::Postgres>, f: &BookingFilter)
         qb.push_bind(auto_accepted);
     }
     if let Some(reason) = &f.accept_reason {
-        qb.push(" AND raw_data->>'accept_reason' = ");
+        // A loss to a rival agency is tagged one of two ways depending on which code path
+        // caught it — `accept_reason` when the bot actively raced and lost (dispatch.rs),
+        // `drift_reason` when the periodic reconciliation sweep found the booking silently
+        // vanished from SPX's active pool with no rule ever matching it at all
+        // (expire_stale_bookings). Same COALESCE priority as the frontend's
+        // `failureReasonFromRaw` (`drift_reason ?? accept_reason`) — see also `summary()`
+        // below, which must stay in lockstep with this filter.
+        qb.push(" AND COALESCE(raw_data->>'accept_reason', raw_data->>'drift_reason') = ");
         qb.push_bind(reason.clone());
     }
     if let Some(vehicle_type) = &f.vehicle_type {
@@ -584,7 +591,7 @@ pub async fn summary(pool: &PgPool, tenant_id: Uuid) -> Result<BookingSummary, s
             COUNT(*) FILTER (WHERE created_at >= $2), \
             COUNT(*) FILTER (WHERE created_at >= $2 AND status = 'accepted' AND auto_accepted = true), \
             COUNT(*) FILTER (WHERE created_at >= $2 AND status = 'accepted' AND auto_accepted = false), \
-            COUNT(*) FILTER (WHERE created_at >= $2 AND status = 'failed' AND raw_data->>'accept_reason' = 'taken_by_other'), \
+            COUNT(*) FILTER (WHERE created_at >= $2 AND status = 'failed' AND COALESCE(raw_data->>'accept_reason', raw_data->>'drift_reason') = 'taken_by_other'), \
             percentile_cont(0.99) WITHIN GROUP (ORDER BY accept_latency_ms) \
                 FILTER (WHERE created_at >= $2 AND auto_accepted = true AND accept_latency_ms IS NOT NULL) \
          FROM bookings WHERE tenant_id = $1",

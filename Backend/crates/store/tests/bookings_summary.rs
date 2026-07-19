@@ -26,7 +26,11 @@ async fn summary_counts_todays_buckets_correctly() {
     let pool = test_pool().await;
     let tenant_id = seed_tenant(&pool).await;
 
-    // 2 incoming (any status), 1 accepted+auto, 1 accepted+manual, 1 taken_by_other.
+    // 2 incoming (any status), 1 accepted+auto, 1 accepted+manual, 2 taken_by_other
+    // (one via accept_reason — the bot raced and lost; one via drift_reason — the
+    // reconciliation sweep found it silently vanished from SPX's active pool, e.g. no
+    // rule ever matched it so the bot never attempted at all). Both must count towards
+    // taken_by_other_today — see COALESCE(accept_reason, drift_reason) in summary()'s SQL.
     sqlx::query("INSERT INTO bookings (tenant_id, spx_id, raw_data, status, auto_accepted, accept_latency_ms) VALUES ($1, 'b1', '{}', 'pending', false, NULL)")
         .bind(tenant_id).execute(&pool).await.expect("insert");
     sqlx::query("INSERT INTO bookings (tenant_id, spx_id, raw_data, status, auto_accepted, accept_latency_ms) VALUES ($1, 'b2', '{}', 'accepted', true, 120)")
@@ -35,12 +39,14 @@ async fn summary_counts_todays_buckets_correctly() {
         .bind(tenant_id).execute(&pool).await.expect("insert");
     sqlx::query("INSERT INTO bookings (tenant_id, spx_id, raw_data, status, auto_accepted) VALUES ($1, 'b4', jsonb_build_object('accept_reason', 'taken_by_other'), 'failed', false)")
         .bind(tenant_id).execute(&pool).await.expect("insert");
+    sqlx::query("INSERT INTO bookings (tenant_id, spx_id, raw_data, status, auto_accepted) VALUES ($1, 'b5', jsonb_build_object('drift_reason', 'taken_by_other'), 'failed', false)")
+        .bind(tenant_id).execute(&pool).await.expect("insert");
 
     let s = store::bookings::summary(&pool, tenant_id).await.expect("summary");
-    assert_eq!(s.incoming_today, 4);
+    assert_eq!(s.incoming_today, 5);
     assert_eq!(s.accepted_auto_today, 1);
     assert_eq!(s.accepted_manual_today, 1);
-    assert_eq!(s.taken_by_other_today, 1);
+    assert_eq!(s.taken_by_other_today, 2);
     assert_eq!(s.latency_p99_ms, Some(120.0));
 }
 
