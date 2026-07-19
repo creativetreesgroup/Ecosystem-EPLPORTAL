@@ -1,3 +1,8 @@
+// Thin typed REST layer for /bot/settings. Wire shape verified directly against
+// Backend/crates/api-gateway/src/routes/bot.rs (BotSettingsResponse/BotSettingsRequest) —
+// snake_case throughout, no rename_all anywhere in api-gateway. Distinct resource from
+// Frontend/src/lib/api-activity.ts's fetchBotLogs/clearBotLogs (that's /bot/logs, this is
+// /bot/settings — same backend `/bot` prefix, different endpoints, no naming collision).
 import { ApiError } from './api';
 
 export type BotSettings = {
@@ -57,7 +62,6 @@ export async function saveBotSettings(input: BotSettingsInput): Promise<BotSetti
 			wa_group: input.waGroup,
 			waha_url: input.wahaUrl,
 			waha_session: input.wahaSession,
-			waha_api_key_set: input.wahaApiKeySet,
 			waha_api_key: input.wahaApiKey
 		})
 	});

@@ -5,7 +5,7 @@ afterEach(() => {
 	vi.unstubAllGlobals();
 });
 
-function botSettingsWire(overrides: Partial<Record<string, unknown>> = {}) {
+function botSettingsResponseWire(overrides: Partial<Record<string, unknown>> = {}) {
 	return {
 		enabled: true,
 		webhook_url: 'https://n8n.example.com/webhook',
@@ -14,6 +14,18 @@ function botSettingsWire(overrides: Partial<Record<string, unknown>> = {}) {
 		waha_url: 'http://127.0.0.1:19999',
 		waha_session: 'default',
 		waha_api_key_set: true,
+		...overrides
+	};
+}
+
+function botSettingsRequestBody(overrides: Partial<Record<string, unknown>> = {}) {
+	return {
+		enabled: true,
+		webhook_url: 'https://n8n.example.com/webhook',
+		wa_number: '628111111111',
+		wa_group: '',
+		waha_url: 'http://127.0.0.1:19999',
+		waha_session: 'default',
 		waha_api_key: '',
 		...overrides
 	};
@@ -26,7 +38,7 @@ describe('fetchBotSettings', () => {
 			'fetch',
 			vi.fn(async (url: string) => {
 				calledUrl = url;
-				return new Response(JSON.stringify(botSettingsWire()), { status: 200 });
+				return new Response(JSON.stringify(botSettingsResponseWire()), { status: 200 });
 			})
 		);
 		const settings = await fetchBotSettings();
@@ -57,7 +69,7 @@ describe('saveBotSettings', () => {
 			vi.fn(async (url: string, init?: RequestInit) => {
 				calledUrl = url;
 				calledInit = init;
-				return new Response(JSON.stringify(botSettingsWire()), { status: 200 });
+				return new Response(JSON.stringify(botSettingsResponseWire()), { status: 200 });
 			})
 		);
 		await saveBotSettings({
@@ -72,7 +84,7 @@ describe('saveBotSettings', () => {
 		});
 		expect(calledUrl).toBe('/bot/settings');
 		expect(calledInit?.method).toBe('PUT');
-		expect(JSON.parse(calledInit?.body as string)).toEqual(botSettingsWire());
+		expect(JSON.parse(calledInit?.body as string)).toEqual(botSettingsRequestBody());
 	});
 
 	it('sends a blank waha_api_key as an actual empty string, not omitted, when keeping the existing key', async () => {
@@ -81,7 +93,7 @@ describe('saveBotSettings', () => {
 			vi.fn(async (_url: string, init?: RequestInit) => {
 				const body = JSON.parse(init?.body as string);
 				expect(body).toHaveProperty('waha_api_key', '');
-				return new Response(JSON.stringify(botSettingsWire()), { status: 200 });
+				return new Response(JSON.stringify(botSettingsResponseWire()), { status: 200 });
 			})
 		);
 		await saveBotSettings({
