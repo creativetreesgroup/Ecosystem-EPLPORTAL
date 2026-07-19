@@ -33,8 +33,8 @@ test('main account sees the Sub-user nav entry, the real list, and their own row
 	await expect(page.getByRole('link', { name: 'Sub-user' })).toBeVisible();
 
 	await page.goto('/settings/sub-users');
-	await expect(page.getByText('Tidak bisa menghapus akun sendiri.')).toBeVisible({ timeout: 10_000 });
 	const selfRow = page.locator('li', { hasText: 'e2e-test-user' });
+	await expect(selfRow.getByText('Tidak bisa menghapus akun sendiri.')).toBeVisible({ timeout: 10_000 });
 	await expect(selfRow.getByRole('button', { name: 'Hapus' })).toBeDisabled();
 });
 
