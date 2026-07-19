@@ -75,6 +75,14 @@
 	{#if loading}
 		<p class="text-[13px] text-text-muted">Memuat…</p>
 	{:else}
+		{#if readOnly}
+			<div
+				role="alert"
+				class="px-3.5 py-2.5 rounded-lg text-[13px] font-body border bg-accent/10 text-accent border-accent/30"
+			>
+				Hanya akun utama yang dapat mengubah lokasi.
+			</div>
+		{/if}
 		{#if errorMsg}
 			<p role="alert" aria-live="polite" class="text-[13px] text-danger">{errorMsg}</p>
 		{/if}
