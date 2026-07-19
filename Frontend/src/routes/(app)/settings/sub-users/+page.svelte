@@ -116,10 +116,13 @@
 				/>
 			</label>
 
-			<label class="flex flex-col gap-1">
-				<span class="text-[10px] font-body text-text-muted uppercase tracking-wide">Password</span>
+			<div class="flex flex-col gap-1">
+				<label for="new-sub-user-password" class="text-[10px] font-body text-text-muted uppercase tracking-wide"
+					>Password</label
+				>
 				<div class="relative">
 					<input
+						id="new-sub-user-password"
 						type={showPassword ? 'text' : 'password'}
 						bind:value={password}
 						autocomplete="new-password"
@@ -142,7 +145,7 @@
 				{#if passwordError}
 					<span class="text-[11px] text-danger">{passwordError}</span>
 				{/if}
-			</label>
+			</div>
 
 			<label class="flex flex-col gap-1">
 				<span class="text-[10px] font-body text-text-muted uppercase tracking-wide">Nama Tampilan</span>
