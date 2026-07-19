@@ -1,24 +1,26 @@
-<!-- Shared shell for every /settings/* sub-route. The nav array grows by one entry per future
-     sub-phase (Locations, Sub-users, SPX Credentials — Fase 7i-7k) — no placeholder entries for
-     resources that don't exist yet, matching TopNav.svelte's own established convention of not
-     building UI for not-yet-built surfaces. "Bot" is main-account-only (unlike "Branding"):
-     GET /bot/settings itself requires Permission::ManageBotSettings, so a non-main-account
-     session must never even see this nav entry — matching Fase 7f's Log Bot tab-hiding pattern,
-     not Fase 7g's Branding read-only-view pattern. -->
+<!-- Shared shell for every /settings/* sub-route. NAV_ITEMS is a flat array with a per-item
+     mainAccountOnly flag, filtered by data.user.is_main_account — refactored from the previous
+     if/else ternary (tracked as a Minor in Fase 7h's whole-branch review) now that a SECOND
+     always-visible entry ("Lokasi") needs adding; the ternary would have needed updating in both
+     branches for every future always-visible entry. Scales cleanly to Fase 7j (Sub-users,
+     main-account-only like Bot) and 7k (SPX Credentials, open like Branding/Locations) without
+     further restructuring. No placeholder entries for resources that don't exist yet, matching
+     TopNav.svelte's own established convention. -->
 <script lang="ts">
 	import { page } from '$app/state';
 	import type { LayoutProps } from './$types';
 
 	let { children, data }: LayoutProps = $props();
 
-	const NAV_ITEMS = $derived(
-		data.user.is_main_account
-			? [
-					{ href: '/settings/branding', label: 'Branding' },
-					{ href: '/settings/bot', label: 'Bot' }
-				]
-			: [{ href: '/settings/branding', label: 'Branding' }]
-	);
+	type NavItem = { href: string; label: string; mainAccountOnly?: boolean };
+
+	const ALL_NAV_ITEMS: NavItem[] = [
+		{ href: '/settings/branding', label: 'Branding' },
+		{ href: '/settings/bot', label: 'Bot', mainAccountOnly: true },
+		{ href: '/settings/locations', label: 'Lokasi' }
+	];
+
+	const NAV_ITEMS = $derived(ALL_NAV_ITEMS.filter((item) => !item.mainAccountOnly || data.user.is_main_account));
 </script>
 
 <div class="flex flex-col gap-4 p-4">
