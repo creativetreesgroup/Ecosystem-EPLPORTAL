@@ -5,6 +5,7 @@
      tab; non-main-account instead gets the same data behind a native <fieldset disabled>
      cascade, identical pattern to /rules'/`/price`'s RuleRow/PriceRow. -->
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import type { PageProps } from './$types';
 	import { fetchBranding, saveBranding, type Branding } from '$lib/api-branding';
 	import {
@@ -44,7 +45,7 @@
 		try {
 			const result = await fetchBranding();
 			branding = result;
-			lastSaved = result;
+			lastSaved = { ...result };
 		} catch (err) {
 			errorMsg = err instanceof ApiError ? `Gagal memuat branding: ${err.message}` : 'Gagal memuat branding';
 		} finally {
@@ -52,7 +53,7 @@
 		}
 	}
 
-	load();
+	onMount(load);
 
 	async function handleSave() {
 		if (hasFormErrors) return;
@@ -62,7 +63,7 @@
 		try {
 			const result = await saveBranding(branding);
 			branding = result;
-			lastSaved = result;
+			lastSaved = { ...result };
 			successMsg = 'Branding tersimpan.';
 		} catch (err) {
 			errorMsg = err instanceof ApiError ? `Gagal menyimpan: ${err.message}` : 'Gagal menyimpan branding';
