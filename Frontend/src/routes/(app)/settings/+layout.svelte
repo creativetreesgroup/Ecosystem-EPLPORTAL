@@ -1,14 +1,24 @@
 <!-- Shared shell for every /settings/* sub-route. The nav array grows by one entry per future
-     sub-phase (Bot/WAHA config, Locations, Sub-users, SPX Credentials — Fase 7h-7k) — no
-     placeholder entries for resources that don't exist yet, matching TopNav.svelte's own
-     established convention of not building UI for not-yet-built surfaces. -->
+     sub-phase (Locations, Sub-users, SPX Credentials — Fase 7i-7k) — no placeholder entries for
+     resources that don't exist yet, matching TopNav.svelte's own established convention of not
+     building UI for not-yet-built surfaces. "Bot" is main-account-only (unlike "Branding"):
+     GET /bot/settings itself requires Permission::ManageBotSettings, so a non-main-account
+     session must never even see this nav entry — matching Fase 7f's Log Bot tab-hiding pattern,
+     not Fase 7g's Branding read-only-view pattern. -->
 <script lang="ts">
 	import { page } from '$app/state';
-	import type { Snippet } from 'svelte';
+	import type { LayoutProps } from './$types';
 
-	let { children }: { children: Snippet } = $props();
+	let { children, data }: LayoutProps = $props();
 
-	const NAV_ITEMS = [{ href: '/settings/branding', label: 'Branding' }];
+	const NAV_ITEMS = $derived(
+		data.user.is_main_account
+			? [
+					{ href: '/settings/branding', label: 'Branding' },
+					{ href: '/settings/bot', label: 'Bot' }
+				]
+			: [{ href: '/settings/branding', label: 'Branding' }]
+	);
 </script>
 
 <div class="flex flex-col gap-4 p-4">
