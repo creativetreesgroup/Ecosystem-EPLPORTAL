@@ -1,11 +1,10 @@
 <!-- Shared shell for every /settings/* sub-route. NAV_ITEMS is a flat array with a per-item
-     mainAccountOnly flag, filtered by data.user.is_main_account — refactored from the previous
-     if/else ternary (tracked as a Minor in Fase 7h's whole-branch review) now that a SECOND
-     always-visible entry ("Lokasi") needs adding; the ternary would have needed updating in both
-     branches for every future always-visible entry. Scales cleanly to Fase 7j (Sub-users,
-     main-account-only like Bot) and 7k (SPX Credentials, open like Branding/Locations) without
-     further restructuring. No placeholder entries for resources that don't exist yet, matching
-     TopNav.svelte's own established convention. -->
+     mainAccountOnly flag, filtered by data.user.is_main_account. Fase 7j correction: Sub-users
+     is OPEN like Branding/Locations (GET /auth/portal-users has no permission gate, only
+     POST/DELETE do), NOT main-account-only like Bot — an earlier comment here got this wrong.
+     Scales cleanly to Fase 7k (SPX Credentials, also open) without further restructuring. No
+     placeholder entries for resources that don't exist yet, matching TopNav.svelte's own
+     established convention. -->
 <script lang="ts">
 	import { page } from '$app/state';
 	import type { LayoutProps } from './$types';
@@ -17,7 +16,8 @@
 	const ALL_NAV_ITEMS: NavItem[] = [
 		{ href: '/settings/branding', label: 'Branding' },
 		{ href: '/settings/bot', label: 'Bot', mainAccountOnly: true },
-		{ href: '/settings/locations', label: 'Lokasi' }
+		{ href: '/settings/locations', label: 'Lokasi' },
+		{ href: '/settings/sub-users', label: 'Sub-user' }
 	];
 
 	const NAV_ITEMS = $derived(ALL_NAV_ITEMS.filter((item) => !item.mainAccountOnly || data.user.is_main_account));
