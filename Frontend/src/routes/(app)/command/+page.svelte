@@ -120,7 +120,7 @@
 			Belum ada data auto-accept hari ini.
 		</div>
 	{:else}
-		<LatencyTape samples={dispatchSamples} />
+		<LatencyTape samples={dispatchSamples} fallbackMs={summary?.latencyP99Ms ?? undefined} />
 	{/if}
 
 	<div class="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
