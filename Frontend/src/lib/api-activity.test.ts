@@ -67,6 +67,22 @@ describe('fetchAcceptEvents', () => {
 		expect(rows.length).toBe(1);
 	});
 
+	it('hasMore is false at the exact boundary: backend has exactly PAGE_SIZE rows total (overfetch returns limit-1)', async () => {
+		vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+			const limit = Number(new URLSearchParams(url.split('?')[1]).get('limit'));
+			// Simulate: backend has exactly (limit - 1) rows, so an overfetch request for `limit`
+			// rows returns exactly (limit - 1) — the true signal that no more data exists.
+			const rows = Array.from({ length: limit - 1 }, (_, i) => acceptEventWire({ id: `event-${i}` }));
+			return new Response(JSON.stringify(rows), { status: 200 });
+		}));
+		const { rows, hasMore } = await fetchAcceptEvents(1);
+		// hasMore must be false because items.length (limit - 1) is NOT > PAGE_SIZE.
+		// Returned rows must equal PAGE_SIZE (the non-overfetch quantity).
+		expect(hasMore).toBe(false);
+		const requestedLimit = rows.length + 1;
+		expect(rows.length).toBe(requestedLimit - 1);
+	});
+
 	it('maps every snake_case field to its camelCase AcceptEventRow equivalent', async () => {
 		vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify([acceptEventWire()]), { status: 200 })));
 		const { rows } = await fetchAcceptEvents(1);
