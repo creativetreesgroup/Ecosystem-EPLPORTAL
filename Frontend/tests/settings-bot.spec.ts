@@ -114,7 +114,7 @@ test('an invalid WAHA URL shows an inline error and never issues a save request'
 	await expect(page.getByText('URL tidak valid')).toBeVisible();
 	await expect(page.getByRole('button', { name: 'Simpan Perubahan' })).toBeDisabled();
 
-	// Restore before the test ends, since the field is now dirty with an invalid value.
-	await page.getByLabel('WAHA URL').fill('http://127.0.0.1:19999');
+	// No save ever fires (button stays disabled), so the invalid value never reaches the
+	// backend — nothing to restore, the page/context is discarded when the test ends.
 	expect(putCount).toBe(0);
 });
