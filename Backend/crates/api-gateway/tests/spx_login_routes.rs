@@ -365,3 +365,48 @@ async fn sub_user_is_forbidden() {
 
     cleanup(&pool, tenant_id).await;
 }
+
+/// Case 5: a second `POST /auth/spx-login/:label` for the SAME (tenant, label)
+/// within the cooldown window is rejected with 429, even though the first
+/// call succeeded. The cooldown is claimed only after the 403/404/decrypt
+/// checks, so it guards exactly the calls that would otherwise hit SPX.
+#[tokio::test]
+async fn second_call_within_cooldown_is_rate_limited() {
+    let pool = store::connect(&database_url()).await.expect("connect pg");
+    store::run_migrations(&pool).await.expect("migrate");
+    let tenant_id = insert_tenant(&pool).await;
+    insert_portal_user(&pool, tenant_id, "main-login-rl", true).await;
+    seed_credential(&pool, tenant_id, "agency1", "agency1-user", "s3cret-agency-pw").await;
+
+    let spx_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/basicserver/agency/account/login"))
+        .respond_with(
+            ResponseTemplate::new(200).insert_header("set-cookie", "fms_user_skey=APITESTKEY; Path=/"),
+        )
+        .mount(&spx_server)
+        .await;
+
+    let state = build_state(pool.clone(), tenant_id, &spx_server.uri()).await;
+    let base = spawn_server(state).await;
+    let http = reqwest::Client::new();
+    let cookie = login(&http, &base, "main-login-rl").await;
+
+    let first = http
+        .post(format!("{base}/auth/spx-login/agency1"))
+        .header(reqwest::header::COOKIE, &cookie)
+        .send()
+        .await
+        .expect("first spx-login request");
+    assert_eq!(first.status(), reqwest::StatusCode::OK);
+
+    let second = http
+        .post(format!("{base}/auth/spx-login/agency1"))
+        .header(reqwest::header::COOKIE, &cookie)
+        .send()
+        .await
+        .expect("second spx-login request");
+    assert_eq!(second.status(), reqwest::StatusCode::TOO_MANY_REQUESTS);
+
+    cleanup(&pool, tenant_id).await;
+}
