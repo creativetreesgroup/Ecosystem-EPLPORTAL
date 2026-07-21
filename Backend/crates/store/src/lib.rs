@@ -8,6 +8,7 @@ pub mod pool;
 pub mod portal_sessions;
 pub mod portal_users;
 pub mod quota;
+pub mod retention;
 pub mod route_locations;
 pub mod route_prices;
 pub mod rule_booking_targets;
