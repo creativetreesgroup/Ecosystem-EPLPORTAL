@@ -2,6 +2,10 @@
 // uniquely-named tenant + rows and is self-cleaning/parallel-safe. DATABASE_URL must
 // point at the `tower` superuser (tests run migrations and delete from accept_events,
 // which app_role cannot).
+//
+// The run_cycle tests below all contend for the single, process-wide
+// RETENTION_ADVISORY_KEY session lock, so this file needs `-- --test-threads=1`
+// (same pattern as crates/spx-client/tests/agency_credentials_pg.rs).
 use chrono::{Duration, Utc};
 use sqlx::PgPool;
 use std::io::Read;
@@ -165,4 +169,106 @@ async fn archive_runs_row_lifecycle() {
     assert_eq!(path.as_deref(), Some("/archive/x.csv.gz"));
     assert_eq!(sha.as_deref(), Some("deadbeef"));
     assert!(dry);
+}
+
+use store::retention::{run_cycle, RetentionConfig, RetentionTable as RT, RunStatus, RETENTION_ADVISORY_KEY};
+
+fn cfg(dir: &std::path::Path, dry_run: bool, table: RT, days: i64) -> RetentionConfig {
+    RetentionConfig {
+        dry_run,
+        archive_dir: dir.to_path_buf(),
+        delete_batch: 5000,
+        windows: vec![(table, days)],
+    }
+}
+
+#[tokio::test]
+async fn dry_run_archives_but_deletes_nothing() {
+    let pool = test_pool().await;
+    let tenant_id = seed_tenant(&pool).await;
+    let cutoff = Utc::now() - Duration::days(90);
+    let id = seed_booking_at(&pool, tenant_id, &format!("dry-{tenant_id}"), cutoff - Duration::days(1)).await;
+    let dir = std::env::temp_dir().join(format!("ret-dry-{tenant_id}"));
+
+    let outcomes = run_cycle(&pool, &cfg(&dir, true, RT::Bookings, 90)).await.expect("cycle");
+    let o = outcomes.iter().find(|o| o.table == RT::Bookings).expect("bookings outcome");
+    assert!(o.captured >= 1);
+    assert_eq!(o.deleted, 0, "dry-run deletes nothing");
+    assert!(matches!(o.status, RunStatus::Completed));
+
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM bookings WHERE id = $1)")
+        .bind(id).fetch_one(&pool).await.unwrap();
+    assert!(exists, "row still present after dry-run");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn real_run_archives_then_deletes_captured() {
+    let pool = test_pool().await;
+    let tenant_id = seed_tenant(&pool).await;
+    let cutoff = Utc::now() - Duration::days(90);
+    let id = seed_booking_at(&pool, tenant_id, &format!("real-{tenant_id}"), cutoff - Duration::days(1)).await;
+    let dir = std::env::temp_dir().join(format!("ret-real-{tenant_id}"));
+
+    let outcomes = run_cycle(&pool, &cfg(&dir, false, RT::Bookings, 90)).await.expect("cycle");
+    let o = outcomes.iter().find(|o| o.table == RT::Bookings).expect("bookings outcome");
+    assert!(o.deleted >= 1);
+    assert!(matches!(o.status, RunStatus::Completed));
+
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM bookings WHERE id = $1)")
+        .bind(id).fetch_one(&pool).await.unwrap();
+    assert!(!exists, "captured row deleted after real run");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn skips_when_advisory_lock_held() {
+    let pool = test_pool().await;
+    // Hold the lock on a separate connection.
+    let mut holder = pool.acquire().await.unwrap();
+    let got: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1)")
+        .bind(RETENTION_ADVISORY_KEY).fetch_one(&mut *holder).await.unwrap();
+    assert!(got, "test acquired the lock first");
+
+    let dir = std::env::temp_dir().join("ret-locked");
+    let outcomes = run_cycle(&pool, &cfg(&dir, true, RT::Bookings, 90)).await.expect("cycle");
+    assert!(outcomes.is_empty(), "run_cycle skips entirely when the lock is held");
+
+    // release
+    let _: bool = sqlx::query_scalar("SELECT pg_advisory_unlock($1)")
+        .bind(RETENTION_ADVISORY_KEY).fetch_one(&mut *holder).await.unwrap();
+}
+
+#[tokio::test]
+async fn window_zero_disables_table() {
+    let pool = test_pool().await;
+    let tenant_id = seed_tenant(&pool).await;
+    let cutoff = Utc::now() - Duration::days(90);
+    let id = seed_booking_at(&pool, tenant_id, &format!("z-{tenant_id}"), cutoff - Duration::days(1)).await;
+    let dir = std::env::temp_dir().join(format!("ret-zero-{tenant_id}"));
+
+    let outcomes = run_cycle(&pool, &cfg(&dir, false, RT::Bookings, 0)).await.expect("cycle");
+    let o = outcomes.iter().find(|o| o.table == RT::Bookings).expect("bookings outcome present");
+    assert!(matches!(o.status, RunStatus::Skipped), "days=0 → table Skipped");
+    assert_eq!(o.deleted, 0);
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM bookings WHERE id = $1)")
+        .bind(id).fetch_one(&pool).await.unwrap();
+    assert!(exists, "row untouched when window disabled");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn archived_count_equals_captured_on_success() {
+    let pool = test_pool().await;
+    let tenant_id = seed_tenant(&pool).await;
+    let cutoff = Utc::now() - Duration::days(90);
+    for i in 0..3 {
+        seed_booking_at(&pool, tenant_id, &format!("eq-{tenant_id}-{i}"), cutoff - Duration::days(1)).await;
+    }
+    let dir = std::env::temp_dir().join(format!("ret-eq-{tenant_id}"));
+    let outcomes = run_cycle(&pool, &cfg(&dir, true, RT::Bookings, 90)).await.expect("cycle");
+    let o = outcomes.iter().find(|o| o.table == RT::Bookings).unwrap();
+    assert_eq!(o.captured, o.archived, "verify gate: archived count equals captured count");
+    assert!(o.captured >= 3);
+    std::fs::remove_dir_all(&dir).ok();
 }

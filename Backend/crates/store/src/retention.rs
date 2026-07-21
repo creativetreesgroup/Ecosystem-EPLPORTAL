@@ -234,3 +234,126 @@ pub async fn mark_failed(pool: &PgPool, run_id: Uuid) -> Result<(), sqlx::Error>
         .bind(run_id).execute(pool).await?;
     Ok(())
 }
+
+use chrono::Timelike;
+
+pub const RETENTION_ADVISORY_KEY: i64 = 0x544f_5745_525f_5254; // "TOWER_RT"
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunStatus {
+    Completed,
+    Failed,
+    Skipped,
+}
+
+#[derive(Debug)]
+pub struct TableOutcome {
+    pub table: RetentionTable,
+    pub captured: u64,
+    pub archived: u64,
+    pub deleted: u64,
+    pub status: RunStatus,
+}
+
+pub struct RetentionConfig {
+    pub dry_run: bool,
+    pub archive_dir: std::path::PathBuf,
+    pub delete_batch: usize,
+    pub windows: Vec<(RetentionTable, i64)>,
+}
+
+pub fn archive_path(
+    dir: &Path,
+    table: RetentionTable,
+    now: DateTime<Utc>,
+) -> std::path::PathBuf {
+    let stamp = format!(
+        "{:04}{:02}{:02}_{:02}{:02}{:02}",
+        now.year(),
+        now.month(),
+        now.day(),
+        now.hour(),
+        now.minute(),
+        now.second(),
+    );
+    dir.join(format!("{}_{}.csv.gz", table.name(), stamp))
+}
+// bring Datelike into scope for year()/month()/day()
+use chrono::Datelike;
+
+/// Run one full retention cycle. Returns an empty Vec if another runner holds
+/// the advisory lock (single-runner guarantee). Always releases the lock.
+pub async fn run_cycle(
+    pool: &PgPool,
+    config: &RetentionConfig,
+) -> Result<Vec<TableOutcome>, RetentionError> {
+    let mut lock_conn = pool.acquire().await?;
+    let acquired: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1)")
+        .bind(RETENTION_ADVISORY_KEY)
+        .fetch_one(&mut *lock_conn)
+        .await?;
+    if !acquired {
+        return Ok(Vec::new());
+    }
+
+    let result = run_all_tables(pool, config).await;
+
+    // Always release the session lock, regardless of the cycle result.
+    let _: Result<bool, _> = sqlx::query_scalar("SELECT pg_advisory_unlock($1)")
+        .bind(RETENTION_ADVISORY_KEY)
+        .fetch_one(&mut *lock_conn)
+        .await;
+
+    result
+}
+
+async fn run_all_tables(
+    pool: &PgPool,
+    config: &RetentionConfig,
+) -> Result<Vec<TableOutcome>, RetentionError> {
+    let now = Utc::now();
+    let mut outcomes = Vec::new();
+
+    for (table, days) in &config.windows {
+        let (table, days) = (*table, *days);
+        if days <= 0 {
+            outcomes.push(TableOutcome { table, captured: 0, archived: 0, deleted: 0, status: RunStatus::Skipped });
+            continue;
+        }
+        let cutoff = now - chrono::Duration::days(days);
+        let run_id = insert_run(pool, table, config.dry_run).await?;
+
+        let ids = capture_ids(pool, table, cutoff).await?;
+        mark_captured(pool, run_id, ids.len() as i64).await?;
+
+        if ids.is_empty() {
+            mark_completed(pool, run_id, 0).await?;
+            outcomes.push(TableOutcome { table, captured: 0, archived: 0, deleted: 0, status: RunStatus::Completed });
+            continue;
+        }
+
+        let path = archive_path(&config.archive_dir, table, now);
+        let (archived, sha) = stream_archive(pool, table, &ids, &path).await?;
+        mark_archived(pool, run_id, archived as i64, &path.to_string_lossy(), &sha).await?;
+
+        // VERIFY before any delete.
+        if archived != ids.len() as u64 {
+            mark_failed(pool, run_id).await?;
+            outcomes.push(TableOutcome { table, captured: ids.len() as u64, archived, deleted: 0, status: RunStatus::Failed });
+            continue;
+        }
+
+        if config.dry_run {
+            mark_completed(pool, run_id, 0).await?;
+            outcomes.push(TableOutcome { table, captured: ids.len() as u64, archived, deleted: 0, status: RunStatus::Completed });
+            continue;
+        }
+
+        let deleted = delete_by_ids(pool, table, &ids, config.delete_batch).await?;
+        vacuum(pool, table).await?;
+        mark_completed(pool, run_id, deleted as i64).await?;
+        outcomes.push(TableOutcome { table, captured: ids.len() as u64, archived, deleted, status: RunStatus::Completed });
+    }
+
+    Ok(outcomes)
+}
