@@ -3,10 +3,15 @@
 // point at the `tower` superuser (tests run migrations and delete from accept_events,
 // which app_role cannot).
 //
-// The run_cycle tests below all contend for the single, process-wide
-// RETENTION_ADVISORY_KEY session lock, so this file needs `-- --test-threads=1`
-// (same pattern as crates/spx-client/tests/agency_credentials_pg.rs).
+// Retention is a GLOBAL (system-wide, not tenant-scoped) destructive operation, so these
+// integration tests over the shared bookings/accept_events/notifications tables cannot safely
+// interleave (one test's real delete would remove another's just-seeded rows). Each test is
+// therefore `#[serial]` (serial_test) — they run one-at-a-time WITHIN this test binary while
+// other crates' binaries still run in parallel, so `cargo test --workspace` stays clean with
+// NO `--test-threads=1` flag. Each run_cycle test also passes a unique advisory_key (via
+// `key_for`) so the single-runner advisory lock is exercised without a shared global key.
 use chrono::{Duration, Utc};
+use serial_test::serial;
 use sqlx::PgPool;
 use std::io::Read;
 use store::retention::{capture_ids, delete_by_ids, insert_run, mark_archived, stream_archive, vacuum, RetentionTable};
@@ -48,6 +53,7 @@ async fn seed_booking_at(pool: &PgPool, tenant_id: Uuid, spx_id: &str, created_a
 }
 
 #[tokio::test]
+#[serial]
 async fn capture_returns_only_rows_older_than_cutoff() {
     let pool = test_pool().await;
     let tenant_id = seed_tenant(&pool).await;
@@ -65,6 +71,7 @@ async fn capture_returns_only_rows_older_than_cutoff() {
 }
 
 #[tokio::test]
+#[serial]
 async fn delete_by_ids_removes_only_captured_and_spares_later_inserts() {
     // THE INCIDENT-PREVENTION TEST (Aturan Keras #7).
     let pool = test_pool().await;
@@ -97,6 +104,7 @@ async fn delete_by_ids_removes_only_captured_and_spares_later_inserts() {
 }
 
 #[tokio::test]
+#[serial]
 async fn delete_by_ids_spans_multiple_batches() {
     let pool = test_pool().await;
     let tenant_id = seed_tenant(&pool).await;
@@ -110,12 +118,14 @@ async fn delete_by_ids_spans_multiple_batches() {
 }
 
 #[tokio::test]
+#[serial]
 async fn vacuum_runs_without_error() {
     let pool = test_pool().await;
     vacuum(&pool, RetentionTable::Notifications).await.expect("vacuum");
 }
 
 #[tokio::test]
+#[serial]
 async fn archive_writes_verifiable_gzip_csv() {
     let pool = test_pool().await;
     let tenant_id = seed_tenant(&pool).await;
@@ -157,6 +167,7 @@ async fn archive_writes_verifiable_gzip_csv() {
 }
 
 #[tokio::test]
+#[serial]
 async fn archive_runs_row_lifecycle() {
     let pool = test_pool().await;
     let run_id = insert_run(&pool, RetentionTable::Notifications, true).await.expect("insert_run");
@@ -171,18 +182,26 @@ async fn archive_runs_row_lifecycle() {
     assert!(dry);
 }
 
-use store::retention::{run_cycle, RetentionConfig, RetentionTable as RT, RunStatus, RETENTION_ADVISORY_KEY};
+use store::retention::{run_cycle, RetentionConfig, RetentionTable as RT, RunStatus};
 
-fn cfg(dir: &std::path::Path, dry_run: bool, table: RT, days: i64) -> RetentionConfig {
+/// A unique advisory-lock key per test, derived from its tenant id, so parallel
+/// run_cycle tests never contend for one global lock.
+fn key_for(t: Uuid) -> i64 {
+    i64::from_le_bytes(t.as_bytes()[0..8].try_into().unwrap())
+}
+
+fn cfg(dir: &std::path::Path, dry_run: bool, table: RT, days: i64, advisory_key: i64) -> RetentionConfig {
     RetentionConfig {
         dry_run,
         archive_dir: dir.to_path_buf(),
         delete_batch: 5000,
         windows: vec![(table, days)],
+        advisory_key,
     }
 }
 
 #[tokio::test]
+#[serial]
 async fn dry_run_archives_but_deletes_nothing() {
     let pool = test_pool().await;
     let tenant_id = seed_tenant(&pool).await;
@@ -190,7 +209,7 @@ async fn dry_run_archives_but_deletes_nothing() {
     let id = seed_booking_at(&pool, tenant_id, &format!("dry-{tenant_id}"), cutoff - Duration::days(1)).await;
     let dir = std::env::temp_dir().join(format!("ret-dry-{tenant_id}"));
 
-    let outcomes = run_cycle(&pool, &cfg(&dir, true, RT::Bookings, 90)).await.expect("cycle");
+    let outcomes = run_cycle(&pool, &cfg(&dir, true, RT::Bookings, 90, key_for(tenant_id))).await.expect("cycle");
     let o = outcomes.iter().find(|o| o.table == RT::Bookings).expect("bookings outcome");
     assert!(o.captured >= 1);
     assert_eq!(o.deleted, 0, "dry-run deletes nothing");
@@ -203,6 +222,7 @@ async fn dry_run_archives_but_deletes_nothing() {
 }
 
 #[tokio::test]
+#[serial]
 async fn real_run_archives_then_deletes_captured() {
     let pool = test_pool().await;
     let tenant_id = seed_tenant(&pool).await;
@@ -210,7 +230,7 @@ async fn real_run_archives_then_deletes_captured() {
     let id = seed_booking_at(&pool, tenant_id, &format!("real-{tenant_id}"), cutoff - Duration::days(1)).await;
     let dir = std::env::temp_dir().join(format!("ret-real-{tenant_id}"));
 
-    let outcomes = run_cycle(&pool, &cfg(&dir, false, RT::Bookings, 90)).await.expect("cycle");
+    let outcomes = run_cycle(&pool, &cfg(&dir, false, RT::Bookings, 90, key_for(tenant_id))).await.expect("cycle");
     let o = outcomes.iter().find(|o| o.table == RT::Bookings).expect("bookings outcome");
     assert!(o.deleted >= 1);
     assert!(matches!(o.status, RunStatus::Completed));
@@ -222,24 +242,27 @@ async fn real_run_archives_then_deletes_captured() {
 }
 
 #[tokio::test]
+#[serial]
 async fn skips_when_advisory_lock_held() {
     let pool = test_pool().await;
-    // Hold the lock on a separate connection.
+    // A key unique to this test, held on a separate connection, then passed to run_cycle.
+    let lock_key = key_for(Uuid::new_v4());
     let mut holder = pool.acquire().await.unwrap();
     let got: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1)")
-        .bind(RETENTION_ADVISORY_KEY).fetch_one(&mut *holder).await.unwrap();
+        .bind(lock_key).fetch_one(&mut *holder).await.unwrap();
     assert!(got, "test acquired the lock first");
 
-    let dir = std::env::temp_dir().join("ret-locked");
-    let outcomes = run_cycle(&pool, &cfg(&dir, true, RT::Bookings, 90)).await.expect("cycle");
+    let dir = std::env::temp_dir().join(format!("ret-locked-{lock_key}"));
+    let outcomes = run_cycle(&pool, &cfg(&dir, true, RT::Bookings, 90, lock_key)).await.expect("cycle");
     assert!(outcomes.is_empty(), "run_cycle skips entirely when the lock is held");
 
     // release
     let _: bool = sqlx::query_scalar("SELECT pg_advisory_unlock($1)")
-        .bind(RETENTION_ADVISORY_KEY).fetch_one(&mut *holder).await.unwrap();
+        .bind(lock_key).fetch_one(&mut *holder).await.unwrap();
 }
 
 #[tokio::test]
+#[serial]
 async fn window_zero_disables_table() {
     let pool = test_pool().await;
     let tenant_id = seed_tenant(&pool).await;
@@ -247,7 +270,7 @@ async fn window_zero_disables_table() {
     let id = seed_booking_at(&pool, tenant_id, &format!("z-{tenant_id}"), cutoff - Duration::days(1)).await;
     let dir = std::env::temp_dir().join(format!("ret-zero-{tenant_id}"));
 
-    let outcomes = run_cycle(&pool, &cfg(&dir, false, RT::Bookings, 0)).await.expect("cycle");
+    let outcomes = run_cycle(&pool, &cfg(&dir, false, RT::Bookings, 0, key_for(tenant_id))).await.expect("cycle");
     let o = outcomes.iter().find(|o| o.table == RT::Bookings).expect("bookings outcome present");
     assert!(matches!(o.status, RunStatus::Skipped), "days=0 → table Skipped");
     assert_eq!(o.deleted, 0);
@@ -258,6 +281,7 @@ async fn window_zero_disables_table() {
 }
 
 #[tokio::test]
+#[serial]
 async fn archived_count_equals_captured_on_success() {
     let pool = test_pool().await;
     let tenant_id = seed_tenant(&pool).await;
@@ -266,7 +290,7 @@ async fn archived_count_equals_captured_on_success() {
         seed_booking_at(&pool, tenant_id, &format!("eq-{tenant_id}-{i}"), cutoff - Duration::days(1)).await;
     }
     let dir = std::env::temp_dir().join(format!("ret-eq-{tenant_id}"));
-    let outcomes = run_cycle(&pool, &cfg(&dir, true, RT::Bookings, 90)).await.expect("cycle");
+    let outcomes = run_cycle(&pool, &cfg(&dir, true, RT::Bookings, 90, key_for(tenant_id))).await.expect("cycle");
     let o = outcomes.iter().find(|o| o.table == RT::Bookings).unwrap();
     assert_eq!(o.captured, o.archived, "verify gate: archived count equals captured count");
     assert!(o.captured >= 3);

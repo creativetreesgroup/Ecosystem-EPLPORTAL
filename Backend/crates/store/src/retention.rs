@@ -260,6 +260,11 @@ pub struct RetentionConfig {
     pub archive_dir: std::path::PathBuf,
     pub delete_batch: usize,
     pub windows: Vec<(RetentionTable, i64)>,
+    /// The `pg_try_advisory_lock` key guaranteeing a single runner. Production
+    /// uses the fixed `RETENTION_ADVISORY_KEY`; injectable so parallel tests can
+    /// each use a unique key and never contend (a global constant would make the
+    /// run_cycle tests flaky under cargo's default thread-parallel execution).
+    pub advisory_key: i64,
 }
 
 pub fn archive_path(
@@ -289,7 +294,7 @@ pub async fn run_cycle(
 ) -> Result<Vec<TableOutcome>, RetentionError> {
     let mut lock_conn = pool.acquire().await?;
     let acquired: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1)")
-        .bind(RETENTION_ADVISORY_KEY)
+        .bind(config.advisory_key)
         .fetch_one(&mut *lock_conn)
         .await?;
     if !acquired {
@@ -300,7 +305,7 @@ pub async fn run_cycle(
 
     // Always release the session lock, regardless of the cycle result.
     let _: Result<bool, _> = sqlx::query_scalar("SELECT pg_advisory_unlock($1)")
-        .bind(RETENTION_ADVISORY_KEY)
+        .bind(config.advisory_key)
         .fetch_one(&mut *lock_conn)
         .await;
 
