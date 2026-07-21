@@ -78,9 +78,12 @@
 	onMount(() => {
 		load();
 		// 1s ticker for the cooldown countdown. Reassigns `now` only while a
-		// cooldown is actually pending, so an idle page never re-renders.
+		// cooldown is still displayed, so an idle page never re-renders. Compare
+		// against the shown `now` (not Date.now()) so the falling-edge tick that
+		// pushes `now` past the deadline still fires — otherwise `now` freezes ~1s
+		// short and the button sticks on "Tunggu 1s" until a reload.
 		const timer = setInterval(() => {
-			const active = Object.values(cooldownUntil).some((t) => t > Date.now());
+			const active = Object.values(cooldownUntil).some((t) => t > now);
 			if (active) now = Date.now();
 		}, 1000);
 		return () => clearInterval(timer);
@@ -120,6 +123,7 @@
 		if (!confirm(`Hapus kredensial "${l}"?`)) return;
 		deletingLabel = l;
 		errorMsg = '';
+		successMsg = '';
 		try {
 			await deleteSpxCredential(l);
 			credentials = credentials.filter((c) => c.label !== l);
