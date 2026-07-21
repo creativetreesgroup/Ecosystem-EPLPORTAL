@@ -912,7 +912,7 @@ use std::time::Duration as StdDuration;
 
 use chrono::{Local, NaiveTime, Timelike};
 use sqlx::postgres::PgPoolOptions;
-use store::retention::{run_cycle, RetentionConfig, RetentionTable};
+use store::retention::{run_cycle, RetentionConfig, RetentionTable, RETENTION_ADVISORY_KEY};
 
 fn env_or(key: &str, default: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| default.to_string())
@@ -933,6 +933,7 @@ fn build_config() -> RetentionConfig {
         archive_dir: PathBuf::from(env_or("RETENTION_ARCHIVE_DIR", "/archive")),
         delete_batch: env_i64("RETENTION_DELETE_BATCH", 5000).max(1) as usize,
         windows,
+        advisory_key: RETENTION_ADVISORY_KEY, // the one fixed production single-runner key
     }
 }
 
