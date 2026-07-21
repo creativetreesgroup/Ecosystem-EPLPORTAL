@@ -82,19 +82,19 @@ The single backend task. Adds a per-`(tenant, label)` cooldown to `POST /auth/sp
 1. require_permission(ManageSpxCredentials)      // 403 — never touches Redis or SPX
 2. find_by_label(...) → NotFound                 // 404 — never touches Redis or SPX
 3. decrypt password (existing)                   // 500 on bad nonce/crypto
-4. claim cooldown:  SET spx-login-cooldown:{tenant_id}:{label} "1" NX EX 60
+4. claim cooldown:  SET spx:spx_login_rl:{tenant_id}:{label} "1" NX EX CLAIM_TTL_SECS
      - if NOT acquired  → return 429 TooManyRequests("test koneksi sedang berjalan atau baru saja dijalankan, coba lagi sebentar")
-5. run the SPX login (existing, up to ~80s)
-6. after login finishes (success OR failure):  SET spx-login-cooldown:{tenant_id}:{label} "1" EX 60
-     - resets the 60s window measured from COMPLETION, not from start
+5. run the SPX login (existing, up to ~80–100s)
+6. after login finishes (success OR failure):  SET spx:spx_login_rl:{tenant_id}:{label} "1" EX TEST_COOLDOWN_SECS
+     - resets the window to TEST_COOLDOWN_SECS measured from COMPLETION, not from start
 7. return 200 {ok, tier}
 ```
 
 Design points:
 - Claiming **after** the 403/404 checks means requests that never reach SPX don't burn a cooldown — and the existing `spx_login_routes.rs` tests (which exercise 403/404/nonexistent-label paths, and a mocked-success path) are unaffected by the cooldown for the not-found/forbidden cases. The mocked-success test path WILL now write a cooldown key; it uses a per-test-unique tenant/label so this does not bleed across tests, but the test file must be checked and, if it fires two logins for the same `(tenant,label)` in one test, updated to expect the 429 or use distinct labels. (Implementer verifies against the actual test file.)
-- The `NX` claim at step 4 doubles as an **in-flight lock**: a second click while the first request is still running (up to 80s) fails the `NX` and returns 429 immediately, instead of launching a second real login storm.
+- The `NX` claim at step 4 doubles as an **in-flight lock**: a second click while the first request is still running fails the `NX` and returns 429 immediately, instead of launching a second real login storm. Its TTL is `CLAIM_TTL_SECS = 120` (not 60) so it outlives the worst-case ~80–100s login — a 60s claim TTL would lapse mid-login during a slow/degraded SPX (exactly when lockout risk is highest), reopening the storm window. The post-login refresh at step 6 re-anchors the window to `TEST_COOLDOWN_SECS = 60` from completion. (This split was raised by both the Task-1 and security reviews and applied before merge.)
 - Key is per-`(tenant, label)` because each label is a distinct SPX account with its own lockout risk.
-- `COOLDOWN_SECS = 60` as a module const.
+- Two module consts: `TEST_COOLDOWN_SECS = 60` (window from completion) and `CLAIM_TTL_SECS = 120` (in-flight lock TTL, ≥ worst-case login).
 - Redis errors during the claim map to `Internal` (500), same as `otp.rs` — fail closed is acceptable here (a Redis outage blocking test-connection is far better than an unguarded login storm).
 - A `redis::RedisError` on the final step-6 `SET` should not fail the request — the login already succeeded/failed and the result is what the user wants; log and ignore. (The NX claim at step 4 already provides the in-flight guarantee; step 6 is best-effort window-refresh.)
 
@@ -176,3 +176,14 @@ Tests:
 ## Open Questions for the Implementer
 
 None. RBAC shape, the no-runtime-effect reality, the delete-and-recreate edit model, the server-side cooldown design, and the honest test-result copy were all resolved during brainstorming (two via explicit user decision). Any genuinely new ambiguity found during implementation should be raised through the normal task-brief escalation path — in particular, the exact current contents of `spx_login_routes.rs` must be read before adding the cooldown so the new key doesn't break an existing multi-login test.
+
+## Tracked, deliberately-deferred follow-ups from implementation + reviews
+
+A whole-branch quality review (opus) and a dedicated security review (opus, parallel) both returned **Ready to merge: Yes**, zero Critical/Important. Summary of what was found and how it was handled:
+
+- **Cooldown ticker (Critical, FIXED pre-merge, commit `69de197`).** The plan's Task-5 `+page.svelte` gated the 1s countdown tick on `t > Date.now()`, which skipped the falling-edge tick and froze the displayed `now` ~1s short of the deadline — the "Test Koneksi" button stuck on "Tunggu 1s" permanently until a page reload, breaking the feature after one use. Fixed by comparing against the displayed `now` (`t > now`), which preserves the idle-no-rerender optimization while letting the falling-edge tick re-enable the button. Verified with a numeric simulation and re-confirmed correct by the whole-branch review across single/multiple/idle/re-arm cases.
+- **In-flight lock TTL tail (security Low + Task-1 Minor, FIXED pre-merge).** The initial `NX` claim originally used `EX 60`, shorter than the worst-case ~80–100s login, so a >60s (slow/degraded SPX) login left a window where a second click could start a second overlapping real login storm — the guard degrading exactly when lockout risk is highest. Both reviewers flagged it. Fixed by claiming with `CLAIM_TTL_SECS = 120` (≥ worst case) while keeping the completion refresh at `TEST_COOLDOWN_SECS = 60`, closing the tail with no downside.
+- **E2E test-name honesty (quality Minor, FIXED pre-merge).** The non-main-account test was titled "…disabled add form and disabled row buttons" but asserted only the add-form controls (the per-row Test/Hapus buttons need a credential row to exist for the self-cleaning shared tenant, which isn't guaranteed at run time). Renamed to reflect what it asserts, with a comment noting the row-button read-only path is covered structurally (identical binding to the tested Locations/Sub-user siblings).
+- **Cooldown key name (quality Minor, spec reconciled).** The implemented Redis key is `spx:spx_login_rl:{tenant_id}:{label}` (following `otp.rs`'s `spx:aa_otp_rl:` convention), not the spec's earlier placeholder `spx-login-cooldown:`. The code is the correct/consistent form; this doc's §3 was updated to match.
+
+Nothing deferred blocks or degrades the phase; the security review confirmed the plaintext password never leaves the PUT body / is cleared after save / is never logged or persisted, RBAC is enforced server-side as the first statement of every write/test handler, and the cooldown key + all lookups are strictly scoped to the server-derived session `tenant_id` (no injection / IDOR).

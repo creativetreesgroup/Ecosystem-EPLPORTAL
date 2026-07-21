@@ -119,9 +119,13 @@ test('typing an existing label shows the overwrite note', async ({ page }) => {
 	await expect(page.getByText(uniqueLabel)).toBeHidden({ timeout: 10_000 });
 });
 
-test('non-main-account sees the list with a disabled add form and disabled row buttons', async ({
-	page
-}) => {
+// Asserts the ADD-FORM read-only state only (label input + Simpan disabled). The per-row
+// Test/Hapus buttons carry their own `disabled={readOnly || …}` binding outside the fieldset;
+// asserting those here would require a credential row to exist for the shared tower-dev tenant
+// at run time (this suite is self-cleaning, so it may not), so the row-button read-only path is
+// covered structurally (identical binding to the tested Locations/Sub-user siblings) rather
+// than e2e-asserted here.
+test('non-main-account sees the list with a disabled add form', async ({ page }) => {
 	await login(page, 'e2e-readonly-user', 'correct-horse-battery-staple');
 	await page.goto('/settings/spx-credentials');
 

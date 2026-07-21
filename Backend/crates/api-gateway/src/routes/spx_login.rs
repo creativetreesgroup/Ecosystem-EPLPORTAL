@@ -17,10 +17,19 @@ use crate::state::AppState;
 use spx_client::crypto::envelope::decrypt_agency_password;
 use spx_client::crypto::secret::ExposeSecret;
 
-/// Seconds a `(tenant, label)` must wait between connectivity tests. Also the
-/// TTL of the in-flight lock: a second click while the first (up to ~80s)
-/// login is still running fails the `NX` claim and is rejected immediately.
+/// Seconds a `(tenant, label)` must wait between connectivity tests, measured
+/// from COMPLETION (the post-login refresh SET below re-anchors the window here).
 const TEST_COOLDOWN_SECS: u64 = 60;
+
+/// TTL of the initial `NX` in-flight lock, claimed at the START of a login.
+/// Must exceed the worst-case login wall-time (~80–100s: 5 API + 3 form
+/// attempts, each up to a 10s timeout, plus `fetch_spx_cid`) so the lock never
+/// lapses WHILE a slow login is still running — otherwise a second click during
+/// that tail could launch a second overlapping real login storm against the
+/// same live SPX account (the exact abuse this guard exists to prevent, and
+/// most dangerous precisely when SPX is slow/degraded). On success/failure the
+/// refresh SET re-anchors to `TEST_COOLDOWN_SECS` from completion.
+const CLAIM_TTL_SECS: u64 = 120;
 
 fn cooldown_key(tenant_id: Uuid, label: &str) -> String {
     format!("spx:spx_login_rl:{tenant_id}:{label}")
@@ -53,11 +62,12 @@ async fn test_login(
     // so a request that never reaches SPX doesn't burn the window. `SET NX EX`
     // is atomic (no read-then-write race) — mirrors `otp.rs`'s cooldown idiom.
     // The `NX` failure means either a test is currently running (the key is
-    // held for the whole login) or one finished within the last 60s.
+    // held for the whole login, up to ~80–100s, via CLAIM_TTL_SECS) or one
+    // finished within the last TEST_COOLDOWN_SECS.
     let key = cooldown_key(user.tenant_id, &label);
     let mut redis = state.redis.clone();
     let claim_opts = SetOptions::default()
-        .with_expiration(SetExpiry::EX(TEST_COOLDOWN_SECS))
+        .with_expiration(SetExpiry::EX(CLAIM_TTL_SECS))
         .conditional_set(ExistenceCheck::NX);
     let acquired: bool = redis
         .set_options(&key, "1", claim_opts)
