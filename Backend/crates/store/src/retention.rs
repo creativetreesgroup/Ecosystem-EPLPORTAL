@@ -16,12 +16,6 @@ pub enum RetentionTable {
 }
 
 impl RetentionTable {
-    pub const ALL: [RetentionTable; 3] = [
-        RetentionTable::Bookings,
-        RetentionTable::AcceptEvents,
-        RetentionTable::Notifications,
-    ];
-
     pub fn name(&self) -> &'static str {
         match self {
             RetentionTable::Bookings => "bookings",
@@ -150,6 +144,14 @@ pub async fn stream_archive(
     );
 
     let mut tx = pool.begin().await?;
+    // REPEATABLE READ so the archived-row COUNT and the COPY share ONE snapshot.
+    // Under READ COMMITTED a concurrent hard-delete of a captured (already-aged) row
+    // — realistically only a `tenants ON DELETE CASCADE` — could land between the two
+    // statements and let a gz file short by that row pass the `archived == captured`
+    // verify gate. A single snapshot makes the count and the streamed rows identical.
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("CREATE TEMP TABLE _ret_ids (id uuid PRIMARY KEY) ON COMMIT DROP")
         .execute(&mut *tx)
         .await?;
@@ -325,16 +327,52 @@ async fn run_all_tables(
             outcomes.push(TableOutcome { table, captured: 0, archived: 0, deleted: 0, status: RunStatus::Skipped });
             continue;
         }
-        let cutoff = now - chrono::Duration::days(days);
-        let run_id = insert_run(pool, table, config.dry_run).await?;
+        // Each table is INDEPENDENT: a DB/IO error on one table must not abort the rest
+        // of the cycle (design invariant). On error, `run_one_table` has already marked
+        // its archive_runs row 'failed'; here we record a Failed outcome and continue.
+        // The error is intentionally swallowed at this boundary — the binary logs the
+        // cycle summary; a per-table failure is a Failed outcome, never a lost sibling.
+        match run_one_table(pool, config, table, days, now).await {
+            Ok(outcome) => outcomes.push(outcome),
+            Err(_e) => outcomes.push(TableOutcome {
+                table,
+                captured: 0,
+                archived: 0,
+                deleted: 0,
+                status: RunStatus::Failed,
+            }),
+        }
+    }
 
+    Ok(outcomes)
+}
+
+/// Run retention for ONE table. Creates its `archive_runs` row, then runs the
+/// capture→archive→verify→delete body; on ANY error it marks that row 'failed'
+/// (best-effort) so it never stays stuck at 'running', and propagates the error
+/// for the caller to isolate. `now` is the cycle timestamp (used for the archive
+/// filename); the age cutoff is derived from it.
+async fn run_one_table(
+    pool: &PgPool,
+    config: &RetentionConfig,
+    table: RetentionTable,
+    days: i64,
+    now: DateTime<Utc>,
+) -> Result<TableOutcome, RetentionError> {
+    // Clamp `days` to a sane ceiling so an absurd env value (e.g. i64::MAX) cannot
+    // overflow/panic `chrono::Duration::days`. A larger value only pushes the cutoff
+    // further into the past (captures FEWER rows) — never toward "delete everything".
+    let days = days.min(3_650_000); // ~10,000 years; safely within Duration's range
+    let cutoff = now - chrono::Duration::days(days);
+    let run_id = insert_run(pool, table, config.dry_run).await?;
+
+    let body: Result<TableOutcome, RetentionError> = async {
         let ids = capture_ids(pool, table, cutoff).await?;
         mark_captured(pool, run_id, ids.len() as i64).await?;
 
         if ids.is_empty() {
             mark_completed(pool, run_id, 0).await?;
-            outcomes.push(TableOutcome { table, captured: 0, archived: 0, deleted: 0, status: RunStatus::Completed });
-            continue;
+            return Ok(TableOutcome { table, captured: 0, archived: 0, deleted: 0, status: RunStatus::Completed });
         }
 
         let path = archive_path(&config.archive_dir, table, now);
@@ -344,21 +382,27 @@ async fn run_all_tables(
         // VERIFY before any delete.
         if archived != ids.len() as u64 {
             mark_failed(pool, run_id).await?;
-            outcomes.push(TableOutcome { table, captured: ids.len() as u64, archived, deleted: 0, status: RunStatus::Failed });
-            continue;
+            return Ok(TableOutcome { table, captured: ids.len() as u64, archived, deleted: 0, status: RunStatus::Failed });
         }
 
         if config.dry_run {
             mark_completed(pool, run_id, 0).await?;
-            outcomes.push(TableOutcome { table, captured: ids.len() as u64, archived, deleted: 0, status: RunStatus::Completed });
-            continue;
+            return Ok(TableOutcome { table, captured: ids.len() as u64, archived, deleted: 0, status: RunStatus::Completed });
         }
 
         let deleted = delete_by_ids(pool, table, &ids, config.delete_batch).await?;
         vacuum(pool, table).await?;
         mark_completed(pool, run_id, deleted as i64).await?;
-        outcomes.push(TableOutcome { table, captured: ids.len() as u64, archived, deleted, status: RunStatus::Completed });
+        Ok(TableOutcome { table, captured: ids.len() as u64, archived, deleted, status: RunStatus::Completed })
     }
+    .await;
 
-    Ok(outcomes)
+    match body {
+        Ok(outcome) => Ok(outcome),
+        Err(e) => {
+            // Best-effort: don't let the failed run linger at status='running'.
+            let _ = mark_failed(pool, run_id).await;
+            Err(e)
+        }
+    }
 }

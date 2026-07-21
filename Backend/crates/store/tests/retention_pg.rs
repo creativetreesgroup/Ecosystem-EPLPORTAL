@@ -296,3 +296,40 @@ async fn archived_count_equals_captured_on_success() {
     assert!(o.captured >= 3);
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[tokio::test]
+#[serial]
+async fn a_failing_table_does_not_abort_the_cycle() {
+    // Important-finding regression: an error on one table must NOT abort the cycle
+    // (design invariant "each table is independent"), and a failed archive must never
+    // be followed by a delete.
+    let pool = test_pool().await;
+    let tenant_id = seed_tenant(&pool).await;
+    let cutoff = Utc::now() - Duration::days(90);
+    let id = seed_booking_at(&pool, tenant_id, &format!("failtab-{tenant_id}"), cutoff - Duration::days(1)).await;
+
+    // Force stream_archive to fail: point archive_dir at a subdir UNDER a regular file,
+    // so create_dir_all() errors (ENOTDIR) before any row is archived or deleted.
+    let blocker = std::env::temp_dir().join(format!("ret-blocker-{tenant_id}"));
+    std::fs::write(&blocker, b"x").unwrap();
+    let dir = blocker.join("archive");
+
+    let config = RetentionConfig {
+        dry_run: false,
+        archive_dir: dir,
+        delete_batch: 5000,
+        windows: vec![(RT::Bookings, 90), (RT::Notifications, 30)],
+        advisory_key: key_for(tenant_id),
+    };
+    let outcomes = run_cycle(&pool, &config).await.expect("cycle returns Ok even when a table errors");
+    assert_eq!(outcomes.len(), 2, "both tables attempted — the first table's failure didn't abort the cycle");
+    let bookings = outcomes.iter().find(|o| o.table == RT::Bookings).unwrap();
+    assert!(matches!(bookings.status, RunStatus::Failed), "bookings archive failed → Failed outcome");
+
+    // Row NOT deleted: archive failed before the delete step, so nothing was removed.
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM bookings WHERE id = $1)")
+        .bind(id).fetch_one(&pool).await.unwrap();
+    assert!(exists, "row survives a failed archive — no delete without a verified archive");
+
+    std::fs::remove_file(&blocker).ok();
+}
