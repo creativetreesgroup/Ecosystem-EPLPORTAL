@@ -910,7 +910,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 use std::path::PathBuf;
 use std::time::Duration as StdDuration;
 
-use chrono::{Local, NaiveTime, Timelike};
+use chrono::{Local, NaiveTime};
 use sqlx::postgres::PgPoolOptions;
 use store::retention::{run_cycle, RetentionConfig, RetentionTable, RETENTION_ADVISORY_KEY};
 
