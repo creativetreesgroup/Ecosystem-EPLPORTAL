@@ -7,6 +7,7 @@ networks:
 volumes:
   tower-postgres-data:
   tower-redis-data:
+  tower-archive:
 
 secrets:
   tower_master_key:
@@ -148,9 +149,22 @@ services:
       retries: 5
 
   tower-retention:
-    image: alpine:3
+    build:
+      context: ..
+      dockerfile: Docker/retention.Dockerfile
     container_name: tower-retention
-    restart: "no"
-    command: ["sh", "-c", "echo 'tower-retention: no-op placeholder (Fase 8 implements the real pg_cron-driven job)'; sleep 5"]
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://tower:tower_dev_only@tower-postgres:5432/tower
+      RETENTION_DRY_RUN: "true"
+      RETENTION_ARCHIVE_DIR: /archive
+      RETENTION_SCHEDULE_HOUR: "3"
+      RETENTION_SCHEDULE_MINUTE: "30"
+      RUST_LOG: info
+    volumes:
+      - tower-archive:/archive
+    depends_on:
+      tower-postgres:
+        condition: service_healthy
     networks:
       - tower-net
