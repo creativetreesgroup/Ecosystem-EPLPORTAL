@@ -17,7 +17,8 @@
 		{ href: '/settings/branding', label: 'Branding' },
 		{ href: '/settings/bot', label: 'Bot', mainAccountOnly: true },
 		{ href: '/settings/locations', label: 'Lokasi' },
-		{ href: '/settings/sub-users', label: 'Sub-user' }
+		{ href: '/settings/sub-users', label: 'Sub-user' },
+		{ href: '/settings/spx-credentials', label: 'Akun SPX' }
 	];
 
 	const NAV_ITEMS = $derived(ALL_NAV_ITEMS.filter((item) => !item.mainAccountOnly || data.user.is_main_account));
